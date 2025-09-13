@@ -14,7 +14,8 @@ class RetriableOrderError(Exception): pass
 class InterruptedError(Exception): pass
 
 
-async def initialize_exchange_async(api_key: str, api_secret: str, use_testnet: bool) -> ccxt.binanceusdm:
+async def initialize_exchange_async(api_key: str, api_secret: str, use_testnet: bool, enable_proxy: bool,
+                                    proxy_url: str) -> ccxt.binanceusdm:
     if not api_key or not api_secret:
         raise ConnectionError("API Key/Secret cannot be empty.")
 
@@ -29,6 +30,11 @@ async def initialize_exchange_async(api_key: str, api_secret: str, use_testnet: 
 
     exchange = ccxt.binanceusdm(config)
     exchange.enableRateLimit = True
+
+    if enable_proxy and proxy_url:
+        print(f"Enabling proxy: {proxy_url}")
+        exchange.https_proxy = proxy_url
+        exchange.aiohttp_proxy = proxy_url
 
     if use_testnet:
         exchange.set_sandbox_mode(True)
@@ -109,79 +115,6 @@ async def fetch_positions_with_pnl_async(exchange: ccxt.binanceusdm, leverage: i
         return []
 
 
-# --- 核心修复：更健壮的价格获取和平仓逻辑 ---
-async def close_position_async(exchange: ccxt.binanceusdm, full_symbol_to_close: str, ratio: float, async_logger):
-    base_coin = full_symbol_to_close.split('/')[0]
-    await async_logger(f"开始为 {full_symbol_to_close} 执行平仓，比例 {ratio * 100:.1f}%...")
-
-    try:
-        # 1. 获取持仓信息
-        # fetch_positions 返回的是一个列表，即使我们只请求一个 symbol
-        all_positions = await exchange.fetch_positions([full_symbol_to_close])
-        target_position_raw = next((p for p in all_positions if p['symbol'] == full_symbol_to_close), None)
-
-        if not target_position_raw or float(target_position_raw.get('contracts', 0)) == 0:
-            await async_logger(f"最终确认失败：未找到 {full_symbol_to_close} 的有效持仓。", "info")
-            return True
-
-        # 2. 获取行情价格 (Ticker)
-        ticker = await exchange.fetch_ticker(full_symbol_to_close)
-
-        # 3. 安全地获取价格，优先使用标记价，否则使用最后成交价
-        price_for_calc = ticker.get('mark') or ticker.get('last')
-        if not price_for_calc:
-            raise ValueError(f"无法获取 {full_symbol_to_close} 的标记价格或最后成交价。")
-        mark_price = float(price_for_calc)
-
-        # 4. 提取持仓数据并计算
-        position_info = target_position_raw['info']
-        position_amount_contracts = float(position_info['positionAmt'])
-        side = 'long' if position_amount_contracts > 0 else 'short'
-
-        # 使用我们安全获取的价格来计算名义价值
-        notional_value = abs(position_amount_contracts * mark_price)
-
-        value_to_close_usd = notional_value * ratio
-        amount_to_close_contracts = float(
-            exchange.amount_to_precision(full_symbol_to_close, value_to_close_usd / mark_price))
-
-        # 健全性检查
-        if amount_to_close_contracts > abs(position_amount_contracts):
-            amount_to_close_contracts = abs(position_amount_contracts)
-
-        if amount_to_close_contracts <= 0:
-            await async_logger(f"计算出的平仓数量为 {amount_to_close_contracts}，小于等于0。跳过下单。", "warning")
-            return False
-
-        close_side = 'SELL' if side == 'long' else 'BUY'
-        await async_logger(
-            f"最终确认：计划市价平仓 {value_to_close_usd:,.2f} U (合约数量: {amount_to_close_contracts}) on {full_symbol_to_close} at {close_side} side.")
-
-        # 5. 下单
-        order = await exchange.private_post_order({
-            'symbol': full_symbol_to_close,
-            'side': close_side,
-            'type': 'MARKET',
-            'quantity': str(amount_to_close_contracts),
-            'reduceOnly': 'true'
-        })
-
-        await async_logger(f"✅ {base_coin} ({full_symbol_to_close}) 平仓订单已成功提交: ID {order['orderId']}",
-                           "success")
-        return True
-
-    except Exception as e:
-        if 'ReduceOnly' in str(e):
-            await async_logger(
-                f"❌ {base_coin} ({full_symbol_to_close}) 平仓失败：交易所拒绝了'只减仓'订单。请确认账户/网络是否正确，以及该仓位是否真实存在。",
-                "error")
-        else:
-            await async_logger(f"❌ {base_coin} ({full_symbol_to_close}) 平仓失败，发生意外错误: {e}", "error")
-        return False
-
-
-# --- 修复结束 ---
-
 async def fetch_klines_async(exchange: ccxt.binanceusdm, symbol: str, timeframe: str = '1d', days_ago: int = 61) -> \
 Optional[List]:
     if not symbol: return None
@@ -197,8 +130,8 @@ Optional[List]:
 async def _execute_maker_order_with_retry_async(
         exchange: ccxt.binanceusdm,
         symbol: str,
-        side: str,
-        params: dict,
+        side: str,  # 'buy' or 'sell'
+        params: dict,  # e.g., {'reduceOnly': True}
         timeout: int,
         retries: int,
         async_logger,
@@ -211,14 +144,22 @@ async def _execute_maker_order_with_retry_async(
 
     for attempt in range(retries + 1):
         if stop_event.is_set():
-            raise InterruptedError(f"{order_type_log} operation cancelled by user.")
+            raise InterruptedError(f"{order_type_log} 操作被用户取消。")
 
         try:
             if attempt > 0:
-                await async_logger(f"正在进行第 {attempt} 次重试...")
+                await async_logger(f"正在进行第 {attempt + 1}/{retries + 1} 次重试...")
 
-            order_book = await exchange.fetch_order_book(symbol, limit=5)
-            price = float(order_book['bids'][0][0]) if side == i18n.ORDER_SIDE_BUY else float(order_book['asks'][0][0])
+            order_book = await exchange.fetch_order_book(symbol, limit=1)
+
+            if side == i18n.ORDER_SIDE_BUY:
+                if not order_book.get('bids') or not order_book['bids']:
+                    raise RetriableOrderError("无法获取买一价（盘口 bids 为空）。")
+                price = order_book['bids'][0][0]
+            else:
+                if not order_book.get('asks') or not order_book['asks']:
+                    raise RetriableOrderError("无法获取卖一价（盘口 asks 为空）。")
+                price = order_book['asks'][0][0]
 
             if contracts_to_trade is not None:
                 amount = contracts_to_trade
@@ -231,16 +172,18 @@ async def _execute_maker_order_with_retry_async(
             else:
                 raise ValueError("必须提供开仓价值或平仓数量。")
 
-            await async_logger(f"正在提交'{order_type_log}'限价单 (尝试 {attempt + 1}/{retries + 1})...")
-            order = await exchange.create_order(symbol, 'limit', side, amount, price, params)
+            await async_logger(f"准备提交'{order_type_log}'限价单，价格: {price}, 数量: {amount}")
+
+            final_params = {**params, 'postOnly': True}
+            order = await exchange.create_order(symbol, 'limit', side, amount, price, final_params)
             order_id = order['id']
-            await async_logger(f"✅ '{order_type_log}'限价单已提交！ID: {order['id']}, 价格: {price}, 数量: {amount}")
+            await async_logger(f"✅ '{order_type_log}'限价单已提交！ID: {order['id']}")
 
             start_time = asyncio.get_event_loop().time()
             while asyncio.get_event_loop().time() - start_time < timeout:
                 if stop_event.is_set():
                     await exchange.cancel_order(order_id, symbol)
-                    raise InterruptedError("Operation cancelled.")
+                    raise InterruptedError("操作被用户取消。")
 
                 try:
                     order_status = await exchange.fetch_order(order_id, symbol)
@@ -248,7 +191,7 @@ async def _execute_maker_order_with_retry_async(
                         await async_logger(f"✅ 订单 {order_id} 已成交！", "success")
                         return order_status
                     if order_status['status'] == 'canceled':
-                        raise RetriableOrderError(f"订单 {order_id} 被交易所取消。")
+                        raise RetriableOrderError(f"订单 {order_id} 被交易所或用户取消。")
                 except ccxt.OrderNotFound:
                     await async_logger(f"  > 订单 {order_id} 暂时未找到，可能是交易所延迟...")
 
@@ -258,8 +201,8 @@ async def _execute_maker_order_with_retry_async(
             await exchange.cancel_order(order_id, symbol)
             raise RetriableOrderError(f"订单 {order_id} 在 {timeout}s 内未成交。")
 
-        except (ccxt.RequestTimeout, ccxt.DDoSProtection, ccxt.ExchangeNotAvailable, ccxt.OrderNotFillable,
-                RetriableOrderError) as e:
+        except (ccxt.RequestTimeout, ccxt.DDoSProtection, ccxt.ExchangeNotAvailable, ccxt.OrderImmediatelyFillable,
+                ccxt.OrderNotFillable, RetriableOrderError) as e:
             await async_logger(f"尝试失败: 可重试错误 ({type(e).__name__}): {e}", "warning")
             if attempt < retries:
                 await asyncio.sleep(3)
@@ -277,10 +220,53 @@ async def _execute_maker_order_with_retry_async(
             raise
 
 
+async def close_position_async(exchange: ccxt.binanceusdm, full_symbol_to_close: str, ratio: float, async_logger):
+    base_coin = full_symbol_to_close.split('/')[0]
+    await async_logger(f"准备为 {full_symbol_to_close} 执行平仓（Maker限价单），比例 {ratio * 100:.1f}%...")
+
+    try:
+        all_positions = await exchange.fetch_positions([full_symbol_to_close])
+        target_position_raw = next((p for p in all_positions if p['symbol'] == full_symbol_to_close), None)
+
+        if not target_position_raw or float(target_position_raw.get('contracts', 0)) == 0:
+            await async_logger(f"最终确认失败：未找到 {full_symbol_to_close} 的有效持仓。", "info")
+            return True
+
+        position_amount_contracts = float(target_position_raw['info']['positionAmt'])
+        side = 'long' if position_amount_contracts > 0 else 'short'
+        close_side = 'sell' if side == 'long' else 'buy'
+
+        amount_to_close_contracts = float(
+            exchange.amount_to_precision(full_symbol_to_close, abs(position_amount_contracts) * ratio))
+
+        if amount_to_close_contracts <= 0:
+            await async_logger("计算出的平仓数量为0，跳过。", "warning")
+            return False
+
+        config = load_settings()
+        order_result = await _execute_maker_order_with_retry_async(
+            exchange=exchange,
+            symbol=full_symbol_to_close,
+            side=close_side,
+            params={'reduceOnly': True},
+            timeout=config.get('close_order_fill_timeout_seconds', 12),
+            retries=config.get('close_maker_retries', 3),
+            async_logger=async_logger,
+            stop_event=asyncio.Event(),
+            contracts_to_trade=amount_to_close_contracts
+        )
+
+        return order_result is not None
+
+    except Exception as e:
+        await async_logger(f"❌ {base_coin} ({full_symbol_to_close}) 平仓准备失败: {e}", "error")
+        return False
+
+
 async def process_order_with_sl_tp_async(exchange: ccxt.binanceusdm, plan: dict, config: dict, async_logger,
                                          stop_event: asyncio.Event):
     base_coin = plan['coin']
-    await async_logger(f"--- 开始为 {base_coin} 处理完整订单流程 ---")
+    await async_logger(f"--- 开始为 {base_coin} 处理完整开仓流程 ---")
 
     full_symbol = resolve_full_symbol(exchange, base_coin)
     if not full_symbol:
@@ -290,9 +276,15 @@ async def process_order_with_sl_tp_async(exchange: ccxt.binanceusdm, plan: dict,
     await async_logger(f"✅ 杠杆已设置为 {config['leverage']}x。")
 
     filled_order = await _execute_maker_order_with_retry_async(
-        exchange, full_symbol, plan['side'], {'postOnly': True},
-        config['open_order_fill_timeout_seconds'], config['open_maker_retries'],
-        async_logger, stop_event, value_to_trade=plan['value']
+        exchange=exchange,
+        symbol=full_symbol,
+        side=plan['side'],
+        params={},
+        timeout=config['open_order_fill_timeout_seconds'],
+        retries=config['open_maker_retries'],
+        async_logger=async_logger,
+        stop_event=stop_event,
+        value_to_trade=plan['value']
     )
     if not filled_order:
         raise Exception("开仓订单在所有重试后最终失败。")
@@ -300,7 +292,7 @@ async def process_order_with_sl_tp_async(exchange: ccxt.binanceusdm, plan: dict,
     await async_logger("正在获取最终仓位信息...")
     final_pos = None
     for _ in range(5):
-        if stop_event.is_set(): raise InterruptedError("Operation cancelled.")
+        if stop_event.is_set(): raise InterruptedError("操作被取消。")
         positions = await fetch_positions_with_pnl_async(exchange, config.get('leverage', 1))
         final_pos = next((p for p in positions if p.symbol == base_coin and p.full_symbol == full_symbol), None)
         if final_pos: break
