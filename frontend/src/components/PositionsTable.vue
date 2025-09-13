@@ -50,9 +50,18 @@
 <script setup lang="ts">
 import type { Position } from '@/models/types';
 import { useUiStore } from '@/stores/uiStore';
-import type { VDataTableServer } from 'vuetify/components';
 
-type ReadonlyHeaders = VDataTableServer['headers'];
+// --- 核心修复：直接定义 Header 类型，不再从 Vuetify 导入 ---
+type TDataTableHeader = {
+  key: string;
+  value?: any;
+  title: string;
+  align?: 'start' | 'center' | 'end';
+  sortable?: boolean;
+  width?: string | number;
+  [key: string]: any;
+};
+// --------------------------------------------------------
 
 const props = defineProps<{
   title: string;
@@ -64,7 +73,8 @@ const props = defineProps<{
 const emit = defineEmits(['refresh']);
 const uiStore = useUiStore();
 
-const headers: ReadonlyHeaders = [
+// --- 核心修复：为 headers 提供我们自己定义的类型 ---
+const headers: TDataTableHeader[] = [
   { title: '合约', key: 'full_symbol', sortable: true, width: '20%' },
   { title: '名义价值', key: 'notional', sortable: true, width: '15%' },
   { title: '浮动盈亏', key: 'pnl', sortable: true, width: '15%' },
@@ -72,4 +82,5 @@ const headers: ReadonlyHeaders = [
   { title: '开仓均价', key: 'entry_price', width: '15%' },
   { title: '操作', key: 'actions', sortable: false, align: 'end', width: '5%' },
 ];
+// -------------------------------------------
 </script>
