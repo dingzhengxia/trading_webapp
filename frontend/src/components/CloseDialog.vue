@@ -1,10 +1,9 @@
-<!-- frontend/src/components/CloseDialog.vue -->
 <template>
   <v-dialog v-model="uiStore.showCloseDialog" max-width="400px">
     <v-card v-if="uiStore.closeTarget">
       <v-card-title class="text-h5">
         确认平仓:
-        <span v-if="uiStore.closeTarget.type === 'single'">{{ uiStore.closeTarget.position.symbol }}</span>
+        <span v-if="uiStore.closeTarget.type === 'single'">{{ uiStore.closeTarget.position.full_symbol }}</span>
         <span v-else>{{ closeSideText }}</span>
       </v-card-title>
       <v-card-text>
@@ -23,6 +22,7 @@
               density="compact"
               hide-details
               variant="outlined"
+              suffix="%"
             ></v-text-field>
           </template>
         </v-slider>
@@ -66,19 +66,18 @@ const executeClose = async () => {
 
   if (target.type === 'single') {
     url = '/api/positions/close';
-    data = { symbol: target.position.symbol, ratio };
-    logMessage = `正在提交 ${target.position.symbol} 的平仓指令 (${closeRatio.value}%)...`;
-  } else { // by_side
+    data = { full_symbol: target.position.full_symbol, ratio };
+    logMessage = `正在提交 ${target.position.full_symbol} 的平仓指令 (${closeRatio.value}%)...`;
+  } else {
     url = '/api/positions/close-by-side';
     data = { side: target.side, ratio };
     logMessage = `正在提交批量平仓 ${closeSideText.value} 的指令 (${closeRatio.value}%)...`;
   }
 
-  // 使用一个辅助函数来发送请求和记录日志
   await openLogAndPost(url, data, logMessage);
 
   uiStore.showCloseDialog = false;
-  closeRatio.value = 100; // 重置滑块
+  closeRatio.value = 100;
 };
 
 const openLogAndPost = async (url: string, data: any, logMessage: string) => {

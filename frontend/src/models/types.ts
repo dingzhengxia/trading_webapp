@@ -1,5 +1,6 @@
 export interface Position {
   symbol: string;
+  full_symbol: string;
   side: 'long' | 'short';
   contracts: number;
   notional: number;
@@ -42,7 +43,6 @@ export interface UserSettings {
   close_maker_retries: number;
   close_order_fill_timeout_seconds: number;
 
-  // --- 核心修复：添加缺失的类型定义 ---
   enable_long_trades: boolean;
   enable_short_trades: boolean;
   enable_long_sl_tp: boolean;
@@ -51,5 +51,4 @@ export interface UserSettings {
   enable_short_sl_tp: boolean;
   short_stop_loss_percentage: number;
   short_take_profit_percentage: number;
-  // ------------------------------------
 }

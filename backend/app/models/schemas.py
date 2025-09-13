@@ -4,6 +4,7 @@ from typing import List, Dict, Any, Optional
 
 class Position(BaseModel):
     symbol: str
+    full_symbol: str
     side: str
     contracts: float
     notional: float
@@ -17,7 +18,6 @@ class Position(BaseModel):
 
 
 class TradePlanRequest(BaseModel):
-    # --- 核心修复：添加所有在 UserSettings 中定义的字段 ---
     leverage: int
     total_long_position_value: float
     total_short_position_value: float
@@ -45,7 +45,6 @@ class TradePlanRequest(BaseModel):
     enable_short_sl_tp: bool
     short_stop_loss_percentage: float
     short_take_profit_percentage: float
-    # ----------------------------------------------------
 
 
 class RebalanceCriteria(BaseModel):
@@ -65,7 +64,7 @@ class RebalancePlanResponse(BaseModel):
 
 
 class ClosePositionRequest(BaseModel):
-    symbol: str
+    full_symbol: str
     ratio: float = Field(..., gt=0, le=1.0)
 
 
