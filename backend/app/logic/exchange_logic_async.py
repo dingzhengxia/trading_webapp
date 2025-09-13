@@ -115,34 +115,82 @@ async def fetch_positions_with_pnl_async(exchange: ccxt.binanceusdm) -> List[Pos
         return []
 
 # --- 平仓逻辑 ---
+# --- 核心修复：基于U本位价值进行平仓 ---
 async def close_position_async(exchange: ccxt.binanceusdm, symbol: str, ratio: float, async_logger):
-    await async_logger(f"开始为 {symbol} 执行平仓，比例 {ratio*100:.1f}%...")
-    
-    all_positions = await fetch_positions_with_pnl_async(exchange)
-    target_position = next((p for p in all_positions if p.symbol.upper() == symbol.upper()), None)
-    
-    if not target_position:
-        await async_logger(f"未找到 {symbol} 的持仓，跳过。", "warning")
-        return False
+    """
+    异步平仓指定币种，严格根据U本位价值进行计算。
+    """
+    await async_logger(f"开始为 {symbol} 执行平仓，比例 {ratio * 100:.1f}%...")
 
-    full_symbol = resolve_full_symbol(exchange, target_position.symbol)
-    if not full_symbol:
-        await async_logger(f"无法为 {target_position.symbol} 找到可交易的交易对。", "error")
-        return False
-    
-    close_side = 'sell' if target_position.side == 'long' else 'buy'
-    amount_to_close = float(exchange.amount_to_precision(full_symbol, target_position.contracts * ratio))
-    
-    await async_logger(f"计划平仓 {amount_to_close} {target_position.symbol} on {full_symbol} at {close_side} side.")
-
-    params = {'reduceOnly': True}
     try:
-        order = await exchange.create_order(full_symbol, 'market', close_side, amount_to_close, params=params)
-        await async_logger(f"✅ {symbol} 平仓订单已提交: ID {order['id']}", "success")
+        full_symbol = resolve_full_symbol(exchange, symbol)
+        if not full_symbol:
+            await async_logger(f"无法为 {symbol} 找到可交易的交易对。", "error")
+            return False
+
+        # 1. 并发获取持仓信息和最新价格
+        positions_task = exchange.fetch_positions([full_symbol])
+        ticker_task = exchange.fetch_ticker(full_symbol)
+        results = await asyncio.gather(positions_task, ticker_task, return_exceptions=True)
+
+        # 处理可能发生的错误
+        if isinstance(results[0], Exception): raise results[0]
+        if isinstance(results[1], Exception): raise results[1]
+
+        all_positions, ticker = results
+
+        target_position_raw = next((p for p in all_positions if p['info']['symbol'] == full_symbol), None)
+
+        if not target_position_raw or float(target_position_raw['info']['positionAmt']) == 0:
+            await async_logger(f"最终确认失败：未找到 {symbol} 的有效持仓。", "info")
+            return True
+
+        # 2. 提取需要的数据
+        position_info = target_position_raw['info']
+        position_amount_contracts = float(position_info['positionAmt'])
+        side = 'long' if position_amount_contracts > 0 else 'short'
+        mark_price = float(ticker['mark'])
+        notional_value = abs(position_amount_contracts * mark_price)
+
+        # 3. 根据U本位价值计算需要平仓的币数量
+        value_to_close_usd = notional_value * ratio
+        amount_to_close_contracts = float(exchange.amount_to_precision(full_symbol, value_to_close_usd / mark_price))
+
+        # 健全性检查：确保平仓数量不超过总持仓（处理浮点精度问题）
+        if amount_to_close_contracts > abs(position_amount_contracts):
+            amount_to_close_contracts = abs(position_amount_contracts)
+
+        if amount_to_close_contracts <= 0:
+            await async_logger(f"计算出的平仓数量为 {amount_to_close_contracts}，小于等于0。跳过下单。", "warning")
+            return False
+
+        close_side = 'SELL' if side == 'long' else 'BUY'
+        await async_logger(
+            f"最终确认：计划市价平仓 {value_to_close_usd:,.2f} U (合约数量: {amount_to_close_contracts}) on {full_symbol} at {close_side} side.")
+
+        # 4. 使用隐式API方法下单
+        order = await exchange.private_post_order({
+            'symbol': full_symbol,
+            'side': close_side,
+            'type': 'MARKET',
+            'quantity': str(amount_to_close_contracts),  # 确保数量是字符串格式
+            'reduceOnly': 'true'
+        })
+
+        await async_logger(f"✅ {symbol} 平仓订单已成功提交: ID {order['orderId']}", "success")
         return True
+
     except Exception as e:
-        await async_logger(f"❌ {symbol} 平仓失败: {e}", "error")
+        if 'ReduceOnly' in str(e):
+            await async_logger(
+                f"❌ {symbol} 平仓失败：交易所拒绝了'只减仓'订单。请确认账户/网络是否正确，以及该仓位是否真实存在。",
+                "error")
+        else:
+            await async_logger(f"❌ {symbol} 平仓失败，发生意外错误: {e}", "error")
         return False
+
+
+# --- 修复结束 ---
 
 # --- K线获取 ---
 async def fetch_klines_async(exchange: ccxt.binanceusdm, symbol: str, timeframe: str = '1d', days_ago: int = 61) -> Optional[List]:
