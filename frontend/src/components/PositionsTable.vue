@@ -4,8 +4,8 @@
       <!-- 标题部分 -->
       <span class="text-h6 mr-4">{{ title }}</span>
 
-      <!-- 核心修改：将总价值放在这里 -->
-      <v-chip color="green" label variant="flat" size="small">
+      <!-- 核心修改：动态绑定颜色 -->
+      <v-chip :color="side === 'long' ? 'success' : 'error'" label variant="flat" size="small">
         <span class="font-weight-bold">
           总价值: ${{ totalNotional.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) }}
         </span>
@@ -85,7 +85,6 @@ const props = defineProps<{
 const emit = defineEmits(['refresh']);
 const uiStore = useUiStore();
 
-// 核心修改：在组件内部计算总价值
 const totalNotional = computed(() => {
   return props.positions.reduce((sum, position) => sum + position.notional, 0);
 });
