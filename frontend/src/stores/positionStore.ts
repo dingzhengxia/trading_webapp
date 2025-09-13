@@ -1,4 +1,3 @@
-// frontend/src/stores/positionStore.ts (完整代码)
 import { defineStore } from 'pinia';
 import { computed, ref } from 'vue';
 import type { Position } from '@/models/types';
@@ -8,6 +7,8 @@ export const usePositionStore = defineStore('position', () => {
   const positions = ref<Position[]>([]);
   const loading = ref(false);
 
+  const selectedPositions = ref<string[]>([]);
+
   const longPositions = computed(() => positions.value.filter(p => p.side === 'long'));
   const shortPositions = computed(() => positions.value.filter(p => p.side === 'short'));
 
@@ -15,13 +16,12 @@ export const usePositionStore = defineStore('position', () => {
   const shortPnl = computed(() => shortPositions.value.reduce((sum, p) => sum + p.pnl, 0));
   const totalPnl = computed(() => longPnl.value + shortPnl.value);
 
-  // --- 新增：总名义价值计算 ---
   const longNotional = computed(() => longPositions.value.reduce((sum, p) => sum + p.notional, 0));
   const shortNotional = computed(() => shortPositions.value.reduce((sum, p) => sum + p.notional, 0));
-  // -------------------------
 
   async function fetchPositions() {
     loading.value = true;
+    selectedPositions.value = [];
     try {
       const response = await api.get<Position[]>('/api/positions');
       positions.value = response.data;
@@ -36,7 +36,8 @@ export const usePositionStore = defineStore('position', () => {
     positions, loading,
     longPositions, shortPositions,
     longPnl, shortPnl, totalPnl,
-    longNotional, shortNotional, // 导出新数据
+    longNotional, shortNotional,
+    selectedPositions,
     fetchPositions
   };
 });

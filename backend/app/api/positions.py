@@ -3,7 +3,7 @@ from fastapi import APIRouter, HTTPException, Depends
 from typing import List
 import ccxt.async_support as ccxt
 
-from ..models.schemas import Position, ClosePositionRequest, CloseBySideRequest
+from ..models.schemas import Position, ClosePositionRequest, CloseBySideRequest, CloseMultipleRequest
 from ..core.exchange_manager import get_exchange_dependency
 from ..logic.exchange_logic_async import fetch_positions_with_pnl_async, close_position_async
 from ..core.websocket_manager import log_message, manager
@@ -61,5 +61,25 @@ async def close_positions_by_side(
         asyncio.create_task(manager.broadcast({"type": "refresh_positions"}))
 
         return {"message": f"Submitted close orders for {len(symbols_to_close)} positions."}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/close-multiple")
+async def close_multiple_positions(
+        request: CloseMultipleRequest,
+        exchange: ccxt.binanceusdm = Depends(get_exchange_dependency)
+):
+    try:
+        if not request.full_symbols:
+            return {"message": "No positions selected to close."}
+
+        tasks = [close_position_async(exchange, full_symbol, request.ratio, log_message) for full_symbol in
+                 request.full_symbols]
+        await asyncio.gather(*tasks)
+
+        asyncio.create_task(manager.broadcast({"type": "refresh_positions"}))
+
+        return {"message": f"Submitted close orders for {len(request.full_symbols)} selected positions."}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

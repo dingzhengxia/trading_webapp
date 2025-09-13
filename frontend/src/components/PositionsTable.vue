@@ -1,19 +1,13 @@
 <template>
   <v-card>
     <v-card-title class="d-flex align-center py-2">
-      <!-- 标题部分 -->
       <span class="text-h6 mr-4">{{ title }}</span>
-
-      <!-- 核心修改：动态绑定颜色 -->
       <v-chip :color="side === 'long' ? 'success' : 'error'" label variant="flat" size="small">
         <span class="font-weight-bold">
           总价值: ${{ totalNotional.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) }}
         </span>
       </v-chip>
-
       <v-spacer></v-spacer>
-
-      <!-- 操作按钮 -->
       <v-menu>
         <template v-slot:activator="{ props }">
           <v-btn v-bind="props" color="blue-grey" variant="tonal" size="small" class="mr-2">
@@ -29,13 +23,13 @@
       </v-menu>
       <v-btn icon="mdi-refresh" variant="text" size="small" @click="emit('refresh')" :loading="loading"></v-btn>
     </v-card-title>
-
     <v-divider></v-divider>
-
     <v-data-table-virtual
+      v-model="positionStore.selectedPositions"
       :headers="headers"
       :items="positions"
       item-value="full_symbol"
+      show-select
       density="compact"
       class="text-caption"
       fixed-header
@@ -64,6 +58,7 @@
 import { computed } from 'vue';
 import type { Position } from '@/models/types';
 import { useUiStore } from '@/stores/uiStore';
+import { usePositionStore } from '@/stores/positionStore';
 
 type TDataTableHeader = {
   key: string;
@@ -84,6 +79,7 @@ const props = defineProps<{
 
 const emit = defineEmits(['refresh']);
 const uiStore = useUiStore();
+const positionStore = usePositionStore();
 
 const totalNotional = computed(() => {
   return props.positions.reduce((sum, position) => sum + position.notional, 0);

@@ -1,4 +1,3 @@
-// frontend/src/stores/uiStore.ts
 import { defineStore } from 'pinia';
 import { computed, ref } from 'vue';
 import { useLogStore } from './logStore';
@@ -6,7 +5,8 @@ import type { RebalancePlan, Position } from '@/models/types';
 
 export type CloseTarget =
   | { type: 'single'; position: Position }
-  | { type: 'by_side'; side: 'long' | 'short' | 'all' };
+  | { type: 'by_side'; side: 'long' | 'short' | 'all' }
+  | { type: 'selected'; positions: Position[] };
 
 export const useUiStore = defineStore('ui', () => {
   const logStore = useLogStore();

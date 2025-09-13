@@ -71,3 +71,8 @@ class ClosePositionRequest(BaseModel):
 class CloseBySideRequest(BaseModel):
     side: str
     ratio: float = Field(..., gt=0, le=1.0)
+
+
+class CloseMultipleRequest(BaseModel):
+    full_symbols: List[str]
+    ratio: float = Field(..., gt=0, le=1.0)
