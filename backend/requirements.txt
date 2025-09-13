@@ -6,4 +6,4 @@ python-dotenv==1.0.1
 ccxt==4.3.35
 aiohttp==3.9.5
 numpy
-gunicorn # <-- 新增
+gunicorn
