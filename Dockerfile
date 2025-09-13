@@ -29,7 +29,8 @@ FROM python:3.10-slim
 # 设置环境变量
 ENV PYTHONDONTWRITEBYTECODE 1
 ENV PYTHONUNBUFFERED 1
-ENV IS_DOCKER=1  # --- 在这里添加环境变量
+# --- 在这里添加环境变量
+ENV IS_DOCKER=1
 
 # 设置工作目录
 WORKDIR /app
