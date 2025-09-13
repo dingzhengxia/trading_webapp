@@ -11,7 +11,9 @@ async def get_exchange_dependency():
     exchange = await initialize_exchange_async(
         api_key=settings.get('api_key'),
         api_secret=settings.get('api_secret'),
-        use_testnet=settings.get('use_testnet')
+        use_testnet=settings.get('use_testnet'),
+        enable_proxy=settings.get('enable_proxy'),
+        proxy_url=settings.get('proxy_url')
     )
     try:
         yield exchange
@@ -30,7 +32,9 @@ async def get_exchange_for_task():
     exchange = await initialize_exchange_async(
         api_key=settings.get('api_key'),
         api_secret=settings.get('api_secret'),
-        use_testnet=settings.get('use_testnet')
+        use_testnet=settings.get('use_testnet'),
+        enable_proxy=settings.get('enable_proxy'),
+        proxy_url=settings.get('proxy_url')
     )
     try:
         yield exchange

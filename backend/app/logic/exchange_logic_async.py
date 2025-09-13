@@ -14,7 +14,8 @@ class RetriableOrderError(Exception): pass
 class InterruptedError(Exception): pass
 
 
-async def initialize_exchange_async(api_key: str, api_secret: str, use_testnet: bool) -> ccxt.binanceusdm:
+async def initialize_exchange_async(api_key: str, api_secret: str, use_testnet: bool, enable_proxy: bool,
+                                    proxy_url: str) -> ccxt.binanceusdm:
     if not api_key or not api_secret:
         raise ConnectionError("API Key/Secret cannot be empty.")
 
@@ -29,6 +30,11 @@ async def initialize_exchange_async(api_key: str, api_secret: str, use_testnet: 
 
     exchange = ccxt.binanceusdm(config)
     exchange.enableRateLimit = True
+
+    if enable_proxy and proxy_url:
+        print(f"Enabling proxy: {proxy_url}")
+        exchange.https_proxy = proxy_url
+        exchange.aiohttp_proxy = proxy_url
 
     if use_testnet:
         exchange.set_sandbox_mode(True)
@@ -144,7 +150,6 @@ async def _execute_maker_order_with_retry_async(
             if attempt > 0:
                 await async_logger(f"正在进行第 {attempt + 1}/{retries + 1} 次重试...")
 
-            # --- 核心修复：使用合法的 limit 值 ---
             order_book = await exchange.fetch_order_book(symbol, limit=5)
 
             if side == i18n.ORDER_SIDE_BUY:
@@ -215,13 +220,11 @@ async def _execute_maker_order_with_retry_async(
             raise
 
 
-# --- 核心修复：严格恢复原始逻辑 ---
 async def close_position_async(exchange: ccxt.binanceusdm, full_symbol_to_close: str, ratio: float, async_logger):
     base_coin = full_symbol_to_close.split('/')[0]
     await async_logger(f"准备为 {full_symbol_to_close} 执行平仓（Maker限价单），比例 {ratio * 100:.1f}%...")
 
     try:
-        # 1. 获取持仓信息
         all_positions = await exchange.fetch_positions([full_symbol_to_close])
         target_position_raw = next((p for p in all_positions if p['symbol'] == full_symbol_to_close), None)
 
@@ -229,7 +232,6 @@ async def close_position_async(exchange: ccxt.binanceusdm, full_symbol_to_close:
             await async_logger(f"最终确认失败：未找到 {full_symbol_to_close} 的有效持仓。", "info")
             return True
 
-        # 2. 计算平仓参数
         position_amount_contracts = float(target_position_raw['info']['positionAmt'])
         side = 'long' if position_amount_contracts > 0 else 'short'
         close_side = 'sell' if side == 'long' else 'buy'
@@ -241,18 +243,17 @@ async def close_position_async(exchange: ccxt.binanceusdm, full_symbol_to_close:
             await async_logger("计算出的平仓数量为0，跳过。", "warning")
             return False
 
-        # 3. 调用统一的、经过验证的交易执行器
         config = load_settings()
         order_result = await _execute_maker_order_with_retry_async(
             exchange=exchange,
             symbol=full_symbol_to_close,
             side=close_side,
-            params={'reduceOnly': True},  # 传递只减仓参数
+            params={'reduceOnly': True},
             timeout=config.get('close_order_fill_timeout_seconds', 12),
             retries=config.get('close_maker_retries', 3),
             async_logger=async_logger,
             stop_event=asyncio.Event(),
-            contracts_to_trade=amount_to_close_contracts  # 传递币数量
+            contracts_to_trade=amount_to_close_contracts
         )
 
         return order_result is not None
