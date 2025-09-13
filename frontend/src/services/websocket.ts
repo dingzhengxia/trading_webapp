@@ -1,0 +1,57 @@
+// frontend/src/services/websocket.ts (完整修复版)
+import { useUiStore } from '@/stores/uiStore';
+import { usePositionStore } from '@/stores/positionStore';
+
+class WebSocketService {
+  private ws: WebSocket | null = null;
+
+  // --- 核心修复：动态生成 WebSocket URL ---
+  private getWebSocketUrl(): string {
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const host = import.meta.env.DEV ? `${window.location.hostname}:8000` : window.location.host;
+    return `${protocol}//${host}/ws`;
+  }
+  // ---------------------------------------
+
+  connect() {
+    const uiStore = useUiStore();
+
+    // 使用动态生成的URL
+    const url = this.getWebSocketUrl();
+    console.log(`Connecting to WebSocket at: ${url}`); // 添加日志方便调试
+    this.ws = new WebSocket(url);
+
+    this.ws.onopen = () => {
+      uiStore.logStore.addLog({ message: '--- WebSocket 连接成功 ---', level: 'info', timestamp: new Date().toLocaleTimeString() });
+      uiStore.setStatus('已连接', false);
+    };
+
+    this.ws.onmessage = (event) => {
+      const data = JSON.parse(event.data);
+      switch (data.type) {
+        case 'log':
+          uiStore.logStore.addLog({ ...data.payload, timestamp: new Date().toLocaleTimeString() });
+          break;
+        case 'status':
+          uiStore.setStatus(data.payload.message, data.payload.isRunning);
+          break;
+        case 'refresh_positions':
+          usePositionStore().fetchPositions();
+          break;
+      }
+    };
+
+    this.ws.onclose = () => {
+      uiStore.logStore.addLog({ message: '--- WebSocket 连接断开，5秒后重试... ---', level: 'error', timestamp: new Date().toLocaleTimeString() });
+      uiStore.setStatus('已断开', false);
+      setTimeout(() => this.connect(), 5000);
+    };
+
+    this.ws.onerror = (event) => {
+        console.error("WebSocket Error:", event);
+        uiStore.logStore.addLog({ message: '--- WebSocket 连接发生错误 ---', level: 'error', timestamp: new Date().toLocaleTimeString() });
+    }
+  }
+}
+
+export default new WebSocketService();
