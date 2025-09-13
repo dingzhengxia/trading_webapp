@@ -9,7 +9,7 @@
     <!-- 中间内容区，可滚动 -->
     <v-card-text class="flex-grow-1 pa-4" style="overflow-y: auto;">
       <v-skeleton-loader v-if="settingsStore.loading" type="article, actions"></v-skeleton-loader>
-
+      
       <v-window v-else v-model="tab">
         <!-- 交易参数 Tab -->
         <v-window-item value="trade" class="pa-1">
@@ -48,14 +48,14 @@
                 :items="settingsStore.availableLongCoins"
                 multiple chips closable-chips variant="outlined" density="compact" class="mb-3" hide-details
               ></v-combobox>
-              <v-btn
-                variant="tonal" size="small" block
+              <v-btn 
+                variant="tonal" size="small" block 
                 @click="uiStore.showWeightDialog = true"
                 :disabled="!settingsStore.settings.long_coin_list || settingsStore.settings.long_coin_list.length === 0"
               >
                 配置权重
               </v-btn>
-
+              
               <v-switch v-model="settingsStore.settings.enable_long_sl_tp" label="多头止盈止损" color="success" inset hide-details class="mt-2"></v-switch>
               <v-row dense :class="{ 'disabled-group': !settingsStore.settings.enable_long_sl_tp }">
                 <v-col cols="6">
@@ -66,7 +66,7 @@
                 </v-col>
               </v-row>
             </div>
-
+            
             <v-divider class="my-4"></v-divider>
 
             <h3 class="tab-subtitle d-flex justify-space-between align-center">
@@ -89,7 +89,7 @@
                 :items="settingsStore.availableShortCoins"
                 multiple chips closable-chips variant="outlined" density="compact" hide-details
               ></v-combobox>
-
+              
               <v-switch v-model="settingsStore.settings.enable_short_sl_tp" label="空头止盈止损" color="error" inset hide-details class="mt-2"></v-switch>
               <v-row dense :class="{ 'disabled-group': !settingsStore.settings.enable_short_sl_tp }">
                 <v-col cols="6">
@@ -123,7 +123,7 @@
               v-model.number="settingsStore.settings.rebalance_min_volume_usd"
               type="number" variant="outlined" density="compact" class="mb-3" hide-details
             />
-
+            
             <div v-if="settingsStore.settings.rebalance_method === 'multi_factor_weakest'" class="mt-3">
               <v-text-field
                 label="[弱势] 绝对动量周期(天)"
@@ -160,7 +160,7 @@
         <v-btn block color="info" @click="generatePlan" :loading="rebalanceLoading" size="large">生成再平衡计划</v-btn>
       </div>
     </div>
-
+    
     <WeightConfigDialog v-model="showWeightDialog" />
   </v-card>
 </template>
@@ -179,13 +179,15 @@ const tab = ref('trade');
 const rebalanceLoading = ref(false);
 const showWeightDialog = ref(false);
 
-const logSwitchChange = (value: boolean) => {
+// --- 核心修复：为参数 value 添加明确的类型 ---
+const logSwitchChange = (value: boolean | null) => {
   console.log(`[FRONTEND DEBUG 1] 'enable_short_trades' switch toggled. New value in UI component: ${value}`);
 };
 
 watch(() => settingsStore.settings.enable_short_trades, (newValue) => {
   console.log(`[FRONTEND DEBUG 2] 'enable_short_trades' in Pinia store changed to: ${newValue}`);
 });
+// ------------------------------------
 
 const startTrading = async () => {
   if (!settingsStore.settings) {
@@ -193,7 +195,7 @@ const startTrading = async () => {
     return;
   }
   uiStore.logStore.clearLogs();
-
+  
   console.log("[FRONTEND DEBUG 3] Data being sent to backend:", JSON.parse(JSON.stringify(settingsStore.settings)));
 
   try {
@@ -213,7 +215,7 @@ const stopTrading = async () => {
 
 const generatePlan = async () => {
   if (!settingsStore.settings) return;
-
+  
   rebalanceLoading.value = true;
   uiStore.logStore.clearLogs();
 
@@ -227,7 +229,7 @@ const generatePlan = async () => {
       foam_days: settingsStore.settings.rebalance_foam_days,
     };
     const response = await api.post<RebalancePlan>('/api/rebalance/plan', criteria);
-
+    
     if (response.data.error) {
        uiStore.logStore.addLog({ message: `计划生成失败: ${response.data.error}`, level: "error", timestamp: new Date().toLocaleTimeString() });
     } else {
