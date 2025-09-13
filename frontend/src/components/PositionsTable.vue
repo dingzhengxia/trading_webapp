@@ -1,8 +1,19 @@
 <template>
   <v-card>
     <v-card-title class="d-flex align-center py-2">
-      <span class="text-h6">{{ title }}</span>
+      <!-- 标题部分 -->
+      <span class="text-h6 mr-4">{{ title }}</span>
+
+      <!-- 核心修改：将总价值放在这里 -->
+      <v-chip color="green" label variant="flat" size="small">
+        <span class="font-weight-bold">
+          总价值: ${{ totalNotional.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) }}
+        </span>
+      </v-chip>
+
       <v-spacer></v-spacer>
+
+      <!-- 操作按钮 -->
       <v-menu>
         <template v-slot:activator="{ props }">
           <v-btn v-bind="props" color="blue-grey" variant="tonal" size="small" class="mr-2">
@@ -18,7 +29,9 @@
       </v-menu>
       <v-btn icon="mdi-refresh" variant="text" size="small" @click="emit('refresh')" :loading="loading"></v-btn>
     </v-card-title>
+
     <v-divider></v-divider>
+
     <v-data-table-virtual
       :headers="headers"
       :items="positions"
@@ -48,10 +61,10 @@
 </template>
 
 <script setup lang="ts">
+import { computed } from 'vue';
 import type { Position } from '@/models/types';
 import { useUiStore } from '@/stores/uiStore';
 
-// --- 核心修复：直接定义 Header 类型，不再从 Vuetify 导入 ---
 type TDataTableHeader = {
   key: string;
   value?: any;
@@ -61,7 +74,6 @@ type TDataTableHeader = {
   width?: string | number;
   [key: string]: any;
 };
-// --------------------------------------------------------
 
 const props = defineProps<{
   title: string;
@@ -73,7 +85,11 @@ const props = defineProps<{
 const emit = defineEmits(['refresh']);
 const uiStore = useUiStore();
 
-// --- 核心修复：为 headers 提供我们自己定义的类型 ---
+// 核心修改：在组件内部计算总价值
+const totalNotional = computed(() => {
+  return props.positions.reduce((sum, position) => sum + position.notional, 0);
+});
+
 const headers: TDataTableHeader[] = [
   { title: '合约', key: 'full_symbol', sortable: true, width: '20%' },
   { title: '名义价值', key: 'notional', sortable: true, width: '15%' },
@@ -82,5 +98,4 @@ const headers: TDataTableHeader[] = [
   { title: '开仓均价', key: 'entry_price', width: '15%' },
   { title: '操作', key: 'actions', sortable: false, align: 'end', width: '5%' },
 ];
-// -------------------------------------------
 </script>
