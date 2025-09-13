@@ -1,10 +1,8 @@
 <template>
-  <v-dialog v-model="uiStore.showCloseDialog" max-width="400px">
+  <v-dialog v-model="uiStore.showCloseDialog" max-width="400px" persistent>
     <v-card v-if="uiStore.closeTarget">
       <v-card-title class="text-h5">
-        确认平仓:
-        <span v-if="uiStore.closeTarget.type === 'single'">{{ uiStore.closeTarget.position.full_symbol }}</span>
-        <span v-else>{{ closeSideText }}</span>
+        {{ dialogTitle }}
       </v-card-title>
       <v-card-text>
         <p>请选择要平仓的仓位比例:</p>
@@ -46,13 +44,17 @@ import api from '@/services/api';
 const uiStore = useUiStore();
 const closeRatio = ref(100);
 
-const closeSideText = computed(() => {
-  if (uiStore.closeTarget?.type === 'by_side') {
-    if (uiStore.closeTarget.side === 'long') return '所有多头';
-    if (uiStore.closeTarget.side === 'short') return '所有空头';
-    if (uiStore.closeTarget.side === 'all') return '全部仓位';
+const dialogTitle = computed(() => {
+  const target = uiStore.closeTarget;
+  if (!target) return '确认平仓';
+  if (target.type === 'single') return `平仓: ${target.position.full_symbol}`;
+  if (target.type === 'selected') return `平掉选中的 ${target.positions.length} 个仓位`;
+  if (target.type === 'by_side') {
+    if (target.side === 'long') return '平掉所有多头';
+    if (target.side === 'short') return '平掉所有空头';
+    if (target.side === 'all') return '平掉全部仓位';
   }
-  return '';
+  return '确认平仓';
 });
 
 const executeClose = async () => {
@@ -60,21 +62,23 @@ const executeClose = async () => {
   if (!target) return;
 
   const ratio = closeRatio.value / 100;
-  let url = '';
-  let data: any = {};
-  let logMessage = '';
 
+  // --- 核心修复：使用类型守卫 ---
   if (target.type === 'single') {
-    url = '/api/positions/close';
-    data = { full_symbol: target.position.full_symbol, ratio };
-    logMessage = `正在提交 ${target.position.full_symbol} 的平仓指令 (${closeRatio.value}%)...`;
-  } else {
-    url = '/api/positions/close-by-side';
-    data = { side: target.side, ratio };
-    logMessage = `正在提交批量平仓 ${closeSideText.value} 的指令 (${closeRatio.value}%)...`;
-  }
+    const logMessage = `正在提交 ${target.position.full_symbol} 的平仓指令 (${closeRatio.value}%)...`;
+    await openLogAndPost('/api/positions/close', { full_symbol: target.position.full_symbol, ratio }, logMessage);
 
-  await openLogAndPost(url, data, logMessage);
+  } else if (target.type === 'by_side') {
+    const sideText = dialogTitle.value; // 复用 computed 属性的文本
+    const logMessage = `正在提交批量平仓 ${sideText} 的指令 (${closeRatio.value}%)...`;
+    await openLogAndPost('/api/positions/close-by-side', { side: target.side, ratio }, logMessage);
+
+  } else if (target.type === 'selected') {
+    const symbolsToClose = target.positions.map(p => p.full_symbol);
+    const logMessage = `正在提交批量平仓 ${symbolsToClose.length} 个选中仓位的指令...`;
+    await openLogAndPost('/api/positions/close-multiple', { full_symbols: symbolsToClose, ratio }, logMessage);
+  }
+  // --- 修复结束 ---
 
   uiStore.showCloseDialog = false;
   closeRatio.value = 100;
