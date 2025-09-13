@@ -4,38 +4,55 @@ import type { UserSettings } from '@/models/types';
 import api from '@/services/api';
 import { useUiStore } from './uiStore';
 
-// 提供一个完整的默认设置对象，用于初始化和确保所有字段都存在
+// --- 核心修复：补全所有缺失的字段 ---
 const defaultSettings: UserSettings = {
+  // API 和网络
+  api_key: '',
+  api_secret: '',
+  use_testnet: true,
+  enable_proxy: false,
+  proxy_url: 'http://127.0.0.1:7890',
+
+  // 交易参数
   leverage: 20,
   total_long_position_value: 1000.0,
   total_short_position_value: 500.0,
   long_coin_list: ["BTC", "ETH"],
   short_coin_list: ["SOL", "AVAX"],
   long_custom_weights: {},
-  rebalance_method: 'multi_factor_weakest',
-  rebalance_top_n: 50,
-  rebalance_min_volume_usd: 20000000,
-  rebalance_abs_momentum_days: 30,
-  rebalance_rel_strength_days: 60,
-  rebalance_foam_days: 1,
-  open_maker_retries: 5,
-  open_order_fill_timeout_seconds: 60,
-  close_maker_retries: 3,
-  close_order_fill_timeout_seconds: 12,
+
+  // 开关
   enable_long_trades: true,
   enable_short_trades: true,
+
+  // SL/TP
   enable_long_sl_tp: true,
   long_stop_loss_percentage: 50.0,
   long_take_profit_percentage: 100.0,
   enable_short_sl_tp: true,
   short_stop_loss_percentage: 80.0,
   short_take_profit_percentage: 150.0,
+
+  // 高级交易参数
+  open_maker_retries: 5,
+  open_order_fill_timeout_seconds: 60,
+  close_maker_retries: 3,
+  close_order_fill_timeout_seconds: 12,
+
+  // 再平衡参数
+  rebalance_method: 'multi_factor_weakest',
+  rebalance_top_n: 50,
+  rebalance_min_volume_usd: 20000000,
+  rebalance_abs_momentum_days: 30,
+  rebalance_rel_strength_days: 60,
+  rebalance_foam_days: 1,
+  rebalance_short_ratio_max: 0.7,
+  rebalance_short_ratio_min: 0.35,
 };
+// --- 修复结束 ---
 
 export const useSettingsStore = defineStore('settings', () => {
-  // --- 核心修复：使用完整的默认对象进行初始化 ---
   const settings = ref<UserSettings>({ ...defaultSettings });
-  // ---------------------------------------------
 
   const availableLongCoins = ref<string[]>([]);
   const availableShortCoins = ref<string[]>([]);
@@ -46,13 +63,7 @@ export const useSettingsStore = defineStore('settings', () => {
     loading.value = true;
     try {
       const response = await api.get('/api/settings');
-
-      // --- 核心修复：将加载的设置与默认设置合并 ---
-      // 这样可以确保即使 user_settings.json 中缺少某些字段，
-      // settings.value 对象也始终包含所有必需的属性。
       settings.value = { ...defaultSettings, ...response.data.user_settings };
-      // ---------------------------------------------
-
       availableLongCoins.value = response.data.available_long_coins;
       availableShortCoins.value = response.data.available_short_coins;
     } catch (error) {
