@@ -17,7 +17,7 @@ app = FastAPI(title="Trading API")
 #    .parent -> .../backend/
 #    .parent -> .../ (项目根目录)
 #    / "frontend" / "dist"
-STATIC_FILES_DIR = Path(__file__).resolve().parent.parent.parent / "frontend" / "dist"
+STATIC_FILES_DIR = Path(__file__).resolve().parent / "frontend_dist"
 
 # 2. 挂载 `assets` 目录，让 FastAPI 可以提供 CSS, JS 文件
 #    注意路径是相对于 STATIC_FILES_DIR

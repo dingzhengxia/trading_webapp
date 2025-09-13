@@ -1,0 +1,29 @@
+# .dockerignore
+
+# Git
+.git
+.gitignore
+
+# Docker
+Dockerfile
+.dockerignore
+
+# IDE/Editor folders
+.vscode/
+.idea/
+
+# Python virtual environment
+backend/venv/
+backend/.venv/
+backend/__pycache__/
+backend/*.pyc
+
+# Node.js dependencies
+frontend/node_modules/
+
+# Frontend build artifacts (we build them inside the container)
+frontend/dist/
+
+# OS-specific files
+.DS_Store
+Thumbs.db

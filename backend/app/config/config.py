@@ -3,12 +3,17 @@ import json
 import os
 from pathlib import Path
 
-# --- 核心改动：路径解析 ---
-# 以当前文件为基准，向上找两级到 backend/ 目录，再向上一级到项目根目录
-_BASE_DIR = Path(__file__).resolve().parent.parent.parent
+# --- 核心修改：路径解析 ---
+# 检查是否在 Docker 容器中。如果是，则使用固定的容器内路径。
+# 否则，使用之前的文件系统相对路径。
+if os.environ.get("IS_DOCKER"):
+    _BASE_DIR = Path('/app') # 容器内的工作目录
+else:
+    _BASE_DIR = Path(__file__).resolve().parent.parent.parent.parent
+
 USER_SETTINGS_FILE = _BASE_DIR / 'user_settings.json'
 COIN_LISTS_FILE = _BASE_DIR / 'coin_lists.json'
-# ---------------------------
+# --- 修改结束 ---
 
 STABLECOIN_PREFERENCE = ['USDC', 'USDT']
 
