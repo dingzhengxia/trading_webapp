@@ -7,7 +7,27 @@
       </v-col>
     </v-row>
 
-    <!-- 第二行：多头仓位 -->
+    <!-- 第二行：全局操作栏 (平掉选中) -->
+    <v-row>
+      <v-col cols="12">
+        <v-card>
+          <v-card-text class="d-flex justify-center align-center pa-2">
+            <v-btn
+              color="warning"
+              variant="tonal"
+              @click="openCloseSelectedDialog"
+              :disabled="positionStore.selectedPositions.length === 0"
+              prepend-icon="mdi-close-box-multiple"
+              class="mx-auto"
+            >
+              平掉选中 ({{ positionStore.selectedPositions.length }})
+            </v-btn>
+          </v-card-text>
+        </v-card>
+      </v-col>
+    </v-row>
+
+    <!-- 第三行：多头仓位 -->
     <v-row>
       <v-col cols="12">
         <PositionsTable
@@ -17,21 +37,6 @@
           :loading="positionStore.loading"
           @refresh="positionStore.fetchPositions()"
         />
-      </v-col>
-    </v-row>
-
-    <!-- 第三行：选中操作行 -->
-    <v-row justify="center" class="my-2">
-      <v-col cols="auto">
-        <v-btn
-          color="warning"
-          variant="tonal"
-          @click="openCloseSelectedDialog"
-          :disabled="positionStore.selectedPositions.length === 0"
-          prepend-icon="mdi-close-box-multiple"
-        >
-          平掉选中 ({{ positionStore.selectedPositions.length }})
-        </v-btn>
       </v-col>
     </v-row>
 
