@@ -14,8 +14,7 @@ class RetriableOrderError(Exception): pass
 class InterruptedError(Exception): pass
 
 
-async def initialize_exchange_async(api_key: str, api_secret: str, use_testnet: bool, enable_proxy: bool,
-                                    proxy_url: str) -> ccxt.binanceusdm:
+async def initialize_exchange_async(api_key: str, api_secret: str, use_testnet: bool) -> ccxt.binanceusdm:
     if not api_key or not api_secret:
         raise ConnectionError("API Key/Secret cannot be empty.")
 
@@ -30,11 +29,6 @@ async def initialize_exchange_async(api_key: str, api_secret: str, use_testnet: 
 
     exchange = ccxt.binanceusdm(config)
     exchange.enableRateLimit = True
-
-    if enable_proxy and proxy_url:
-        print(f"Enabling proxy: {proxy_url}")
-        exchange.https_proxy = proxy_url
-        exchange.aiohttp_proxy = proxy_url
 
     if use_testnet:
         exchange.set_sandbox_mode(True)
