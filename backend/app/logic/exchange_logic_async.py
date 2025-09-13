@@ -109,38 +109,43 @@ async def fetch_positions_with_pnl_async(exchange: ccxt.binanceusdm, leverage: i
         return []
 
 
-# --- 核心修复：恢复 ticker 的获取 ---
+# --- 核心修复：更健壮的价格获取和平仓逻辑 ---
 async def close_position_async(exchange: ccxt.binanceusdm, full_symbol_to_close: str, ratio: float, async_logger):
     base_coin = full_symbol_to_close.split('/')[0]
     await async_logger(f"开始为 {full_symbol_to_close} 执行平仓，比例 {ratio * 100:.1f}%...")
 
     try:
-        # 1. 并发获取持仓信息和最新价格
-        positions_task = exchange.fetch_positions([full_symbol_to_close])
-        ticker_task = exchange.fetch_ticker(full_symbol_to_close)
-        results = await asyncio.gather(positions_task, ticker_task, return_exceptions=True)
-
-        # 处理可能发生的错误
-        if isinstance(results[0], Exception): raise results[0]
-        if isinstance(results[1], Exception): raise results[1]
-        all_positions, ticker = results
-
+        # 1. 获取持仓信息
+        # fetch_positions 返回的是一个列表，即使我们只请求一个 symbol
+        all_positions = await exchange.fetch_positions([full_symbol_to_close])
         target_position_raw = next((p for p in all_positions if p['symbol'] == full_symbol_to_close), None)
 
-        if not target_position_raw or float(target_position_raw['info']['positionAmt']) == 0:
+        if not target_position_raw or float(target_position_raw.get('contracts', 0)) == 0:
             await async_logger(f"最终确认失败：未找到 {full_symbol_to_close} 的有效持仓。", "info")
             return True
 
+        # 2. 获取行情价格 (Ticker)
+        ticker = await exchange.fetch_ticker(full_symbol_to_close)
+
+        # 3. 安全地获取价格，优先使用标记价，否则使用最后成交价
+        price_for_calc = ticker.get('mark') or ticker.get('last')
+        if not price_for_calc:
+            raise ValueError(f"无法获取 {full_symbol_to_close} 的标记价格或最后成交价。")
+        mark_price = float(price_for_calc)
+
+        # 4. 提取持仓数据并计算
         position_info = target_position_raw['info']
         position_amount_contracts = float(position_info['positionAmt'])
         side = 'long' if position_amount_contracts > 0 else 'short'
-        mark_price = float(ticker['mark'])
+
+        # 使用我们安全获取的价格来计算名义价值
         notional_value = abs(position_amount_contracts * mark_price)
 
         value_to_close_usd = notional_value * ratio
         amount_to_close_contracts = float(
             exchange.amount_to_precision(full_symbol_to_close, value_to_close_usd / mark_price))
 
+        # 健全性检查
         if amount_to_close_contracts > abs(position_amount_contracts):
             amount_to_close_contracts = abs(position_amount_contracts)
 
@@ -150,8 +155,9 @@ async def close_position_async(exchange: ccxt.binanceusdm, full_symbol_to_close:
 
         close_side = 'SELL' if side == 'long' else 'BUY'
         await async_logger(
-            f"最终确认：计划市价平仓 {value_to_close_usd:,.2f} U on {full_symbol_to_close} at {close_side} side.")
+            f"最终确认：计划市价平仓 {value_to_close_usd:,.2f} U (合约数量: {amount_to_close_contracts}) on {full_symbol_to_close} at {close_side} side.")
 
+        # 5. 下单
         order = await exchange.private_post_order({
             'symbol': full_symbol_to_close,
             'side': close_side,
