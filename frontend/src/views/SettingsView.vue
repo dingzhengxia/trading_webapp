@@ -44,7 +44,7 @@
                 </v-col>
                 <v-col cols="12">
                     <v-text-field
-                        label="代理 URL (e.g., http://127.0.0.1:7890)"
+                        label="代理 URL (e.g., http://127.0.0.1:19828)"
                         v-model="settingsStore.settings.proxy_url"
                         variant="outlined"
                         density="compact"

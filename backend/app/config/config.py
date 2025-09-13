@@ -33,7 +33,7 @@ DEFAULT_CONFIG = {
     'close_order_fill_timeout_seconds': 12,
     'close_maker_retries': 3,
     'enable_proxy': False,
-    'proxy_url': 'http://127.0.0.1:7890',
+    'proxy_url': 'http://127.0.0.1:19828',
 
     # --- 新增/确保这些字段存在 ---
     'rebalance_method': 'multi_factor_weakest',
