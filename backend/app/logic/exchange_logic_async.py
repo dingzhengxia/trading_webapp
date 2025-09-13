@@ -109,15 +109,18 @@ async def fetch_positions_with_pnl_async(exchange: ccxt.binanceusdm, leverage: i
         return []
 
 
+# --- 核心修复：恢复 ticker 的获取 ---
 async def close_position_async(exchange: ccxt.binanceusdm, full_symbol_to_close: str, ratio: float, async_logger):
     base_coin = full_symbol_to_close.split('/')[0]
     await async_logger(f"开始为 {full_symbol_to_close} 执行平仓，比例 {ratio * 100:.1f}%...")
 
     try:
+        # 1. 并发获取持仓信息和最新价格
         positions_task = exchange.fetch_positions([full_symbol_to_close])
         ticker_task = exchange.fetch_ticker(full_symbol_to_close)
         results = await asyncio.gather(positions_task, ticker_task, return_exceptions=True)
 
+        # 处理可能发生的错误
         if isinstance(results[0], Exception): raise results[0]
         if isinstance(results[1], Exception): raise results[1]
         all_positions, ticker = results
@@ -170,6 +173,8 @@ async def close_position_async(exchange: ccxt.binanceusdm, full_symbol_to_close:
             await async_logger(f"❌ {base_coin} ({full_symbol_to_close}) 平仓失败，发生意外错误: {e}", "error")
         return False
 
+
+# --- 修复结束 ---
 
 async def fetch_klines_async(exchange: ccxt.binanceusdm, symbol: str, timeframe: str = '1d', days_ago: int = 61) -> \
 Optional[List]:
