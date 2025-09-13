@@ -8,22 +8,24 @@
         </span>
       </v-chip>
       <v-spacer></v-spacer>
-      <v-menu>
-        <template v-slot:activator="{ props }">
-          <v-btn v-bind="props" color="blue-grey" variant="tonal" size="small" class="mr-2">
-            批量平仓
-            <v-icon end>mdi-chevron-down</v-icon>
-          </v-btn>
-        </template>
-        <v-list density="compact">
-          <v-list-item @click="uiStore.openCloseDialog({ type: 'by_side', side: side })">
-            <v-list-item-title>平掉此方向仓位...</v-list-item-title>
-          </v-list-item>
-        </v-list>
-      </v-menu>
+
+      <!-- 核心修复：按钮行为固定 -->
+      <v-btn
+        color="blue-grey"
+        variant="tonal"
+        size="small"
+        class="mr-2"
+        @click="uiStore.openCloseDialog({ type: 'by_side', side: side })"
+      >
+        <v-icon left>mdi-close-circle-multiple</v-icon>
+        批量平仓
+      </v-btn>
+
       <v-btn icon="mdi-refresh" variant="text" size="small" @click="emit('refresh')" :loading="loading"></v-btn>
     </v-card-title>
+
     <v-divider></v-divider>
+
     <v-data-table-virtual
       v-model="positionStore.selectedPositions"
       :headers="headers"

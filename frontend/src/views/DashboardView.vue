@@ -7,7 +7,7 @@
       </v-col>
     </v-row>
 
-    <!-- 第二行：全局操作栏 (平掉选中) -->
+    <!-- 第二行：全局操作栏 -->
     <v-row>
       <v-col cols="12">
         <v-card>
@@ -61,6 +61,8 @@ import { usePositionStore } from '@/stores/positionStore';
 import { useUiStore } from '@/stores/uiStore';
 import PositionsTable from '@/components/PositionsTable.vue';
 import PnlSummary from '@/components/PnlSummary.vue';
+// 核心修复：移除对 GeneralCloseSettings 的导入
+// import GeneralCloseSettings from '@/components/GeneralCloseSettings.vue';
 
 const positionStore = usePositionStore();
 const uiStore = useUiStore();
