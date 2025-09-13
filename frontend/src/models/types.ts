@@ -24,6 +24,14 @@ export interface RebalancePlan {
 }
 
 export interface UserSettings {
+  // API 和网络
+  api_key: string;
+  api_secret: string;
+  use_testnet: boolean;
+  enable_proxy: boolean;
+  proxy_url: string;
+
+  // 交易参数
   leverage: number;
   total_long_position_value: number;
   total_short_position_value: number;
@@ -31,24 +39,31 @@ export interface UserSettings {
   short_coin_list: string[];
   long_custom_weights?: { [key: string]: number };
 
-  rebalance_method: 'multi_factor_weakest' | 'foam';
-  rebalance_top_n: number;
-  rebalance_min_volume_usd: number;
-  rebalance_abs_momentum_days: number;
-  rebalance_rel_strength_days: number;
-  rebalance_foam_days: number;
-
-  open_maker_retries: number;
-  open_order_fill_timeout_seconds: number;
-  close_maker_retries: number;
-  close_order_fill_timeout_seconds: number;
-
+  // 开关
   enable_long_trades: boolean;
   enable_short_trades: boolean;
+
+  // SL/TP
   enable_long_sl_tp: boolean;
   long_stop_loss_percentage: number;
   long_take_profit_percentage: number;
   enable_short_sl_tp: boolean;
   short_stop_loss_percentage: number;
   short_take_profit_percentage: number;
+
+  // 高级交易参数
+  open_maker_retries: number;
+  open_order_fill_timeout_seconds: number;
+  close_maker_retries: number;
+  close_order_fill_timeout_seconds: number;
+
+  // 再平衡参数
+  rebalance_method: 'multi_factor_weakest' | 'foam';
+  rebalance_top_n: number;
+  rebalance_min_volume_usd: number;
+  rebalance_abs_momentum_days: number;
+  rebalance_rel_strength_days: number;
+  rebalance_foam_days: number;
+  rebalance_short_ratio_max: number;
+  rebalance_short_ratio_min: number;
 }
