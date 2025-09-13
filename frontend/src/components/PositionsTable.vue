@@ -9,16 +9,16 @@
       </v-chip>
       <v-spacer></v-spacer>
 
-      <!-- 核心修复：按钮行为固定 -->
+      <!-- 核心升级：智能批量平仓按钮 -->
       <v-btn
-        color="blue-grey"
+        :color="selectedInThisTable.length > 0 ? 'warning' : 'blue-grey'"
         variant="tonal"
         size="small"
         class="mr-2"
-        @click="uiStore.openCloseDialog({ type: 'by_side', side: side })"
+        @click="handleBulkClose"
       >
-        <v-icon left>mdi-close-circle-multiple</v-icon>
-        批量平仓
+        <v-icon left>{{ selectedInThisTable.length > 0 ? 'mdi-close-box-multiple' : 'mdi-close-circle-multiple' }}</v-icon>
+        {{ selectedInThisTable.length > 0 ? `平掉选中 (${selectedInThisTable.length})` : '批量平仓' }}
       </v-btn>
 
       <v-btn icon="mdi-refresh" variant="text" size="small" @click="emit('refresh')" :loading="loading"></v-btn>
@@ -86,6 +86,22 @@ const positionStore = usePositionStore();
 const totalNotional = computed(() => {
   return props.positions.reduce((sum, position) => sum + position.notional, 0);
 });
+
+const selectedInThisTable = computed(() => {
+  const currentTableSymbols = new Set(props.positions.map(p => p.full_symbol));
+  return positionStore.selectedPositions
+    .filter(fullSymbol => currentTableSymbols.has(fullSymbol))
+    .map(fullSymbol => props.positions.find(p => p.full_symbol === fullSymbol)!)
+    .filter(p => p);
+});
+
+const handleBulkClose = () => {
+  if (selectedInThisTable.value.length > 0) {
+    uiStore.openCloseDialog({ type: 'selected', positions: selectedInThisTable.value });
+  } else {
+    uiStore.openCloseDialog({ type: 'by_side', side: props.side });
+  }
+};
 
 const headers: TDataTableHeader[] = [
   { title: '合约', key: 'full_symbol', sortable: true, width: '20%' },
