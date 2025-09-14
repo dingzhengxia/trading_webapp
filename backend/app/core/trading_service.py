@@ -11,7 +11,7 @@ from ..logic import exchange_logic_async as ex_async
 from ..logic import sl_tp_logic_async as sltp_async
 
 TRADE_TASK_QUEUE = Queue()
-NUM_WORKERS = 5  # 可控的并发 worker 数量
+NUM_WORKERS = 5
 
 
 class TradingService:
@@ -23,7 +23,6 @@ class TradingService:
         self.current_task_info = {}
 
     async def start_worker(self):
-        """在应用启动时，启动并发 worker 池"""
         if not self.worker_tasks:
             self.worker_tasks = {
                 asyncio.create_task(self._trade_task_worker(i + 1))
@@ -32,7 +31,6 @@ class TradingService:
             print(f"{NUM_WORKERS} trading task workers have been started.")
 
     async def _trade_task_worker(self, worker_id: int):
-        """一个长期运行的 worker，从队列中获取并处理交易任务。"""
         await log_message(f"交易任务处理器 #{worker_id} 已启动...", "info")
         while True:
             try:
@@ -42,7 +40,6 @@ class TradingService:
                     TRADE_TASK_QUEUE.task_done()
                     continue
 
-                # 执行具体任务
                 async with get_exchange_for_task() as exchange:
                     if task_type == 'SINGLE_ORDER':
                         await self._run_single_order(exchange, data, config_dict)
@@ -69,7 +66,6 @@ class TradingService:
                         await sltp_async.set_tp_sl_for_position_async(exchange, position, config_dict,
                                                                       create_logger(position.symbol))
 
-                # 更新进度
                 async with self.is_running_lock:
                     if self.current_task_info.get('total', 0) > 0:
                         self.current_task_info['current'] += 1
@@ -78,15 +74,25 @@ class TradingService:
                             self.current_task_info['total'],
                             self.current_task_info['name']
                         )
-
                 TRADE_TASK_QUEUE.task_done()
-
             except Exception as e:
                 await log_message(f"!!! Worker #{worker_id} 任务错误: {e}", "error")
                 if not TRADE_TASK_QUEUE.empty():
-                    TRADE_TASK_QUEUE.task_done()  # 确保队列不会被阻塞
+                    TRADE_TASK_QUEUE.task_done()
 
-    async def _dispatch_and_wait(self, task_name: str, tasks: list, task_type: str, config: dict):
+    async def dispatch_tasks(self, task_name: str, tasks: list, task_type: str, config: dict):
+        """
+        一个公共的任务分发器，可以从任何 API 路由调用。
+        """
+        return await self._run_batch_job(
+            name=task_name,
+            job_coro=self._dispatch_and_wait,
+            tasks=tasks,
+            task_type=task_type,
+            config=config
+        )
+
+    async def _dispatch_and_wait(self, tasks: list, task_type: str, config: dict, task_name: str):
         """将一批任务放入队列，并等待它们全部完成。"""
         if not tasks:
             await log_message(f"{task_name}任务列表为空。", "info")
@@ -103,7 +109,7 @@ class TradingService:
         await TRADE_TASK_QUEUE.join()
 
     async def _run_batch_job(self, name: str, job_coro, *args, **kwargs):
-        """统一的批量任务执行器，负责状态管理和错误处理"""
+        """统一的批量任务执行器"""
         async with self.is_running_lock:
             if self.is_running:
                 await log_message("一个任务已在运行中。", "warning")
@@ -114,22 +120,25 @@ class TradingService:
         await update_status(f"正在准备{name}...", is_running=True)
 
         try:
-            await job_coro(*args, **kwargs)
+            # 传递 task_name 给 _dispatch_and_wait
+            if 'tasks' in kwargs:
+                await job_coro(*args, task_name=name, **kwargs)
+            else:
+                await job_coro(*args, **kwargs)
+
             if not self.stop_event.is_set():
                 await log_message(f"===== 所有{name}任务已处理完毕 =====", "success")
         except Exception as e:
             await log_message(f"!!! {name}任务执行中发生错误: {e}", "error")
         finally:
             async with self.is_running_lock:
-                self.is_running = False
-                await update_status("准备就绪", is_running=False)
-                if not self.stop_event.is_set():
-                    await manager.broadcast({"type": "refresh_positions"})
+                if TRADE_TASK_QUEUE.empty():
+                    self.is_running = False
+                    await update_status("准备就绪", is_running=False)
+                    if not self.stop_event.is_set():
+                        await manager.broadcast({"type": "refresh_positions"})
 
     async def start_trading(self, plan_request: TradePlanRequest):
-        return await self._run_batch_job("开仓", self._start_trading_job, plan_request)
-
-    async def _start_trading_job(self, plan_request: TradePlanRequest):
         config_dict = plan_request.model_dump()
         long_plan, short_plan = plan_calculator.calculate_trade_plan(config_dict,
                                                                      config_dict.get('long_custom_weights', {}))
@@ -140,7 +149,7 @@ class TradingService:
         if plan_request.enable_short_trades and short_plan:
             all_plans.extend([{'coin': c, 'value': v, 'side': i18n.ORDER_SIDE_SELL} for c, v in short_plan.items()])
 
-        await self._dispatch_and_wait("开仓", all_plans, 'SINGLE_ORDER', config_dict)
+        return await self.dispatch_tasks("开仓", all_plans, 'SINGLE_ORDER', config_dict)
 
     async def stop_trading(self):
         async with self.is_running_lock:
@@ -167,16 +176,14 @@ class TradingService:
             return False
 
     async def sync_all_sltp(self, config_request: dict):
-        return await self._run_batch_job("校准SL/TP", self._sync_sltp_job, config_request)
-
-    async def _sync_sltp_job(self, config_request: dict):
         try:
             async with get_exchange_for_task() as exchange:
                 positions = await ex_async.fetch_positions_with_pnl_async(exchange, config_request.get('leverage', 1))
         except Exception as e:
             await log_message(f"!!! 获取持仓失败: {e}", "error")
-            return
-        await self._dispatch_and_wait("校准SL/TP", positions, 'SYNC_SLTP', config_request)
+            return {"message": "获取持仓失败"}
+
+        return await self.dispatch_tasks("校准SL/TP", positions, 'SYNC_SLTP', config_request)
 
     async def execute_rebalance_plan(self, plan: ExecutionPlanRequest):
         return await self._run_batch_job("再平衡", self._execute_rebalance_job, plan)
@@ -197,13 +204,15 @@ class TradingService:
                         close_tasks_data.append((full_symbol, o.close_ratio))
                     else:
                         await log_message(f"  > [Warning] 无法为 {o.symbol} 找到 full_symbol，跳过平仓。")
-            await self._dispatch_and_wait("再平衡-平仓", close_tasks_data, 'CLOSE_ORDER', config_dict)
+            await self._dispatch_and_wait(tasks=close_tasks_data, task_type='CLOSE_ORDER', config=config_dict,
+                                          task_name="再平衡-平仓")
 
         if self.stop_event.is_set(): return
 
         if open_orders:
             open_tasks_data = [{'coin': o.symbol, 'value': o.value_to_trade, 'side': o.side} for o in open_orders]
-            await self._dispatch_and_wait("再平衡-开仓", open_tasks_data, 'SINGLE_ORDER', config_dict)
+            await self._dispatch_and_wait(tasks=open_tasks_data, task_type='SINGLE_ORDER', config=config_dict,
+                                          task_name="再平衡-开仓")
 
 
 trading_service = TradingService()
