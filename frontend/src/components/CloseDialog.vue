@@ -40,6 +40,7 @@
 import { ref, computed } from 'vue';
 import { useUiStore } from '@/stores/uiStore';
 import api from '@/services/api';
+import type { Position } from '@/models/types';
 
 const uiStore = useUiStore();
 const closeRatio = ref(100);
@@ -63,32 +64,29 @@ const executeClose = async () => {
 
   const ratio = closeRatio.value / 100;
 
-  // --- 核心修复：使用类型守卫 ---
   if (target.type === 'single') {
     const logMessage = `正在提交 ${target.position.full_symbol} 的平仓指令 (${closeRatio.value}%)...`;
-    await openLogAndPost('/api/positions/close', { full_symbol: target.position.full_symbol, ratio }, logMessage);
-
+    await postWithLog('/api/positions/close', { full_symbol: target.position.full_symbol, ratio }, logMessage);
   } else if (target.type === 'by_side') {
-    const sideText = dialogTitle.value; // 复用 computed 属性的文本
+    const sideText = dialogTitle.value;
     const logMessage = `正在提交批量平仓 ${sideText} 的指令 (${closeRatio.value}%)...`;
-    await openLogAndPost('/api/positions/close-by-side', { side: target.side, ratio }, logMessage);
-
+    await postWithLog('/api/positions/close-by-side', { side: target.side, ratio }, logMessage);
   } else if (target.type === 'selected') {
     const symbolsToClose = target.positions.map(p => p.full_symbol);
     const logMessage = `正在提交批量平仓 ${symbolsToClose.length} 个选中仓位的指令...`;
-    await openLogAndPost('/api/positions/close-multiple', { full_symbols: symbolsToClose, ratio }, logMessage);
+    await postWithLog('/api/positions/close-multiple', { full_symbols: symbolsToClose, ratio }, logMessage);
   }
-  // --- 修复结束 ---
 
   uiStore.showCloseDialog = false;
   closeRatio.value = 100;
 };
 
-const openLogAndPost = async (url: string, data: any, logMessage: string) => {
+// --- 核心修复：将 openLogAndPost 重命名并移除自动打开抽屉的逻辑 ---
+const postWithLog = async (url: string, data: any, logMessage: string) => {
   uiStore.logStore.addLog({ message: logMessage, level: 'info', timestamp: new Date().toLocaleTimeString() });
-  if (!uiStore.showLogDrawer) {
-    uiStore.showLogDrawer = true;
-  }
+  // if (!uiStore.showLogDrawer) {
+  //   uiStore.showLogDrawer = true; // <-- 移除这一段
+  // }
   try {
     await api.post(url, data);
   } catch(e: any) {
