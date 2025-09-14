@@ -3,12 +3,13 @@ from fastapi import APIRouter, HTTPException, Depends
 import ccxt.async_support as ccxt
 from typing import Dict, Any, List
 
-from ..models.schemas import RebalanceCriteria, RebalancePlanResponse, Position
+from ..models.schemas import RebalanceCriteria, RebalancePlanResponse, ExecutionPlanRequest
 from ..core.exchange_manager import get_exchange_dependency
 from ..logic import rebalance_logic
 from ..logic import exchange_logic_async as ex_async
 from ..config.config import AVAILABLE_SHORT_COINS, AVAILABLE_LONG_COINS, load_settings, STABLECOIN_PREFERENCE
 from ..core.websocket_manager import log_message
+from ..core.trading_service import trading_service
 
 router = APIRouter(prefix="/api/rebalance", tags=["Rebalance"])
 
@@ -58,16 +59,17 @@ async def screen_coins_task(exchange: ccxt.binanceusdm, criteria: RebalanceCrite
     if criteria.method == 'multi_factor_weakest':
         btc_kline_tasks = []
         symbols_for_btc_kline = []
+
+        usdt_klines_map = {}
         for i, klines in enumerate(results):
             if isinstance(klines, list) and len(klines) >= days_to_fetch:
-                symbols_for_btc_kline.append(valid_symbols_for_kline[i])
-                btc_kline_tasks.append(ex_async.fetch_klines_async(exchange, f"{valid_symbols_for_kline[i]}/BTC", '1d',
-                                                                   criteria.rel_strength_days + 2))
+                symbol = valid_symbols_for_kline[i]
+                usdt_klines_map[symbol] = klines
+                symbols_for_btc_kline.append(symbol)
+                btc_kline_tasks.append(
+                    ex_async.fetch_klines_async(exchange, f"{symbol}/BTC", '1d', criteria.rel_strength_days + 2))
 
         btc_results = await asyncio.gather(*btc_kline_tasks, return_exceptions=True)
-
-        usdt_klines_map = {valid_symbols_for_kline[i]: klines for i, klines in enumerate(results) if
-                           isinstance(klines, list)}
 
         for i, btc_klines in enumerate(btc_results):
             symbol = symbols_for_btc_kline[i]
@@ -75,7 +77,6 @@ async def screen_coins_task(exchange: ccxt.binanceusdm, criteria: RebalanceCrite
             if isinstance(btc_klines, list):
                 data['btc_klines'] = btc_klines
             coin_data.append(data)
-
     else:  # foam
         for i, klines in enumerate(results):
             if isinstance(klines, list) and len(klines) >= days_to_fetch:
@@ -106,10 +107,7 @@ async def generate_rebalance_plan(
     try:
         config = load_settings()
 
-        # --- 核心修复：在调用时传入 leverage ---
         positions_task = ex_async.fetch_positions_with_pnl_async(exchange, config.get('leverage', 1))
-        # ------------------------------------
-
         screening_task = screen_coins_task(exchange, criteria)
 
         all_positions, target_coin_list = await asyncio.gather(positions_task, screening_task)
@@ -139,6 +137,7 @@ async def generate_rebalance_plan(
         for p_info in close_plan_data:
             close_plan_formatted.append({
                 "symbol": p_info["symbol"],
+                "notional": p_info["notional"],
                 "close_value": p_info["notional"] * p_info["close_ratio"],
                 "close_ratio_perc": p_info["close_ratio"] * 100
             })
@@ -167,3 +166,8 @@ async def generate_rebalance_plan(
             positions_to_open=[],
             error=error_message
         )
+
+
+@router.post("/execute")
+async def execute_rebalance_plan(plan: ExecutionPlanRequest):
+    return await trading_service.execute_rebalance_plan(plan)

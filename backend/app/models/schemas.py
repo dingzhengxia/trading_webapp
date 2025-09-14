@@ -76,3 +76,16 @@ class CloseBySideRequest(BaseModel):
 class CloseMultipleRequest(BaseModel):
     full_symbols: List[str]
     ratio: float = Field(..., gt=0, le=1.0)
+
+
+class ExecutionOrderItem(BaseModel):
+    symbol: str
+    action: str  # 'OPEN' or 'CLOSE'
+    side: str  # 'buy' or 'sell'
+    value_to_trade: Optional[float] = None
+    contracts_to_trade: Optional[float] = None
+    close_ratio: Optional[float] = None
+
+
+class ExecutionPlanRequest(BaseModel):
+    orders: List[ExecutionOrderItem]
