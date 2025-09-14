@@ -64,7 +64,8 @@ async def fetch_positions_with_pnl_async(exchange: ccxt.binanceusdm, leverage: i
         raw_positions = await exchange.fetch_positions(None)
         non_zero_positions = [p for p in raw_positions if float(p.get('contracts', 0) or 0) != 0]
 
-        if not non_zero_positions: return []
+        if not non_zero_positions:
+            return []
 
         symbols = [p['symbol'] for p in non_zero_positions]
         tickers = await exchange.fetch_tickers(symbols)
@@ -113,6 +114,49 @@ async def fetch_positions_with_pnl_async(exchange: ccxt.binanceusdm, leverage: i
     except Exception as e:
         print(f"Error fetching positions or PNL: {e}")
         return []
+
+
+async def close_position_async(exchange: ccxt.binanceusdm, full_symbol_to_close: str, ratio: float, async_logger):
+    base_coin = full_symbol_to_close.split('/')[0]
+    await async_logger(f"准备为 {full_symbol_to_close} 执行平仓（Maker限价单），比例 {ratio * 100:.1f}%...")
+
+    try:
+        all_positions = await exchange.fetch_positions([full_symbol_to_close])
+        target_position_raw = next((p for p in all_positions if p['symbol'] == full_symbol_to_close), None)
+
+        if not target_position_raw or float(target_position_raw.get('contracts', 0)) == 0:
+            await async_logger(f"最终确认失败：未找到 {full_symbol_to_close} 的有效持仓。", "info")
+            return True
+
+        position_amount_contracts = float(target_position_raw['info']['positionAmt'])
+        side = 'long' if position_amount_contracts > 0 else 'short'
+        close_side = 'sell' if side == 'long' else 'buy'
+
+        amount_to_close_contracts = float(
+            exchange.amount_to_precision(full_symbol_to_close, abs(position_amount_contracts) * ratio))
+
+        if amount_to_close_contracts <= 0:
+            await async_logger("计算出的平仓数量为0，跳过。", "warning")
+            return False
+
+        config = load_settings()
+        order_result = await _execute_maker_order_with_retry_async(
+            exchange=exchange,
+            symbol=full_symbol_to_close,
+            side=close_side,
+            params={'reduceOnly': True},
+            timeout=config.get('close_order_fill_timeout_seconds', 12),
+            retries=config.get('close_maker_retries', 3),
+            async_logger=async_logger,
+            stop_event=asyncio.Event(),
+            contracts_to_trade=amount_to_close_contracts
+        )
+
+        return order_result is not None
+
+    except Exception as e:
+        await async_logger(f"❌ {base_coin} ({full_symbol_to_close}) 平仓准备失败: {e}", "error")
+        return False
 
 
 async def fetch_klines_async(exchange: ccxt.binanceusdm, symbol: str, timeframe: str = '1d', days_ago: int = 61) -> \
@@ -218,49 +262,6 @@ async def _execute_maker_order_with_retry_async(
                 except:
                     pass
             raise
-
-
-async def close_position_async(exchange: ccxt.binanceusdm, full_symbol_to_close: str, ratio: float, async_logger):
-    base_coin = full_symbol_to_close.split('/')[0]
-    await async_logger(f"准备为 {full_symbol_to_close} 执行平仓（Maker限价单），比例 {ratio * 100:.1f}%...")
-
-    try:
-        all_positions = await exchange.fetch_positions([full_symbol_to_close])
-        target_position_raw = next((p for p in all_positions if p['symbol'] == full_symbol_to_close), None)
-
-        if not target_position_raw or float(target_position_raw.get('contracts', 0)) == 0:
-            await async_logger(f"最终确认失败：未找到 {full_symbol_to_close} 的有效持仓。", "info")
-            return True
-
-        position_amount_contracts = float(target_position_raw['info']['positionAmt'])
-        side = 'long' if position_amount_contracts > 0 else 'short'
-        close_side = 'sell' if side == 'long' else 'buy'
-
-        amount_to_close_contracts = float(
-            exchange.amount_to_precision(full_symbol_to_close, abs(position_amount_contracts) * ratio))
-
-        if amount_to_close_contracts <= 0:
-            await async_logger("计算出的平仓数量为0，跳过。", "warning")
-            return False
-
-        config = load_settings()
-        order_result = await _execute_maker_order_with_retry_async(
-            exchange=exchange,
-            symbol=full_symbol_to_close,
-            side=close_side,
-            params={'reduceOnly': True},
-            timeout=config.get('close_order_fill_timeout_seconds', 12),
-            retries=config.get('close_maker_retries', 3),
-            async_logger=async_logger,
-            stop_event=asyncio.Event(),
-            contracts_to_trade=amount_to_close_contracts
-        )
-
-        return order_result is not None
-
-    except Exception as e:
-        await async_logger(f"❌ {base_coin} ({full_symbol_to_close}) 平仓准备失败: {e}", "error")
-        return False
 
 
 async def process_order_with_sl_tp_async(exchange: ccxt.binanceusdm, plan: dict, config: dict, async_logger,
