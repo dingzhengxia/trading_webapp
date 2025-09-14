@@ -8,7 +8,7 @@
   },
   "scripts": {
     "dev": "vite",
-    "build": "vue-tsc --noEmit && vite build",
+    "build": "npx vue-tsc --noEmit && npx vite build",
     "preview": "vite preview",
     "build-only": "vite build",
     "type-check": "vue-tsc --build",
