@@ -1,23 +1,30 @@
 # base.Dockerfile
-# 负责安装所有不变的依赖
+# 负责安装所有不变的依赖到一个可复用的基础镜像中。
 
+# 1. 从一个包含 Node.js 的轻量级镜像开始
 FROM node:20-alpine
 
-# 安装系统依赖
-RUN apk add --no-cache python3 py3-pip
+# 2. 安装 Python, pip, 和 venv 工具
+RUN apk add --no-cache python3 py3-pip python3-venv
 
-# 创建并激活 Python 虚拟环境
+# 3. 创建 Python 虚拟环境
 ENV VENV_PATH=/opt/venv
 RUN python3 -m venv $VENV_PATH
+
+# 4. 将虚拟环境的 bin 目录添加到 PATH 环境变量中
+#    这样后续的 RUN 命令会优先使用虚拟环境中的 python 和 pip
 ENV PATH="$VENV_PATH/bin:$PATH"
 
-# 设置工作目录
+# 5. 设置工作目录
 WORKDIR /deps
 
-# 安装 Python 依赖到虚拟环境
-COPY backend/requirements.txt .
-RUN pip install --no-cache-dir --upgrade pip && pip install --no-cache-dir -r requirements.txt
+# 6. 升级虚拟环境中的 pip
+RUN pip install --no-cache-dir --upgrade pip
 
-# 安装 Node.js 依赖
+# 7. 安装 Python 依赖到虚拟环境中
+COPY backend/requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# 8. 安装 Node.js 依赖
 COPY frontend/package*.json ./
 RUN npm install --prefer-offline --no-audit
