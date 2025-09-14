@@ -1,6 +1,6 @@
 import asyncio
 from asyncio import Queue
-from ..models.schemas import TradePlanRequest, ExecutionPlanRequest
+from ..models.schemas import TradePlanRequest, ExecutionPlanRequest, Position
 from ..logic import plan_calculator
 from ..core.exchange_manager import get_exchange_for_task
 from ..core.websocket_manager import log_message, update_status, manager, broadcast_progress
@@ -60,7 +60,7 @@ class TradingService:
                         await ex_async.close_position_async(exchange, full_symbol, ratio,
                                                             create_logger(full_symbol.split('/')[0]))
                     elif task_type == 'SYNC_SLTP':
-                        position = data
+                        position: Position = data
 
                         def create_logger(symbol):
                             async def logger(message, level='normal'):
@@ -110,7 +110,6 @@ class TradingService:
         else:
             await log_message(f"===== {task_name_for_log}队列已停止 =====", "warning")
 
-        # 只有在队列完全结束后才重置状态
         if TRADE_TASK_QUEUE.empty():
             self.is_running = False
             await update_status("准备就绪", is_running=False)
@@ -134,8 +133,11 @@ class TradingService:
         await log_message("...正在发送全局停止信号...", "warning")
 
         while not TRADE_TASK_QUEUE.empty():
-            TRADE_TASK_QUEUE.get_nowait();
-            TRADE_TASK_QUEUE.task_done()
+            try:
+                TRADE_TASK_QUEUE.get_nowait();
+                TRADE_TASK_QUEUE.task_done()
+            except asyncio.QueueEmpty:
+                break
 
         self.stop_event.set()
         await update_status("正在停止当前任务...", is_running=False)
@@ -163,23 +165,22 @@ class TradingService:
         return await self._dispatch_tasks("校准SL/TP", positions, 'SYNC_SLTP', config_request)
 
     async def execute_rebalance_plan(self, plan: ExecutionPlanRequest):
-        if self.is_running:
-            await log_message("一个任务已在运行中。", "warning")
-            return {"message": "任务已在运行"}
-
-        self.is_running = True
-        self.stop_event.clear()
-
         asyncio.create_task(self._execute_rebalance_plan_async(plan))
         return {"message": "再平衡任务已加入队列"}
 
     async def _execute_rebalance_plan_async(self, plan: ExecutionPlanRequest):
+        if self.is_running:
+            await log_message("一个任务已在运行中，请等待其完成。", "warning")
+            return
+
+        self.is_running = True
+        self.stop_event.clear()
+
         config_dict = load_settings()
         close_orders = [o for o in plan.orders if o.action == 'CLOSE']
         open_orders = [o for o in plan.orders if o.action == 'OPEN']
 
         try:
-            # Step 1: Dispatch and wait for close orders
             if close_orders:
                 close_tasks_data = []
                 async with get_exchange_for_task() as exchange:
@@ -194,17 +195,15 @@ class TradingService:
                             await log_message(f"  > [Warning] 无法为 {o.symbol} 找到 full_symbol，跳过平仓。")
 
                 await self._dispatch_tasks("再平衡-平仓", close_tasks_data, 'CLOSE_ORDER', config_dict)
-                await TRADE_TASK_QUEUE.join()  # Wait for close tasks to complete
+                await TRADE_TASK_QUEUE.join()
 
             if self.stop_event.is_set():
-                await log_message("用户已停止，不再执行开仓任务。", "warning")
-                raise InterruptedError("Operation stopped by user.")
+                raise InterruptedError("操作被用户取消")
 
-            # Step 2: Dispatch and wait for open orders
             if open_orders:
                 open_tasks_data = [{'coin': o.symbol, 'value': o.value_to_trade, 'side': o.side} for o in open_orders]
                 await self._dispatch_tasks("再平衡-开仓", open_tasks_data, 'SINGLE_ORDER', config_dict)
-                await TRADE_TASK_QUEUE.join()  # Wait for open tasks to complete
+                await TRADE_TASK_QUEUE.join()
 
             if not self.stop_event.is_set():
                 await log_message("===== 再平衡计划执行完毕 =====", "success")
@@ -212,7 +211,6 @@ class TradingService:
         except Exception as e:
             await log_message(f"!!! 再平衡执行过程中发生错误: {e}", "error")
         finally:
-            # Final state reset is handled by _wait_for_queue_completion
             if TRADE_TASK_QUEUE.empty():
                 self.is_running = False
                 await update_status("准备就绪", is_running=False)

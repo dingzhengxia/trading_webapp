@@ -2,7 +2,7 @@
   <v-card class="d-flex flex-column fill-height">
     <!-- 顶部标签页 -->
     <v-tabs v-model="tab" bg-color="blue-grey-darken-4" grow>
-      <v-tab value="trade">开仓参数</v-tab>
+      <v-tab value="trade">交易参数</v-tab>
       <v-tab value="rebalance">智能再平衡</v-tab>
     </v-tabs>
 
@@ -14,15 +14,18 @@
         <!-- 交易参数 Tab -->
         <v-window-item value="trade" class="pa-1">
           <v-form v-if="settingsStore.settings">
-            <h3 class="tab-subtitle">通用设置</h3>
-            <v-text-field
-              label="杠杆"
-              v-model.number="settingsStore.settings.leverage"
-              type="number"
-              variant="outlined"
-              density="compact"
-              hide-details
-            />
+            <h3 class="tab-subtitle">通用开仓设置</h3>
+            <v-row dense>
+              <v-col cols="6">
+                <v-text-field label="杠杆" v-model.number="settingsStore.settings.leverage" type="number" variant="outlined" density="compact" hide-details />
+              </v-col>
+              <v-col cols="6">
+                <v-text-field label="开仓重试" v-model.number="settingsStore.settings.open_maker_retries" type="number" variant="outlined" density="compact" hide-details />
+              </v-col>
+              <v-col cols="12" class="mt-2">
+                 <v-text-field label="开仓订单超时(s)" v-model.number="settingsStore.settings.open_order_fill_timeout_seconds" type="number" variant="outlined" density="compact" hide-details />
+              </v-col>
+            </v-row>
 
             <v-divider class="my-4"></v-divider>
 
@@ -144,13 +147,11 @@
       </v-window>
     </v-card-text>
 
-    <!-- 底部操作按钮区 -->
     <v-divider></v-divider>
     <div class="pa-4">
       <div v-if="tab === 'trade'">
         <v-btn block color="indigo" class="mb-3" @click="syncSlTp" :disabled="uiStore.isRunning">校准 SL/TP</v-btn>
         <v-btn block color="success" @click="startTrading" :loading="uiStore.isRunning" :disabled="uiStore.isRunning" size="large">▶ 开始开仓</v-btn>
-        <v-btn block color="error" @click="stopTrading" :disabled="!uiStore.isRunning" size="large" class="mt-3">⏹ 停止执行</v-btn>
       </div>
       <div v-if="tab === 'rebalance'">
         <v-btn block color="info" @click="generatePlan" :loading="rebalanceLoading" size="large">生成再平衡计划</v-btn>
@@ -181,14 +182,6 @@ const startTrading = async () => {
     await api.post('/api/trading/start', settingsStore.settings);
   } catch(e: any) {
     uiStore.logStore.addLog({ message: `启动交易失败: ${e.message}`, level: "error", timestamp: new Date().toLocaleTimeString() });
-  }
-};
-
-const stopTrading = async () => {
-  try {
-    await api.post('/api/trading/stop');
-  } catch(e: any) {
-    uiStore.logStore.addLog({ message: `发送停止指令失败: ${e.message}`, level: "error", timestamp: new Date().toLocaleTimeString() });
   }
 };
 
@@ -226,7 +219,6 @@ const generatePlan = async () => {
 const syncSlTp = async () => {
   if (!settingsStore.settings) return;
   uiStore.logStore.clearLogs();
-  uiStore.logStore.addLog({ message: "正在提交 SL/TP 校准任务...", level: 'info', timestamp: new Date().toLocaleTimeString() });
   try {
     await api.post('/api/trading/sync-sltp', settingsStore.settings);
   } catch(e: any) {
@@ -245,7 +237,7 @@ const syncSlTp = async () => {
 }
 .disabled-group {
   opacity: 0.6;
-  pointer-events: none; /* 阻止组内所有鼠标事件 */
+  pointer-events: none;
   transition: opacity 0.3s ease;
 }
 </style>
