@@ -5,7 +5,6 @@ from pathlib import Path
 import asyncio
 
 from .api import positions, trading, rebalance, settings
-from .core.exchange_manager import close_exchange
 from .core.websocket_manager import manager
 from .core.trading_service import trading_service
 
@@ -50,9 +49,3 @@ async def serve_vue_app(request: Request):
 @app.on_event("startup")
 async def startup_event():
     asyncio.create_task(trading_service.start_worker())
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    # 在生产环境中，可以根据需要决定是否关闭连接
-    # await close_exchange()
-    pass
