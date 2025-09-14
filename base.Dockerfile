@@ -4,15 +4,14 @@
 # 1. 从一个包含 Node.js 的轻量级镜像开始
 FROM node:20-alpine
 
-# 2. 安装 Python, pip, 和 venv 工具
-RUN apk add --no-cache python3 py3-pip python3-venv
+# 2. 安装 Python 和 pip。venv 模块通常已包含在 python3 包中。
+RUN apk add --no-cache python3 py3-pip
 
 # 3. 创建 Python 虚拟环境
 ENV VENV_PATH=/opt/venv
 RUN python3 -m venv $VENV_PATH
 
 # 4. 将虚拟环境的 bin 目录添加到 PATH 环境变量中
-#    这样后续的 RUN 命令会优先使用虚拟环境中的 python 和 pip
 ENV PATH="$VENV_PATH/bin:$PATH"
 
 # 5. 设置工作目录
