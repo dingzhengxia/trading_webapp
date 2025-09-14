@@ -6,7 +6,6 @@ from typing import List, Optional, Dict
 from ..models.schemas import Position
 from ..config.config import load_settings, STABLECOIN_PREFERENCE
 from ..config import i18n
-from .sl_tp_logic_async import _cancel_sl_tp_orders_async
 
 
 class RetriableOrderError(Exception): pass
@@ -118,6 +117,9 @@ async def fetch_positions_with_pnl_async(exchange: ccxt.binanceusdm, leverage: i
 
 
 async def close_position_async(exchange: ccxt.binanceusdm, full_symbol_to_close: str, ratio: float, async_logger):
+    # --- 核心修复：在函数内部进行导入 ---
+    from .sl_tp_logic_async import _cancel_sl_tp_orders_async
+    # ------------------------------------
     base_coin = full_symbol_to_close.split('/')[0]
     await async_logger(f"准备为 {full_symbol_to_close} 执行平仓（Maker限价单），比例 {ratio * 100:.1f}%...")
 
