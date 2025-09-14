@@ -10,39 +10,39 @@ from ..logic import exchange_logic_async as ex_async
 from ..logic import sl_tp_logic_async as sltp_async
 
 TRADE_TASK_QUEUE = Queue()
+# --- 核心修复：定义并发 worker 的数量 ---
+NUM_WORKERS = 5  # 您可以根据服务器性能和API限制调整这个数字，3-5 是一个比较安全的值
 
+
+# ------------------------------------
 
 class TradingService:
     def __init__(self):
         self.is_running = False
         self.stop_event = asyncio.Event()
-        self.worker_task = None
-        self.current_task_info = {}
+        self.worker_tasks = []  # 用于持有所有 worker 协程
 
     async def start_worker(self):
-        if self.worker_task is None or self.worker_task.done():
-            self.worker_task = asyncio.create_task(self._trade_task_worker())
-            print("Trading task worker has been started.")
+        """在应用启动时，启动一个并发 worker 池"""
+        if not self.worker_tasks:
+            self.worker_tasks = [
+                asyncio.create_task(self._trade_task_worker(i + 1))
+                for i in range(NUM_WORKERS)
+            ]
+            print(f"{NUM_WORKERS} trading task workers have been started.")
 
-    async def _trade_task_worker(self):
-        await log_message("交易任务处理器已启动，等待任务...", "info")
+    async def _trade_task_worker(self, worker_id: int):
+        await log_message(f"交易任务处理器 #{worker_id} 已启动，等待任务...", "info")
         while True:
             try:
                 task_type, data, config_dict = await TRADE_TASK_QUEUE.get()
 
                 if self.stop_event.is_set():
-                    await log_message(f"任务 '{self.current_task_info.get('name', task_type)}' 被用户取消，跳过执行。",
-                                      "warning")
+                    await log_message(f"[Worker #{worker_id}] 任务被用户取消，跳过执行。", "warning")
                     TRADE_TASK_QUEUE.task_done()
                     continue
 
-                if self.current_task_info.get('total', 0) > 0:
-                    self.current_task_info['current'] += 1
-                    await broadcast_progress(
-                        self.current_task_info['current'],
-                        self.current_task_info['total'],
-                        self.current_task_info['name']
-                    )
+                # 进度更新现在由分发器负责，worker 只执行
 
                 async with get_exchange_for_task() as exchange:
                     if task_type == 'SINGLE_ORDER':
@@ -71,11 +71,22 @@ class TradingService:
                         await sltp_async.set_tp_sl_for_position_async(exchange, position, config_dict,
                                                                       create_logger(position.symbol))
 
+                # 在任务完成后更新进度
+                if self.current_task_info.get('total', 0) > 0:
+                    self.current_task_info['current'] += 1
+                    await broadcast_progress(
+                        self.current_task_info['current'],
+                        self.current_task_info['total'],
+                        self.current_task_info['name']
+                    )
+
                 TRADE_TASK_QUEUE.task_done()
-                await asyncio.sleep(0.5)
+
+                # 速率限制：可以移除或减小，因为并发数已经受控
+                # await asyncio.sleep(0.1)
 
             except Exception as e:
-                await log_message(f"!!! Worker 任务发生严重错误: {e}", "error")
+                await log_message(f"!!! Worker #{worker_id} 任务发生严重错误: {e}", "error")
                 if not TRADE_TASK_QUEUE.empty():
                     TRADE_TASK_QUEUE.task_done()
 
