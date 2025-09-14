@@ -1,24 +1,28 @@
 #!/bin/bash
 
 # =================================================================
-# 自动化部署脚本 for Trading WebApp
+# 全自动部署脚本 for Trading WebApp (集成 Git)
 #
 # 功能:
-# 1. 停止并删除旧的容器。
-# 2. 使用最新的代码构建新的 Docker 镜像。
-# 3. 启动基于新镜像的新容器。
-# 4. 清理无用的 Docker 镜像。
+# 1. 从 Git 远程仓库拉取最新的代码。
+# 2. 停止并删除旧的 Docker 容器。
+# 3. 使用最新的代码构建新的 Docker 镜像。
+# 4. 启动基于新镜像的新容器。
+# 5. 清理无用的 Docker 镜像。
 #
 # 用法:
+# 确保服务器已配置好 SSH 免密登录 GitHub/Gitee (如果仓库是私有的)。
 # 将此脚本放在项目根目录，然后运行 ./deploy.sh
 # =================================================================
 
 # --- 配置 ---
-# 应用的名称，用于镜像名和容器名
 APP_NAME="trading-app"
 CONTAINER_NAME="my-trading-container"
+# Git 远程仓库名 (通常是 origin) 和分支名 (通常是 main 或 master)
+GIT_REMOTE="origin"
+GIT_BRANCH="master"
 
-# 使用颜色输出，方便阅读
+# --- 颜色定义 ---
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 RED='\033[0;31m'
@@ -26,8 +30,21 @@ NC='\033[0m' # No Color
 
 # --- 脚本开始 ---
 
-echo -e "${YELLOW}===== [STEP 1/5] Stopping and removing old container... =====${NC}"
-# 使用 "docker ps -q" 来检查容器是否存在，更健壮
+echo -e "${YELLOW}===== [STEP 1/5] Pulling latest code from Git... =====${NC}"
+
+# 拉取最新代码
+git pull $GIT_REMOTE $GIT_BRANCH
+
+# 检查 git pull 是否成功
+if [ $? -ne 0 ]; then
+    echo -e "${RED}!!!!! Git pull failed! Deployment aborted. !!!!!${NC}"
+    exit 1
+fi
+echo -e "${GREEN}Code is up to date.${NC}"
+echo ""
+
+
+echo -e "${YELLOW}===== [STEP 2/5] Stopping and removing old container... =====${NC}"
 if [ "$(sudo docker ps -q -f name=$CONTAINER_NAME)" ]; then
     sudo docker stop $CONTAINER_NAME
 fi
@@ -37,23 +54,17 @@ fi
 echo -e "${GREEN}Old container stopped and removed.${NC}"
 echo ""
 
-echo -e "${YELLOW}===== [STEP 2/5] Pulling latest code... (Optional, for Git users) =====${NC}"
-# 如果您使用 Git，取消下面这行的注释
-# git pull origin main
-echo -e "${GREEN}Code is up to date.${NC}"
-echo ""
 
 echo -e "${YELLOW}===== [STEP 3/5] Building new Docker image: $APP_NAME =====${NC}"
-# 强制使用 BuildKit 引擎，并构建镜像
 DOCKER_BUILDKIT=1 sudo docker build -t $APP_NAME .
 
-# 检查构建是否成功
 if [ $? -ne 0 ]; then
     echo -e "${RED}!!!!! Docker build failed! Deployment aborted. !!!!!${NC}"
     exit 1
 fi
 echo -e "${GREEN}Docker image built successfully.${NC}"
 echo ""
+
 
 echo -e "${YELLOW}===== [STEP 4/5] Starting new container: $CONTAINER_NAME =====${NC}"
 sudo docker run -d -p 8000:8000 --name $CONTAINER_NAME $APP_NAME
@@ -62,7 +73,6 @@ echo ""
 
 
 echo -e "${YELLOW}===== [STEP 5/5] Pruning old Docker images... =====${NC}"
-# 清理所有未被任何容器使用的 "悬空" 镜像 (dangling images)
 sudo docker image prune -f
 echo -e "${GREEN}Cleanup complete.${NC}"
 echo ""
