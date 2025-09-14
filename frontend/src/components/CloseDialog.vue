@@ -39,9 +39,11 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue';
 import { useUiStore } from '@/stores/uiStore';
+import { usePositionStore } from '@/stores/positionStore';
 import api from '@/services/api';
 
 const uiStore = useUiStore();
+const positionStore = usePositionStore();
 const closeRatio = ref(100);
 const isLoading = ref(false);
 
@@ -63,12 +65,35 @@ const executeClose = async () => {
   if (!target) return;
 
   isLoading.value = true;
-
-  // --- 核心修复：立即关闭弹窗 ---
   uiStore.showCloseDialog = false;
-  // --------------------------
 
   const ratio = closeRatio.value / 100;
+
+  if (target.type === 'single') {
+    if (Math.abs(ratio - 1.0) < 1e-9) { // 浮点数比较
+      positionStore.removePositions([target.position.full_symbol]);
+    } else {
+      positionStore.updatePositionContracts(target.position.full_symbol, ratio);
+    }
+  } else if (target.type === 'selected') {
+    const symbolsToClose = target.positions.map(p => p.full_symbol);
+    if (Math.abs(ratio - 1.0) < 1e-9) {
+      positionStore.removePositions(symbolsToClose);
+    } else {
+      symbolsToClose.forEach(s => positionStore.updatePositionContracts(s, ratio));
+    }
+  } else if (target.type === 'by_side') {
+    const positionsToClose = (target.side === 'long')
+      ? positionStore.longPositions
+      : (target.side === 'short' ? positionStore.shortPositions : positionStore.positions);
+
+    const symbolsToClose = positionsToClose.map(p => p.full_symbol);
+    if (Math.abs(ratio - 1.0) < 1e-9) {
+      positionStore.removePositions(symbolsToClose);
+    } else {
+      symbolsToClose.forEach(s => positionStore.updatePositionContracts(s, ratio));
+    }
+  }
 
   try {
     if (target.type === 'single') {
@@ -85,7 +110,7 @@ const executeClose = async () => {
     }
   } finally {
     isLoading.value = false;
-    closeRatio.value = 100; // 重置滑块
+    closeRatio.value = 100;
   }
 };
 

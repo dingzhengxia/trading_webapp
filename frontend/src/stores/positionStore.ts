@@ -6,7 +6,6 @@ import api from '@/services/api';
 export const usePositionStore = defineStore('position', () => {
   const positions = ref<Position[]>([]);
   const loading = ref(false);
-
   const selectedPositions = ref<string[]>([]);
 
   const longPositions = computed(() => positions.value.filter(p => p.side === 'long'));
@@ -18,6 +17,21 @@ export const usePositionStore = defineStore('position', () => {
 
   const longNotional = computed(() => longPositions.value.reduce((sum, p) => sum + p.notional, 0));
   const shortNotional = computed(() => shortPositions.value.reduce((sum, p) => sum + p.notional, 0));
+
+  function removePositions(fullSymbolsToRemove: string[]) {
+    const symbolsSet = new Set(fullSymbolsToRemove);
+    positions.value = positions.value.filter(p => !symbolsSet.has(p.full_symbol));
+    selectedPositions.value = selectedPositions.value.filter(s => !symbolsSet.has(s));
+  }
+
+  function updatePositionContracts(fullSymbol: string, ratioToClose: number) {
+    const position = positions.value.find(p => p.full_symbol === fullSymbol);
+    if (position) {
+      const remainingRatio = 1 - ratioToClose;
+      position.contracts *= remainingRatio;
+      position.notional *= remainingRatio;
+    }
+  }
 
   async function fetchPositions() {
     loading.value = true;
@@ -38,6 +52,8 @@ export const usePositionStore = defineStore('position', () => {
     longPnl, shortPnl, totalPnl,
     longNotional, shortNotional,
     selectedPositions,
-    fetchPositions
+    fetchPositions,
+    removePositions,
+    updatePositionContracts
   };
 });

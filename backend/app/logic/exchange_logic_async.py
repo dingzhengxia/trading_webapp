@@ -6,6 +6,7 @@ from typing import List, Optional, Dict
 from ..models.schemas import Position
 from ..config.config import load_settings, STABLECOIN_PREFERENCE
 from ..config import i18n
+from .sl_tp_logic_async import _cancel_sl_tp_orders_async
 
 
 class RetriableOrderError(Exception): pass
@@ -113,9 +114,7 @@ async def fetch_positions_with_pnl_async(exchange: ccxt.binanceusdm, leverage: i
         return final_positions
     except Exception as e:
         print(f"Error during fetch_positions_with_pnl_async: {e}")
-        # --- 核心修复：在捕获任何异常后，明确返回一个空列表 ---
         return []
-        # ----------------------------------------------------
 
 
 async def close_position_async(exchange: ccxt.binanceusdm, full_symbol_to_close: str, ratio: float, async_logger):
@@ -153,6 +152,10 @@ async def close_position_async(exchange: ccxt.binanceusdm, full_symbol_to_close:
             stop_event=asyncio.Event(),
             contracts_to_trade=amount_to_close_contracts
         )
+
+        if order_result and abs(ratio - 1.0) < 1e-9:
+            await async_logger(f"仓位已全平，开始清理 {full_symbol_to_close} 的SL/TP挂单...", "info")
+            await _cancel_sl_tp_orders_async(exchange, full_symbol_to_close, async_logger)
 
         return order_result is not None
 
