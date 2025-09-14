@@ -28,7 +28,7 @@
       <v-card-actions>
         <v-spacer></v-spacer>
         <v-btn color="blue-darken-1" variant="text" @click="uiStore.showCloseDialog = false">取消</v-btn>
-        <v-btn color="red-darken-1" variant="tonal" @click="executeClose" :disabled="closeRatio === 0">
+        <v-btn color="red-darken-1" variant="tonal" @click="executeClose" :disabled="closeRatio === 0" :loading="isLoading">
           确认平仓 {{ closeRatio }}%
         </v-btn>
       </v-card-actions>
@@ -40,10 +40,10 @@
 import { ref, computed } from 'vue';
 import { useUiStore } from '@/stores/uiStore';
 import api from '@/services/api';
-import type { Position } from '@/models/types';
 
 const uiStore = useUiStore();
 const closeRatio = ref(100);
+const isLoading = ref(false);
 
 const dialogTitle = computed(() => {
   const target = uiStore.closeTarget;
@@ -62,31 +62,35 @@ const executeClose = async () => {
   const target = uiStore.closeTarget;
   if (!target) return;
 
+  isLoading.value = true;
+
+  // --- 核心修复：立即关闭弹窗 ---
+  uiStore.showCloseDialog = false;
+  // --------------------------
+
   const ratio = closeRatio.value / 100;
 
-  if (target.type === 'single') {
-    const logMessage = `正在提交 ${target.position.full_symbol} 的平仓指令 (${closeRatio.value}%)...`;
-    await postWithLog('/api/positions/close', { full_symbol: target.position.full_symbol, ratio }, logMessage);
-  } else if (target.type === 'by_side') {
-    const sideText = dialogTitle.value;
-    const logMessage = `正在提交批量平仓 ${sideText} 的指令 (${closeRatio.value}%)...`;
-    await postWithLog('/api/positions/close-by-side', { side: target.side, ratio }, logMessage);
-  } else if (target.type === 'selected') {
-    const symbolsToClose = target.positions.map(p => p.full_symbol);
-    const logMessage = `正在提交批量平仓 ${symbolsToClose.length} 个选中仓位的指令...`;
-    await postWithLog('/api/positions/close-multiple', { full_symbols: symbolsToClose, ratio }, logMessage);
+  try {
+    if (target.type === 'single') {
+      const logMessage = `正在提交 ${target.position.full_symbol} 的平仓指令 (${closeRatio.value}%)...`;
+      await postWithLog('/api/positions/close', { full_symbol: target.position.full_symbol, ratio }, logMessage);
+    } else if (target.type === 'by_side') {
+      const sideText = dialogTitle.value;
+      const logMessage = `正在提交批量平仓 ${sideText} 的指令 (${closeRatio.value}%)...`;
+      await postWithLog('/api/positions/close-by-side', { side: target.side, ratio }, logMessage);
+    } else if (target.type === 'selected') {
+      const symbolsToClose = target.positions.map(p => p.full_symbol);
+      const logMessage = `正在提交批量平仓 ${symbolsToClose.length} 个选中仓位的指令...`;
+      await postWithLog('/api/positions/close-multiple', { full_symbols: symbolsToClose, ratio }, logMessage);
+    }
+  } finally {
+    isLoading.value = false;
+    closeRatio.value = 100; // 重置滑块
   }
-
-  uiStore.showCloseDialog = false;
-  closeRatio.value = 100;
 };
 
-// --- 核心修复：将 openLogAndPost 重命名并移除自动打开抽屉的逻辑 ---
 const postWithLog = async (url: string, data: any, logMessage: string) => {
   uiStore.logStore.addLog({ message: logMessage, level: 'info', timestamp: new Date().toLocaleTimeString() });
-  // if (!uiStore.showLogDrawer) {
-  //   uiStore.showLogDrawer = true; // <-- 移除这一段
-  // }
   try {
     await api.post(url, data);
   } catch(e: any) {

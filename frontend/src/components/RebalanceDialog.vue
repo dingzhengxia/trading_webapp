@@ -54,17 +54,14 @@ const close = () => {
 const applyList = () => {
   if (!uiStore.rebalancePlan || !settingsStore.settings) return;
 
-  // 从计划中提取所有目标币种（即最终应该持有的币种）
   const openSymbols = new Set(uiStore.rebalancePlan.positions_to_open.map(p => p.symbol));
 
-  // 找出那些需要减仓但不需要完全平仓的币种
   const symbolsToKeep = new Set(
     uiStore.rebalancePlan.positions_to_close
       .filter(p => p.close_ratio_perc < 100)
       .map(p => p.symbol)
   );
 
-  // 新的目标列表 = (将要新开/加仓的) + (将要减仓但保留的)
   const newShortList = new Set([...openSymbols, ...symbolsToKeep]);
 
   settingsStore.settings.short_coin_list = Array.from(newShortList).sort();
@@ -82,24 +79,26 @@ const executePlan = async () => {
 
   isExecuting.value = true;
 
-  const executionOrders = [];
+  // --- 核心修复：立即关闭弹窗 ---
+  // 1. 先关闭弹窗
+  uiStore.showRebalanceDialog = false;
+  // --------------------------
 
-  // 格式化平仓订单
+  // 2. 然后在后台发送请求和处理
+  const executionOrders = [];
   for (const item of uiStore.rebalancePlan.positions_to_close) {
     executionOrders.push({
       symbol: item.symbol,
       action: 'CLOSE',
-      side: 'buy', // 假设再平衡只针对空头
+      side: 'buy',
       close_ratio: item.close_ratio_perc / 100,
     });
   }
-
-  // 格式化开仓订单
   for (const item of uiStore.rebalancePlan.positions_to_open) {
     executionOrders.push({
       symbol: item.symbol,
       action: 'OPEN',
-      side: 'sell', // 假设再平衡只针对空头
+      side: 'sell',
       value_to_trade: item.open_value,
     });
   }
@@ -112,7 +111,6 @@ const executePlan = async () => {
     uiStore.logStore.addLog({ message: `提交执行计划失败: ${errorMsg}`, level: 'error', timestamp: new Date().toLocaleTimeString() });
   } finally {
     isExecuting.value = false;
-    uiStore.showRebalanceDialog = false;
   }
 };
 </script>
