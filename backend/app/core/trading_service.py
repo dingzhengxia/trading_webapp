@@ -36,13 +36,13 @@ class TradingService:
                     TRADE_TASK_QUEUE.task_done()
                     continue
 
-                # 更新当前进度
-                self.current_task_info['current'] += 1
-                await broadcast_progress(
-                    self.current_task_info['current'],
-                    self.current_task_info['total'],
-                    self.current_task_info['name']
-                )
+                if self.current_task_info.get('total', 0) > 0:
+                    self.current_task_info['current'] += 1
+                    await broadcast_progress(
+                        self.current_task_info['current'],
+                        self.current_task_info['total'],
+                        self.current_task_info['name']
+                    )
 
                 async with get_exchange_for_task() as exchange:
                     if task_type == 'SINGLE_ORDER':
@@ -79,62 +79,68 @@ class TradingService:
                 if not TRADE_TASK_QUEUE.empty():
                     TRADE_TASK_QUEUE.task_done()
 
-    async def _start_new_batch(self, task_name: str, total_tasks: int):
-        self.is_running = True
-        self.stop_event.clear()
-        self.current_task_info = {"name": task_name, "total": total_tasks, "current": 0}
-        await broadcast_progress(0, total_tasks, task_name)
-
-    async def start_trading(self, plan_request: TradePlanRequest):
+    async def _dispatch_tasks(self, task_name: str, tasks: list, task_type: str, config: dict):
         if self.is_running:
             await log_message("一个任务已在运行中。", "warning")
             return {"message": "任务已在运行"}
-        asyncio.create_task(self._queue_trade_plan(plan_request))
-        return {"message": "交易任务已加入队列"}
 
-    async def stop_trading(self):
-        if not self.is_running:
-            return {"message": "没有正在运行的任务"}
-        await log_message("...正在发送全局停止信号...", "warning")
+        if not tasks:
+            await log_message(f"{task_name}任务列表为空，无需执行。", "info")
+            return {"message": "任务列表为空"}
 
-        while not TRADE_TASK_QUEUE.empty():
-            TRADE_TASK_QUEUE.get_nowait()
-            TRADE_TASK_QUEUE.task_done()
+        self.is_running = True
+        self.stop_event.clear()
 
-        self.stop_event.set()
-        await update_status("正在停止当前任务...", is_running=False)  # 立即更新状态并隐藏进度条
-        self.is_running = False
-        return {"message": "停止信号已发送，队列已清空"}
+        total_tasks = len(tasks)
+        self.current_task_info = {"name": task_name, "total": total_tasks, "current": 0}
+        await broadcast_progress(0, total_tasks, task_name)
+        await log_message(f"===== {total_tasks} 个{task_name}任务已加入队列 =====", "info")
 
-    async def _queue_trade_plan(self, config: TradePlanRequest):
-        config_dict = config.model_dump()
+        for task_data in tasks:
+            await TRADE_TASK_QUEUE.put((task_type, task_data, config))
+
+        asyncio.create_task(self._wait_for_queue_completion(f"{task_name}任务"))
+        return {"message": f"{task_name}任务已加入队列"}
+
+    async def _wait_for_queue_completion(self, task_name_for_log: str):
+        await TRADE_TASK_QUEUE.join()
+
+        if not self.stop_event.is_set():
+            await log_message(f"===== 所有{task_name_for_log}已处理完毕 =====", "success")
+        else:
+            await log_message(f"===== {task_name_for_log}队列已停止 =====", "warning")
+
+        # 只有在队列完全结束后才重置状态
+        if TRADE_TASK_QUEUE.empty():
+            self.is_running = False
+            await update_status("准备就绪", is_running=False)
+            await manager.broadcast({"type": "refresh_positions"})
+
+    async def start_trading(self, plan_request: TradePlanRequest):
+        config_dict = plan_request.model_dump()
         long_plan, short_plan = plan_calculator.calculate_trade_plan(config_dict,
                                                                      config_dict.get('long_custom_weights', {}))
 
         all_plans = []
-        if config.enable_long_trades and long_plan:
+        if plan_request.enable_long_trades and long_plan:
             all_plans.extend([{'coin': c, 'value': v, 'side': i18n.ORDER_SIDE_BUY} for c, v in long_plan.items()])
-        if config.enable_short_trades and short_plan:
+        if plan_request.enable_short_trades and short_plan:
             all_plans.extend([{'coin': c, 'value': v, 'side': i18n.ORDER_SIDE_SELL} for c, v in short_plan.items()])
 
-        if not all_plans:
-            await log_message("未生成任何有效交易计划。", "info")
-            return
+        return await self._dispatch_tasks("开仓", all_plans, 'SINGLE_ORDER', config_dict)
 
-        await self._start_new_batch("开仓", len(all_plans))
-        await log_message(f"===== {len(all_plans)} 个开仓任务已加入队列 =====", "info")
-        for plan in all_plans:
-            await TRADE_TASK_QUEUE.put(('SINGLE_ORDER', plan, config_dict))
+    async def stop_trading(self):
+        if not self.is_running: return {"message": "没有正在运行的任务"}
+        await log_message("...正在发送全局停止信号...", "warning")
 
-        await TRADE_TASK_QUEUE.join()
-        if not self.stop_event.is_set():
-            await log_message("===== 所有开仓任务已处理完毕 =====", "success")
-        else:
-            await log_message("===== 任务队列已停止 =====", "warning")
+        while not TRADE_TASK_QUEUE.empty():
+            TRADE_TASK_QUEUE.get_nowait();
+            TRADE_TASK_QUEUE.task_done()
 
-        await update_status("准备就绪", is_running=False)
+        self.stop_event.set()
+        await update_status("正在停止当前任务...", is_running=False)
         self.is_running = False
-        await manager.broadcast({"type": "refresh_positions"})
+        return {"message": "停止信号已发送，队列已清空"}
 
     async def _run_single_order(self, exchange, plan: dict, config: dict):
         async def async_logger(message: str, level: str = 'normal'):
@@ -147,83 +153,70 @@ class TradingService:
             return False
 
     async def sync_all_sltp(self, config_request: dict):
-        if self.is_running:
-            await log_message("一个任务已在运行中。", "warning")
-            return {"message": "任务已在运行"}
-        asyncio.create_task(self._queue_sltp_sync(config_request))
-        return {"message": "SL/TP校准任务已加入队列"}
-
-    async def _queue_sltp_sync(self, config: dict):
         try:
             async with get_exchange_for_task() as exchange:
-                positions = await ex_async.fetch_positions_with_pnl_async(exchange, config.get('leverage', 1))
-                if not positions:
-                    await log_message("未找到任何持仓，无需校准。", "info")
-                else:
-                    await self._start_new_batch("校准SL/TP", len(positions))
-                    await log_message(f"===== {len(positions)} 个SL/TP校准任务已加入队列 =====", "info")
-                    for pos in positions:
-                        await TRADE_TASK_QUEUE.put(('SYNC_SLTP', pos, config))
-
-            await TRADE_TASK_QUEUE.join()
-            if not self.stop_event.is_set():
-                await log_message("===== 所有SL/TP校准任务已处理完毕 =====", "success")
-            else:
-                await log_message("===== 任务队列已停止 =====", "warning")
+                positions = await ex_async.fetch_positions_with_pnl_async(exchange, config_request.get('leverage', 1))
         except Exception as e:
-            await log_message(f"!!! 准备SL/TP校准时发生严重错误: {e}", "error")
-        finally:
-            await update_status("准备就绪", is_running=False)
-            self.is_running = False
-            await manager.broadcast({"type": "refresh_positions"})
+            await log_message(f"!!! 准备SL/TP校准时获取持仓失败: {e}", "error")
+            return {"message": "获取持仓失败"}
+
+        return await self._dispatch_tasks("校准SL/TP", positions, 'SYNC_SLTP', config_request)
 
     async def execute_rebalance_plan(self, plan: ExecutionPlanRequest):
         if self.is_running:
             await log_message("一个任务已在运行中。", "warning")
             return {"message": "任务已在运行"}
-        asyncio.create_task(self._queue_rebalance_plan(plan))
+
+        self.is_running = True
+        self.stop_event.clear()
+
+        asyncio.create_task(self._execute_rebalance_plan_async(plan))
         return {"message": "再平衡任务已加入队列"}
 
-    async def _queue_rebalance_plan(self, plan: ExecutionPlanRequest):
+    async def _execute_rebalance_plan_async(self, plan: ExecutionPlanRequest):
         config_dict = load_settings()
         close_orders = [o for o in plan.orders if o.action == 'CLOSE']
         open_orders = [o for o in plan.orders if o.action == 'OPEN']
-        total_tasks = len(close_orders) + len(open_orders)
-
-        if total_tasks == 0:
-            await log_message("再平衡计划为空，无需执行。")
-            return
-
-        await self._start_new_batch("再平衡", total_tasks)
-        await log_message(f"===== {total_tasks} 个再平衡任务已加入队列 =====", "info")
 
         try:
-            async with get_exchange_for_task() as exchange:
-                all_positions = await ex_async.fetch_positions_with_pnl_async(exchange, config_dict.get('leverage', 1))
-                positions_map = {p.symbol: p.full_symbol for p in all_positions}
+            # Step 1: Dispatch and wait for close orders
+            if close_orders:
+                close_tasks_data = []
+                async with get_exchange_for_task() as exchange:
+                    all_positions = await ex_async.fetch_positions_with_pnl_async(exchange,
+                                                                                  config_dict.get('leverage', 1))
+                    positions_map = {p.symbol: p.full_symbol for p in all_positions}
+                    for o in close_orders:
+                        full_symbol = positions_map.get(o.symbol)
+                        if full_symbol:
+                            close_tasks_data.append((full_symbol, o.close_ratio))
+                        else:
+                            await log_message(f"  > [Warning] 无法为 {o.symbol} 找到 full_symbol，跳过平仓。")
 
-                for o in close_orders:
-                    full_symbol = positions_map.get(o.symbol)
-                    if full_symbol:
-                        await TRADE_TASK_QUEUE.put(('CLOSE_ORDER', (full_symbol, o.close_ratio), config_dict))
-                    else:
-                        await log_message(f"  > [Warning] 无法为 {o.symbol} 找到 full_symbol，跳过平仓。")
+                await self._dispatch_tasks("再平衡-平仓", close_tasks_data, 'CLOSE_ORDER', config_dict)
+                await TRADE_TASK_QUEUE.join()  # Wait for close tasks to complete
 
-            for o in open_orders:
-                plan_item = {'coin': o.symbol, 'value': o.value_to_trade, 'side': o.side}
-                await TRADE_TASK_QUEUE.put(('SINGLE_ORDER', plan_item, config_dict))
+            if self.stop_event.is_set():
+                await log_message("用户已停止，不再执行开仓任务。", "warning")
+                raise InterruptedError("Operation stopped by user.")
 
-            await TRADE_TASK_QUEUE.join()
+            # Step 2: Dispatch and wait for open orders
+            if open_orders:
+                open_tasks_data = [{'coin': o.symbol, 'value': o.value_to_trade, 'side': o.side} for o in open_orders]
+                await self._dispatch_tasks("再平衡-开仓", open_tasks_data, 'SINGLE_ORDER', config_dict)
+                await TRADE_TASK_QUEUE.join()  # Wait for open tasks to complete
+
             if not self.stop_event.is_set():
-                await log_message("===== 所有再平衡任务已处理完毕 =====", "success")
-            else:
-                await log_message("===== 任务队列已停止 =====", "warning")
+                await log_message("===== 再平衡计划执行完毕 =====", "success")
+
         except Exception as e:
-            await log_message(f"!!! 准备再平衡时发生严重错误: {e}", "error")
+            await log_message(f"!!! 再平衡执行过程中发生错误: {e}", "error")
         finally:
-            await update_status("准备就绪", is_running=False)
-            self.is_running = False
-            await manager.broadcast({"type": "refresh_positions"})
+            # Final state reset is handled by _wait_for_queue_completion
+            if TRADE_TASK_QUEUE.empty():
+                self.is_running = False
+                await update_status("准备就绪", is_running=False)
+                await manager.broadcast({"type": "refresh_positions"})
 
 
 trading_service = TradingService()
