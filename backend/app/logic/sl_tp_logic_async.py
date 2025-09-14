@@ -1,13 +1,11 @@
-# backend/app/logic/sl_tp_logic_async.py (最终修复版)
 import asyncio
 import math
 import ccxt.async_support as ccxt
+from typing import List  # <-- 核心修复：导入 List 类型
 from ..config import i18n
 from ..models.schemas import Position
+from .exchange_logic_async import resolve_full_symbol
 
-
-# --- 核心修复：移除顶层的循环导入 ---
-# from .exchange_logic_async import resolve_full_symbol
 
 async def _cancel_sl_tp_orders_async(exchange: ccxt.binanceusdm, symbol: str, async_logger):
     """异步清理指定交易对的所有止盈止损挂单"""
@@ -39,10 +37,6 @@ async def set_tp_sl_for_position_async(exchange: ccxt.binanceusdm, position: Pos
     """
     严格按照原始逻辑，为单个仓位异步设置止盈止损。
     """
-    # --- 核心修复：在函数内部进行导入 ---
-    from .exchange_logic_async import resolve_full_symbol
-    # ------------------------------------
-
     full_symbol = resolve_full_symbol(exchange, position.symbol)
     if not full_symbol:
         await async_logger(f"无法为 {position.symbol} 找到交易对，跳过SL/TP设置。", "warning")
