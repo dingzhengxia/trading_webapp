@@ -18,7 +18,6 @@ app.add_middleware(
 
 @app.on_event("startup")
 async def startup_event():
-    """应用启动时，启动交易任务 worker"""
     asyncio.create_task(trading_service.start_worker())
 
 app.include_router(settings.router)

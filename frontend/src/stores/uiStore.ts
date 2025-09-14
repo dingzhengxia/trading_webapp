@@ -23,6 +23,13 @@ export const useUiStore = defineStore('ui', () => {
 
   const showWeightDialog = ref(false);
 
+  const progress = ref({
+    current: 0,
+    total: 0,
+    task_name: '',
+    show: false
+  });
+
   const statusColor = computed(() => {
     if (isRunning.value) return 'warning';
     if (statusMessage.value === '已断开') return 'error';
@@ -34,20 +41,21 @@ export const useUiStore = defineStore('ui', () => {
     if (running !== undefined) {
       isRunning.value = running;
     }
+    if (running === false) {
+      progress.value.show = false;
+    }
   }
 
-  function openLogDrawer() {
-    showLogDrawer.value = true;
+  function updateProgress(data: { current: number; total: number; task_name: string }) {
+    progress.value.current = data.current;
+    progress.value.total = data.total;
+    progress.value.task_name = data.task_name;
+    progress.value.show = true;
   }
 
-  function closeLogDrawer() {
-    showLogDrawer.value = false;
-  }
-
-  function toggleLogDrawer() {
-    showLogDrawer.value = !showLogDrawer.value;
-  }
-
+  function openLogDrawer() { showLogDrawer.value = true; }
+  function closeLogDrawer() { showLogDrawer.value = false; }
+  function toggleLogDrawer() { showLogDrawer.value = !showLogDrawer.value; }
   function openCloseDialog(target: CloseTarget) {
     closeTarget.value = target;
     showCloseDialog.value = true;
@@ -56,7 +64,8 @@ export const useUiStore = defineStore('ui', () => {
   return {
     statusMessage, isRunning, showLogDrawer, showRebalanceDialog,
     statusColor, logStore, rebalancePlan, showCloseDialog, closeTarget,
-    showWeightDialog,
-    setStatus, toggleLogDrawer, openCloseDialog, openLogDrawer, closeLogDrawer
+    showWeightDialog, progress,
+    setStatus, toggleLogDrawer, openCloseDialog, openLogDrawer, closeLogDrawer,
+    updateProgress
   };
 });

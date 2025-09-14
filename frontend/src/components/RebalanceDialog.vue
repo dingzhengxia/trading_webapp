@@ -52,7 +52,7 @@ const executePlan = async () => {
   // 格式化平仓订单
   for (const item of uiStore.rebalancePlan.positions_to_close) {
     executionOrders.push({
-      symbol: item.symbol, // 后端服务层会处理 symbol 到 full_symbol 的转换
+      symbol: item.symbol,
       action: 'CLOSE',
       side: 'buy', // 假设再平衡只针对空头
       close_ratio: item.close_ratio_perc / 100,
