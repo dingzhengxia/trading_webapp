@@ -147,6 +147,7 @@
       </v-window>
     </v-card-text>
 
+    <!-- 底部操作按钮区 -->
     <v-divider></v-divider>
     <div class="pa-4">
       <div v-if="tab === 'trade'">
@@ -174,14 +175,27 @@ const rebalanceLoading = ref(false);
 
 const startTrading = async () => {
   if (!settingsStore.settings) {
-    uiStore.logStore.addLog({ message: "配置尚未加载，无法开始交易。", level: "error", timestamp: new Date().toLocaleTimeString() });
+    uiStore.logStore.addLog({ message: "配置尚未加载。", level: "error", timestamp: new Date().toLocaleTimeString() });
     return;
   }
+
+  if (uiStore.isRunning) {
+    uiStore.logStore.addLog({ message: "任务已在运行中，请勿重复点击。", level: "warning", timestamp: new Date().toLocaleTimeString() });
+    return;
+  }
+  uiStore.setStatus('正在提交开仓任务...', true);
+
   uiStore.logStore.clearLogs();
+
   try {
-    await api.post('/api/trading/start', settingsStore.settings);
+    const response = await api.post('/api/trading/start', settingsStore.settings);
+    if (response.data.message !== "开仓任务已启动") {
+        uiStore.logStore.addLog({ message: `后端响应: ${response.data.message}`, level: 'warning', timestamp: new Date().toLocaleTimeString() });
+        uiStore.setStatus('准备就绪', false);
+    }
   } catch(e: any) {
     uiStore.logStore.addLog({ message: `启动交易失败: ${e.message}`, level: "error", timestamp: new Date().toLocaleTimeString() });
+    uiStore.setStatus('提交失败', false);
   }
 };
 

@@ -205,21 +205,18 @@ class TradingService:
             return False
 
     async def sync_all_sltp(self, config_request: dict):
+        return await self._run_batch_job("校准SL/TP", self._sync_sltp_job, config_request)
+
+    async def _sync_sltp_job(self, config_request: dict):
         try:
             async with get_exchange_for_task() as exchange:
                 positions = await ex_async.fetch_positions_with_pnl_async(exchange, config_request.get('leverage', 1))
+                active_symbols = [p.full_symbol for p in positions]
+                await sltp_async.cleanup_orphan_sltp_orders_async(exchange, active_symbols,
+                                                                  lambda msg, level='normal': log_message(msg, level))
         except Exception as e:
             await log_message(f"!!! 获取持仓失败: {e}", "error")
-            return {"message": "获取持仓失败"}
-
-        return await self._run_batch_job("校准SL/TP", self._sync_sltp_job, positions, config_request)
-
-    async def _sync_sltp_job(self, positions, config_request):
-        # 在分发任务前，先进行全局清理
-        async with get_exchange_for_task() as exchange:
-            active_symbols = [p.full_symbol for p in positions]
-            await sltp_async.cleanup_orphan_sltp_orders_async(exchange, active_symbols,
-                                                              lambda msg, level='normal': log_message(msg, level))
+            return
         await self._dispatch_and_wait("校准SL/TP", positions, 'SYNC_SLTP', config_request)
 
     async def execute_rebalance_plan(self, plan: ExecutionPlanRequest):
