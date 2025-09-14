@@ -5,9 +5,9 @@ import ccxt.async_support as ccxt
 
 from ..models.schemas import Position, ClosePositionRequest, CloseBySideRequest, CloseMultipleRequest
 from ..core.exchange_manager import get_exchange_dependency
-from ..logic.exchange_logic_async import fetch_positions_with_pnl_async, close_position_async
-from ..core.websocket_manager import log_message, manager
+from ..logic.exchange_logic_async import fetch_positions_with_pnl_async
 from ..config.config import load_settings
+from ..core.trading_service import trading_service
 
 router = APIRouter(prefix="/api/positions", tags=["Positions"])
 
@@ -23,16 +23,10 @@ async def get_all_positions(exchange: ccxt.binanceusdm = Depends(get_exchange_de
 
 
 @router.post("/close")
-async def close_single_position(
-        request: ClosePositionRequest,
-        exchange: ccxt.binanceusdm = Depends(get_exchange_dependency)
-):
-    try:
-        await close_position_async(exchange, request.full_symbol, request.ratio, log_message)
-        asyncio.create_task(manager.broadcast({"type": "refresh_positions"}))
-        return {"message": f"Close order for {request.full_symbol} submitted."}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+async def close_single_position(request: ClosePositionRequest):
+    config = load_settings()
+    tasks = [(request.full_symbol, request.ratio)]
+    return await trading_service._dispatch_tasks("平仓", tasks, 'CLOSE_ORDER', config)
 
 
 @router.post("/close-by-side")
@@ -40,9 +34,9 @@ async def close_positions_by_side(
         request: CloseBySideRequest,
         exchange: ccxt.binanceusdm = Depends(get_exchange_dependency)
 ):
+    config = load_settings()
     try:
-        settings = load_settings()
-        all_positions = await fetch_positions_with_pnl_async(exchange, settings.get('leverage', 1))
+        all_positions = await fetch_positions_with_pnl_async(exchange, config.get('leverage', 1))
 
         symbols_to_close = []
         if request.side == 'all':
@@ -50,36 +44,14 @@ async def close_positions_by_side(
         else:
             symbols_to_close = [p.full_symbol for p in all_positions if p.side == request.side]
 
-        if not symbols_to_close:
-            await log_message(f"未找到可平仓的 {request.side} 仓位", "info")
-            return {"message": "No positions to close."}
-
-        tasks = [close_position_async(exchange, full_symbol, request.ratio, log_message) for full_symbol in
-                 symbols_to_close]
-        await asyncio.gather(*tasks)
-
-        asyncio.create_task(manager.broadcast({"type": "refresh_positions"}))
-
-        return {"message": f"Submitted close orders for {len(symbols_to_close)} positions."}
+        tasks = [(full_symbol, request.ratio) for full_symbol in symbols_to_close]
+        return await trading_service._dispatch_tasks(f"批量平仓-{request.side}", tasks, 'CLOSE_ORDER', config)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/close-multiple")
-async def close_multiple_positions(
-        request: CloseMultipleRequest,
-        exchange: ccxt.binanceusdm = Depends(get_exchange_dependency)
-):
-    try:
-        if not request.full_symbols:
-            return {"message": "No positions selected to close."}
-
-        tasks = [close_position_async(exchange, full_symbol, request.ratio, log_message) for full_symbol in
-                 request.full_symbols]
-        await asyncio.gather(*tasks)
-
-        asyncio.create_task(manager.broadcast({"type": "refresh_positions"}))
-
-        return {"message": f"Submitted close orders for {len(request.full_symbols)} selected positions."}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+async def close_multiple_positions(request: CloseMultipleRequest):
+    config = load_settings()
+    tasks = [(full_symbol, request.ratio) for full_symbol in request.full_symbols]
+    return await trading_service._dispatch_tasks("平掉选中", tasks, 'CLOSE_ORDER', config)
