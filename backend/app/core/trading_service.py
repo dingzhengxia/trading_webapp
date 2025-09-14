@@ -147,6 +147,12 @@ class TradingService:
         await log_message(f"===== 开始执行再平衡计划 (平仓: {len(close_orders)}, 开仓: {len(open_orders)}) =====",
                           "info")
 
+        def create_rebalance_logger(symbol):
+            async def logger(message, level='normal'):
+                await log_message(f"  > [{symbol}] {message}", level)
+
+            return logger
+
         try:
             async with get_exchange_for_task() as exchange:
                 if close_orders:
@@ -161,9 +167,12 @@ class TradingService:
                         full_symbol = positions_map.get(o.symbol)
                         if full_symbol:
                             close_tasks.append(
-                                ex_async.close_position_async(exchange, full_symbol, o.close_ratio,
-                                                              lambda msg, level='normal': log_message(
-                                                                  f"  > [{o.symbol}] {msg}", level))
+                                ex_async.close_position_async(
+                                    exchange,
+                                    full_symbol,
+                                    o.close_ratio,
+                                    create_rebalance_logger(o.symbol)
+                                )
                             )
                         else:
                             await log_message(f"  > [Warning] 无法为 {o.symbol} 找到对应的 full_symbol，跳过平仓。")
