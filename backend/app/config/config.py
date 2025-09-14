@@ -2,18 +2,17 @@ import json
 import os
 from pathlib import Path
 
-# --- 核心修复：统一路径解析逻辑 ---
-# 在 Docker 中, WORKDIR 是 /app/backend, __file__ 会是 /app/backend/app/config/config.py
-# 在本地, __file__ 是 .../trading_webapp/backend/app/config/config.py
-# 无论哪种情况, 向上找三级目录都能到达 backend/ 的根目录
-_BACKEND_ROOT = Path(__file__).resolve().parent.parent.parent
-
+# --- 核心修复：使用绝对路径 ---
+# 检查是否在 Docker 容器中
 if os.environ.get("IS_DOCKER"):
-    # 在 Docker 容器中, 配置文件与 backend 代码在同一顶级目录 /app/backend 下
-    _CONFIG_BASE_DIR = _BACKEND_ROOT
+    # 在 Docker 容器内，我们确切地知道配置文件就在 /app/backend/ 目录下
+    _CONFIG_BASE_DIR = Path('/app/backend')
 else:
-    # 在本地开发时, 您的配置文件也位于 backend 目录内部
-    _CONFIG_BASE_DIR = _BACKEND_ROOT
+    # 在本地开发时，我们假设配置文件与 backend 文件夹同级（在项目根目录）
+    # Path(__file__) -> .../backend/app/config/config.py
+    # .parent.parent.parent -> .../backend/
+    # .parent -> .../trading_webapp/ (项目根目录)
+    _CONFIG_BASE_DIR = Path(__file__).resolve().parent.parent.parent.parent
 
 USER_SETTINGS_FILE = _CONFIG_BASE_DIR / 'user_settings.json'
 COIN_LISTS_FILE = _CONFIG_BASE_DIR / 'coin_lists.json'
@@ -85,12 +84,10 @@ def load_settings():
     try:
         with open(USER_SETTINGS_FILE, 'r') as f:
             user_settings = json.load(f)
-            # 只用 user_settings 中存在的、且 DEFAULT_CONFIG 也存在的键来更新
             config.update({k: user_settings[k] for k in DEFAULT_CONFIG if k in user_settings})
     except (FileNotFoundError, json.JSONDecodeError) as e:
         print(f"警告: 无法加载或解析 {USER_SETTINGS_FILE} ({e})，将使用默认配置。")
 
-    # 优先使用环境变量中的API密钥 (用于生产环境)
     config['api_key'] = os.environ.get('BINANCE_API_KEY', config.get('api_key', ''))
     config['api_secret'] = os.environ.get('BINANCE_API_SECRET', config.get('api_secret', ''))
     return config
@@ -100,7 +97,6 @@ def save_settings(current_config):
     """保存当前配置到 user_settings.json"""
     try:
         with open(USER_SETTINGS_FILE, 'w') as f:
-            # 只保存 DEFAULT_CONFIG 中定义的键，避免写入未知字段
             settings_to_save = {key: current_config.get(key) for key in DEFAULT_CONFIG}
             json.dump(settings_to_save, f, indent=4, ensure_ascii=False)
     except Exception as e:
