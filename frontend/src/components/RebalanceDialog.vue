@@ -27,7 +27,10 @@
       </v-card-text>
       <v-card-actions>
         <v-spacer></v-spacer>
-        <v-btn color="blue-darken-1" variant="text" @click="uiStore.showRebalanceDialog = false">取消</v-btn>
+        <v-btn color="blue-darken-1" variant="text" @click="close">取消</v-btn>
+
+        <v-btn color="primary" variant="text" @click="applyList">应用列表</v-btn>
+
         <v-btn color="red-darken-1" variant="tonal" @click="executePlan" :loading="isExecuting">确认执行</v-btn>
       </v-card-actions>
     </v-card>
@@ -37,10 +40,42 @@
 <script setup lang="ts">
 import { ref } from 'vue';
 import { useUiStore } from '@/stores/uiStore';
+import { useSettingsStore } from '@/stores/settingsStore';
 import api from '@/services/api';
 
 const uiStore = useUiStore();
+const settingsStore = useSettingsStore();
 const isExecuting = ref(false);
+
+const close = () => {
+  uiStore.showRebalanceDialog = false;
+};
+
+const applyList = () => {
+  if (!uiStore.rebalancePlan || !settingsStore.settings) return;
+
+  // 从计划中提取所有目标币种（即最终应该持有的币种）
+  const openSymbols = new Set(uiStore.rebalancePlan.positions_to_open.map(p => p.symbol));
+
+  // 找出那些需要减仓但不需要完全平仓的币种
+  const symbolsToKeep = new Set(
+    uiStore.rebalancePlan.positions_to_close
+      .filter(p => p.close_ratio_perc < 100)
+      .map(p => p.symbol)
+  );
+
+  // 新的目标列表 = (将要新开/加仓的) + (将要减仓但保留的)
+  const newShortList = new Set([...openSymbols, ...symbolsToKeep]);
+
+  settingsStore.settings.short_coin_list = Array.from(newShortList).sort();
+
+  uiStore.logStore.addLog({
+    message: `空头币种列表已更新为 ${newShortList.size} 个币种并自动保存。`,
+    level: 'success',
+    timestamp: new Date().toLocaleTimeString()
+  });
+  close();
+};
 
 const executePlan = async () => {
   if (!uiStore.rebalancePlan) return;

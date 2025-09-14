@@ -43,13 +43,14 @@ export interface UserSettings {
   enable_long_trades: boolean;
   enable_short_trades: boolean;
 
-  // SL/TP
+  // --- 核心修复：添加缺失的 SL/TP 字段 ---
   enable_long_sl_tp: boolean;
   long_stop_loss_percentage: number;
   long_take_profit_percentage: number;
   enable_short_sl_tp: boolean;
   short_stop_loss_percentage: number;
   short_take_profit_percentage: number;
+  // ------------------------------------
 
   // 高级交易参数
   open_maker_retries: number;
