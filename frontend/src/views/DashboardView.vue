@@ -1,3 +1,4 @@
+<!-- frontend/src/views/DashboardView.vue -->
 <template>
   <div>
     <!-- 第一行：盈亏统计 -->

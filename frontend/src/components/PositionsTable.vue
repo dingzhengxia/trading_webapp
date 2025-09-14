@@ -1,28 +1,47 @@
 <template>
   <v-card>
-    <v-card-title class="d-flex align-center py-2">
-      <span class="text-h6 mr-4">{{ title }}</span>
-      <v-chip :color="side === 'long' ? 'success' : 'error'" label variant="flat" size="small">
+    <!-- 顶部标题栏，负责显示信息 -->
+    <v-toolbar density="compact" flat>
+      <v-toolbar-title class="text-h6">{{ title }}</v-toolbar-title>
+
+      <v-spacer></v-spacer>
+
+      <v-chip :color="side === 'long' ? 'success' : 'error'" label variant="flat" size="small" class="mr-2">
         <span class="font-weight-bold">
           总价值: ${{ totalNotional.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) }}
         </span>
       </v-chip>
-      <v-spacer></v-spacer>
-
-      <!-- 核心升级：智能批量平仓按钮 -->
-      <v-btn
-        :color="selectedInThisTable.length > 0 ? 'warning' : 'blue-grey'"
-        variant="tonal"
-        size="small"
-        class="mr-2"
-        @click="handleBulkClose"
-      >
-        <v-icon left>{{ selectedInThisTable.length > 0 ? 'mdi-close-box-multiple' : 'mdi-close-circle-multiple' }}</v-icon>
-        {{ selectedInThisTable.length > 0 ? `平掉选中 (${selectedInThisTable.length})` : '批量平仓' }}
-      </v-btn>
 
       <v-btn icon="mdi-refresh" variant="text" size="small" @click="emit('refresh')" :loading="loading"></v-btn>
-    </v-card-title>
+    </v-toolbar>
+
+    <!-- 第二行操作栏 -->
+    <v-toolbar density="compact" flat color="transparent" class="px-2">
+       <!-- 智能的“平掉选中”按钮 -->
+      <v-btn
+        color="warning"
+        variant="tonal"
+        size="small"
+        @click="handleCloseSelected"
+        :disabled="selectedInThisTable.length === 0"
+        prepend-icon="mdi-close-box-multiple"
+      >
+        平掉选中 ({{ selectedInThisTable.length }})
+      </v-btn>
+
+      <v-spacer></v-spacer>
+
+      <!-- 固定的“批量平仓”按钮 -->
+      <v-btn
+        color="blue-grey"
+        variant="tonal"
+        size="small"
+        @click="handleCloseAll"
+        prepend-icon="mdi-close-circle-multiple"
+      >
+        批量平仓 (全部)
+      </v-btn>
+    </v-toolbar>
 
     <v-divider></v-divider>
 
@@ -35,7 +54,7 @@
       density="compact"
       class="text-caption"
       fixed-header
-      height="calc(50vh - 100px)"
+      height="calc(50vh - 120px)"
       no-data-text="无持仓数据"
     >
       <template v-slot:item.notional="{ item }">${{ item.notional.toFixed(2) }}</template>
@@ -92,14 +111,16 @@ const selectedInThisTable = computed(() => {
   return positionStore.selectedPositions
     .filter(fullSymbol => currentTableSymbols.has(fullSymbol))
     .map(fullSymbol => props.positions.find(p => p.full_symbol === fullSymbol)!)
-    .filter(p => p);
+    .filter(p => p); // 过滤掉可能的 undefined
 });
 
-const handleBulkClose = () => {
+const handleCloseAll = () => {
+  uiStore.openCloseDialog({ type: 'by_side', side: props.side });
+};
+
+const handleCloseSelected = () => {
   if (selectedInThisTable.value.length > 0) {
     uiStore.openCloseDialog({ type: 'selected', positions: selectedInThisTable.value });
-  } else {
-    uiStore.openCloseDialog({ type: 'by_side', side: props.side });
   }
 };
 
