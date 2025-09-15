@@ -1,6 +1,7 @@
-<!-- frontend/src/components/ControlPanel.vue (最终交互优化版) -->
+<!-- frontend/src/components/ControlPanel.vue (悬浮按钮版) -->
 <template>
-  <v-card v-if="settingsStore.settings">
+  <!-- 核心修改：给 v-card 增加 position: relative -->
+  <v-card v-if="settingsStore.settings" style="position: relative; padding-bottom: 68px;">
     <v-card-title class="text-h6">交易参数</v-card-title>
 
     <v-tabs v-model="tab" bg-color="primary">
@@ -9,6 +10,7 @@
     </v-tabs>
 
     <v-card-text>
+      <!-- ... (v-window 和内部的所有表单元素保持不变) ... -->
       <v-window v-model="tab">
         <!-- 通用开仓设置 -->
         <v-window-item value="general">
@@ -85,7 +87,6 @@
               <v-text-field v-model.number="settingsStore.settings.rebalance_min_volume_usd" label="最小24h交易额 (USD)" type="number"></v-text-field>
             </v-col>
             <v-col cols="12" md="6">
-              <!-- === 核心修改在这里：动态显示/隐藏 === -->
               <div v-if="settingsStore.settings.rebalance_method === 'multi_factor_weakest'">
                 <v-text-field v-model.number="settingsStore.settings.rebalance_abs_momentum_days" label="绝对动量天数" type="number"></v-text-field>
                 <v-text-field v-model.number="settingsStore.settings.rebalance_rel_strength_days" label="相对强度天数 (vs BTC)" type="number"></v-text-field>
@@ -93,27 +94,32 @@
               <div v-if="settingsStore.settings.rebalance_method === 'foam'">
                 <v-text-field v-model.number="settingsStore.settings.rebalance_foam_days" label="FOAM动量天数" type="number"></v-text-field>
               </div>
-              <!-- ======================================= -->
             </v-col>
           </v-row>
         </v-window-item>
       </v-window>
     </v-card-text>
 
-    <v-divider></v-divider>
-
-    <v-card-actions class="pa-4">
-      <v-btn color="info" @click="onSyncSlTp" :disabled="props.isRunning">校准 SL/TP</v-btn>
+    <!-- 核心修改：将 v-card-actions 变为悬浮 -->
+    <v-card-actions class="px-4 py-3" style="position: absolute; bottom: 0; right: 0; width: 100%; background-color: rgb(var(--v-theme-surface)); border-top: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));">
+      <v-btn color="info" variant="tonal" @click="onSyncSlTp" :disabled="props.isRunning">校准 SL/TP</v-btn>
       <v-spacer></v-spacer>
 
       <template v-if="tab === 'general'">
-        <v-btn color="success" prepend-icon="mdi-play" @click="onStartTrading" :loading="props.isRunning" :disabled="props.isRunning">
+        <v-btn
+          color="success"
+          variant="tonal"
+          prepend-icon="mdi-play"
+          @click="onStartTrading"
+          :loading="props.isRunning"
+          :disabled="props.isRunning"
+        >
           开始开仓
         </v-btn>
       </template>
 
       <template v-if="tab === 'rebalance'">
-        <v-btn color="primary" @click="onGenerateRebalancePlan" :disabled="props.isRunning">
+        <v-btn color="primary" variant="tonal" @click="onGenerateRebalancePlan" :disabled="props.isRunning">
           生成再平衡计划
         </v-btn>
       </template>
