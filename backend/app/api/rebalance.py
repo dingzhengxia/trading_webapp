@@ -1,18 +1,18 @@
+# backend/app/api/rebalance.py (最终完整版)
 import asyncio
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks
 import ccxt.async_support as ccxt
-from typing import Dict, Any, List
+from typing import List
 
 from ..models.schemas import RebalanceCriteria, RebalancePlanResponse, ExecutionPlanRequest
 from ..core.exchange_manager import get_exchange_dependency
 from ..logic import rebalance_logic
 from ..logic import exchange_logic_async as ex_async
-from ..config.config import AVAILABLE_SHORT_COINS, AVAILABLE_LONG_COINS, load_settings, STABLECOIN_PREFERENCE
+from ..config.config import AVAILABLE_SHORT_COINS, load_settings, STABLECOIN_PREFERENCE
 from ..core.websocket_manager import log_message
 from ..core.trading_service import trading_service
 
 router = APIRouter(prefix="/api/rebalance", tags=["Rebalance"])
-
 
 async def screen_coins_task(exchange: ccxt.binanceusdm, criteria: RebalanceCriteria) -> List[str]:
     await log_message(f"开始筛选，策略: {criteria.method}, 目标数量: {criteria.top_n}", "info")
@@ -93,7 +93,6 @@ async def screen_coins_task(exchange: ccxt.binanceusdm, criteria: RebalanceCrite
         rebalance_logic.screen_coins_advanced,
         coin_data,
         criteria.model_dump(),
-        AVAILABLE_LONG_COINS
     )
 
     return target_coin_list
@@ -104,8 +103,8 @@ async def generate_rebalance_plan(
         criteria: RebalanceCriteria,
         exchange: ccxt.binanceusdm = Depends(get_exchange_dependency)
 ):
+    print("--- 📢 API HIT: /api/rebalance/plan ---")
     try:
-        print("--- 📢 API HIT: /api/rebalance/plan ---")  # <-- 新增
         config = load_settings()
 
         positions_task = ex_async.fetch_positions_with_pnl_async(exchange, config.get('leverage', 1))
@@ -161,15 +160,10 @@ async def generate_rebalance_plan(
     except Exception as e:
         error_message = str(e)
         await log_message(f"生成再平衡计划失败: {error_message}", "error")
-        return RebalancePlanResponse(
-            target_ratio_perc=0,
-            positions_to_close=[],
-            positions_to_open=[],
-            error=error_message
-        )
+        raise HTTPException(status_code=500, detail=error_message)
 
 
 @router.post("/execute")
-async def execute_rebalance_plan(plan: ExecutionPlanRequest):
-    print("--- 📢 API HIT: /api/rebalance/execute ---")  # <-- 新增
-    return await trading_service.execute_rebalance_plan(plan)
+def execute_rebalance_plan(plan: ExecutionPlanRequest, background_tasks: BackgroundTasks):
+    print("--- 📢 API HIT: /api/rebalance/execute ---")
+    return trading_service.execute_rebalance_plan(plan, background_tasks)
