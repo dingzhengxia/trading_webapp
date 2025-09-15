@@ -28,7 +28,7 @@ export const useUiStore = defineStore('ui', () => {
     success_count: 0,
     failed_count: 0,
     total: 0,
-    task_name: '', // <--- 永远存储原始的任务名，如 "自动开仓"
+    task_name: '',
     show: false,
     is_final: false
   });
@@ -40,28 +40,45 @@ export const useUiStore = defineStore('ui', () => {
     return 'success';
   });
 
+  // --- 核心修改在这里 ---
+
+  // 新增一个专门隐藏进度条的函数
+  function hideProgress() {
+    progress.value.show = false;
+    progress.value.is_final = false;
+  }
+
   function setStatus(message: string, running?: boolean) {
     statusMessage.value = message;
-    if (running !== undefined) isRunning.value = running;
+
+    if (running !== undefined) {
+      isRunning.value = running;
+    }
+
+    // 如果任务结束，则解除停止状态锁
     if (running === false) {
       isStopping.value = false;
+      // setStatus 不再负责隐藏进度条。这个逻辑转移到 _execute_and_log_task 结束时广播的 status 消息处理中。
+      // 我们依赖 is_final 标志来决定是否延迟隐藏。
       if (progress.value.is_final) {
         clearTimeout(progressResetTimer);
-        progressResetTimer = window.setTimeout(() => {
-          progress.value.show = false;
-          progress.value.is_final = false;
-        }, 3000);
+        progressResetTimer = window.setTimeout(hideProgress, 3000); // 延迟隐藏
       } else {
-        progress.value.show = false;
+        hideProgress(); // 立即隐藏
       }
     }
   }
 
   function updateProgress(data: { success_count: number; failed_count: number; total: number; task_name: string; is_final: boolean }) {
     if (isStopping.value) return;
-    clearTimeout(progressResetTimer);
-    // 直接存储后端传来的原始数据
+    clearTimeout(progressResetTimer); // 收到任何新进度，都取消“延迟隐藏”的计划
     progress.value = { ...data, show: true };
+
+    // 如果这是一个最终状态的更新，我们也在这里启动延迟隐藏计时器
+    if (data.is_final) {
+        clearTimeout(progressResetTimer);
+        progressResetTimer = window.setTimeout(hideProgress, 3000);
+    }
   }
 
   function initiateStop() {
@@ -77,14 +94,26 @@ export const useUiStore = defineStore('ui', () => {
 
       if (is_running && progressData && typeof progressData.total !== 'undefined') {
         console.log("恢复UI状态:", progressData);
-        // 直接使用后端返回的完整、干净的数据
-        setStatus(`正在执行: ${progressData.task_name}...`, true);
-        updateProgress({ ...progressData, is_final: false });
+
+        // 恢复状态时，我们只设置 isRunning 和 statusMessage，不触发隐藏逻辑
+        statusMessage.value = `正在执行: ${progressData.task_name}...`;
+        isRunning.value = true;
+
+        // 然后用干净的数据更新进度条，让它显示出来
+        updateProgress({
+            success_count: progressData.success_count || 0,
+            failed_count: progressData.failed_count || 0,
+            total: progressData.total || 0,
+            task_name: progressData.task_name,
+            is_final: false
+        });
         return true;
       }
     } catch (error) { console.error("检查初始状态失败:", error); }
     return false;
   }
+
+  // --- 修改结束 ---
 
   function toggleLogDrawer() { showLogDrawer.value = !showLogDrawer.value; }
   function openCloseDialog(target: CloseTarget) {
