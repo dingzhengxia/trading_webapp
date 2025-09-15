@@ -1,3 +1,5 @@
+# backend/app/main.py
+
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
@@ -7,7 +9,7 @@ import os
 
 from .api import positions, trading, rebalance, settings
 from .core.websocket_manager import manager
-from .core.trading_service import trading_service
+from .core.trading_service import trading_service # <--- 导入 trading_service 实例
 
 app = FastAPI(title="Trading API")
 
@@ -69,6 +71,7 @@ else:
 
 @app.on_event("startup")
 async def startup_event():
+    # 在应用启动时，启动 trading_service 的后台 worker
     asyncio.create_task(trading_service.start_worker())
 
 
