@@ -1,19 +1,21 @@
+<!-- 文件路径: frontend/src/components/LogDrawer.vue (已适配 v-model) -->
 <template>
+  <!-- v-model="show" 会自动处理抽屉的打开和关闭 -->
   <v-navigation-drawer
+    v-model="show"
     location="right"
-    permanent
     width="400"
     class="log-drawer"
   >
     <v-toolbar density="compact">
       <v-toolbar-title class="text-subtitle-1">执行日志</v-toolbar-title>
       <v-spacer></v-spacer>
-      <!-- 点击时，通过 emit 通知父组件清空日志 -->
-      <v-btn icon="mdi-delete" size="small" @click="emit('clearLogs')" title="清空日志"></v-btn>
+      <!-- 清空日志的 emit 保持不变 -->
+      <v-btn icon="mdi-delete" size="small" @click="logStore.clearLogs()" title="清空日志"></v-btn>
     </v-toolbar>
 
-    <!-- 使用 v-virtual-scroll 提高大量日志渲染时的性能 -->
-    <v-virtual-scroll :items="props.logs" height="calc(100vh - 48px)">
+    <!-- 日志列表显示逻辑保持不变 -->
+    <v-virtual-scroll :items="logStore.logs" height="calc(100vh - 48px)">
       <template v-slot:default="{ item: log, index }">
         <v-list-item :key="index" class="py-1 px-2">
           <div class="log-entry" :class="logLevelColor(log.level)">
@@ -27,35 +29,31 @@
 </template>
 
 <script setup lang="ts">
-import type { Log } from '@/types/ui';
+import { computed } from 'vue';
+import { useLogStore } from '@/stores/logStore';
+import type { LogEntry } from '@/models/types'; // <-- 修正为 LogEntry
 
-// 步骤1: 定义从父组件接收的 logs prop 和要发出的 clearLogs emit
-const props = defineProps<{
-  logs: Log[];
-}>();
+// --- 核心修改在这里 ---
+// 使用 defineModel 来创建一个双向绑定的 v-model
+const show = defineModel<boolean>();
+// -----------------------
 
-const emit = defineEmits<{
-  (e: 'clearLogs'): void;
-}>();
+const logStore = useLogStore();
 
-// 步骤2: 样式函数保持不变，用于根据日志级别显示不同颜色
+// 样式函数保持不变
 const logLevelColor = (level: string) => {
   switch (level) {
-    case 'success':
-      return 'text-success';
-    case 'error':
-      return 'text-error';
-    case 'warning':
-      return 'text-orange';
-    case 'info':
-        return 'text-info';
-    default:
-      return '';
+    case 'success': return 'text-success';
+    case 'error': return 'text-error';
+    case 'warning': return 'text-orange';
+    case 'info': return 'text-info';
+    default: return '';
   }
 };
 </script>
 
 <style scoped>
+/* 样式保持不变 */
 .log-drawer {
   font-family: 'Consolas', 'Monaco', monospace;
   font-size: 0.8rem;
