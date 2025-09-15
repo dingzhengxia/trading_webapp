@@ -45,16 +45,18 @@ export const useUiStore = defineStore('ui', () => {
       clearTimeout(progressResetTimer);
       progressResetTimer = window.setTimeout(() => {
         progress.value.show = false;
-        progress.value.is_final = false;
-      }, 3000); // 最终状态显示3秒
+        progress.value.is_final = false; // 重置final状态
+      }, 3000);
     } else if (running === false) {
-      // 如果任务结束但不是 final 状态（例如被用户停止），则立即隐藏
+      // 如果任务不是正常结束（例如被用户停止），则立即隐藏
       progress.value.show = false;
     }
   }
 
   function updateProgress(data: { success_count: number; failed_count: number; total: number; task_name: string; is_final: boolean }) {
+    // 核心修改：收到任何进度更新，立即清除隐藏计时器并强制显示
     clearTimeout(progressResetTimer);
+    // 将传入的数据与 show: true 合并，确保进度条始终可见
     progress.value = { ...data, show: true };
   }
 

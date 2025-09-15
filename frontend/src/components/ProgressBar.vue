@@ -1,52 +1,51 @@
-<!-- frontend/src/components/ProgressBar.vue (完整代码) -->
+<!-- frontend/src/components/ProgressBar.vue (最终布局优化版) -->
 <template>
-  <v-footer v-if="uiStore.progress.show" app class="pa-0" style="z-index: 1008;">
-    <v-card flat tile class="flex" :color="cardColor">
-      <v-card-text class="py-2">
-        <div class="d-flex align-center w-100">
-          <!-- 左侧任务名 -->
-          <span class="text-caption font-weight-bold flex-shrink-0 mr-4">
-            {{ uiStore.progress.task_name }}
-          </span>
+  <v-footer v-if="uiStore.progress.show" app class="pa-0" style="z-index: 1008; border-top: 1px solid rgba(255, 255, 255, 0.12);">
+    <!-- v-card 设置为 height: 100% 并直接作为 flex 容器 -->
+    <v-card flat tile class="d-flex align-center px-4 w-100" :color="cardColor" height="48px">
 
-          <!-- 中间进度条 -->
-          <v-progress-linear
-            :model-value="progressPercentage"
-            :color="progressColor"
-            height="20"
-            striped
-            stream
-            class="flex-grow-1"
-          >
-            <strong class="text-white">{{ Math.ceil(progressPercentage) }}%</strong>
-          </v-progress-linear>
+        <!-- 左侧任务名 -->
+        <span class="text-caption font-weight-bold flex-shrink-0 mr-4">
+          {{ uiStore.progress.task_name }}
+        </span>
 
-          <!-- 右侧详细统计 -->
-          <div class="d-flex flex-shrink-0 ml-4 align-center text-caption">
-            <v-chip size="x-small" color="green" label class="mr-2">
-              成功: {{ uiStore.progress.success_count }}
-            </v-chip>
-            <v-chip size="x-small" :color="uiStore.progress.failed_count > 0 ? 'red' : 'grey'" label class="mr-2">
-              失败: {{ uiStore.progress.failed_count }}
-            </v-chip>
-            <v-chip size="x-small" color="blue-grey" label>
-              总数: {{ uiStore.progress.total }}
-            </v-chip>
-          </div>
+        <!-- 中间进度条 -->
+        <v-progress-linear
+          :model-value="progressPercentage"
+          :color="progressColor"
+          height="20"
+          striped
+          stream
+          class="flex-grow-1"
+        >
+          <strong class="text-white">{{ Math.ceil(progressPercentage) }}%</strong>
+        </v-progress-linear>
 
-          <!-- 停止按钮 -->
-          <v-btn
-            color="white"
-            variant="text"
-            size="small"
-            @click="stopTrading"
-            :disabled="!uiStore.isRunning"
-            class="flex-shrink-0 ml-2"
-          >
-            ⏹ 停止
-          </v-btn>
+        <!-- 右侧详细统计 -->
+        <div class="d-flex flex-shrink-0 ml-4 align-center text-caption">
+          <v-chip size="x-small" color="green" label class="mr-2">
+            成功: {{ uiStore.progress.success_count }}
+          </v-chip>
+          <v-chip size="x-small" :color="uiStore.progress.failed_count > 0 ? 'red' : 'grey'" label class="mr-2">
+            失败: {{ uiStore.progress.failed_count }}
+          </v-chip>
+          <v-chip size="x-small" color="blue-grey" label>
+            总数: {{ uiStore.progress.total }}
+          </v-chip>
         </div>
-      </v-card-text>
+
+        <!-- 停止按钮 -->
+        <v-btn
+          color="white"
+          variant="text"
+          size="small"
+          @click="stopTrading"
+          :disabled="!uiStore.isRunning"
+          class="flex-shrink-0 ml-2"
+        >
+          ⏹ 停止
+        </v-btn>
+
     </v-card>
   </v-footer>
 </template>
