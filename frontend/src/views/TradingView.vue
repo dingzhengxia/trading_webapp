@@ -1,4 +1,4 @@
-<!-- frontend/src/views/TradingView.vue (最终布局修复版) -->
+<!-- frontend/src/views/TradingView.vue (最终修复版) -->
 <template>
   <div :style="{ paddingBottom: $vuetify.display.smAndDown ? '128px' : '80px' }">
     <v-container fluid>
@@ -53,8 +53,8 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue'; // 导入 computed
-import { useDisplay, useTheme } from 'vuetify'; // 导入 useDisplay
+import { ref, onMounted, computed } from 'vue';
+import { useDisplay } from 'vuetify'; // <-- 只导入 useDisplay
 import { useUiStore } from '@/stores/uiStore';
 import { usePositionStore } from '@/stores/positionStore';
 import { useSettingsStore } from '@/stores/settingsStore';
@@ -66,20 +66,18 @@ const uiStore = useUiStore();
 const positionStore = usePositionStore();
 const settingsStore = useSettingsStore();
 
-// --- 核心修改在这里：将样式计算移到 script 中 ---
+// --- 核心修改在这里：正确使用 Vuetify 的 useDisplay ---
 const vuetifyDisplay = useDisplay();
-const { VUE_APP_APPLICATION_LEFT } = useTheme().computed(() => vuetifyDisplay.application);
 
 const footerStyle = computed(() => {
-  const styles: { bottom: string, left?: string } = {
-    bottom: vuetifyDisplay.smAndDown.value ? '56px' : '0px'
+  const styles: { bottom: string, left: string } = {
+    bottom: vuetifyDisplay.smAndDown.value ? '56px' : '0px',
+    left: '0px' // 默认 left 为 0
   };
 
-  // 防御性检查
-  if (vuetifyDisplay.mdAndUp.value && VUE_APP_APPLICATION_LEFT) {
-    styles.left = `${VUE_APP_APPLICATION_LEFT.value}px`;
-  } else {
-    styles.left = '0px';
+  // 安全地访问 application 属性
+  if (vuetifyDisplay.mdAndUp.value && vuetifyDisplay.application) {
+    styles.left = `${vuetifyDisplay.application.left}px`;
   }
 
   return styles;
