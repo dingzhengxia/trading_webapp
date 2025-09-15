@@ -3,10 +3,11 @@ import asyncio
 import math
 import ccxt.async_support as ccxt
 from typing import List
+
+from .exceptions import InterruptedError
 from ..config import i18n
 from ..models.schemas import Position
 from .utils import resolve_full_symbol
-from .exchange_logic_async import InterruptedError
 
 
 async def _cancel_sl_tp_orders_async(exchange: ccxt.binanceusdm, symbol: str, async_logger):
