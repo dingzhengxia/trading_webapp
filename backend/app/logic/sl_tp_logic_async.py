@@ -1,4 +1,4 @@
-# backend/app/logic/sl_tp_logic_async.py (最终日志诊断版)
+# backend/app/logic/sl_tp_logic_async.py (最终修复版)
 import asyncio
 import math
 import ccxt.async_support as ccxt
@@ -32,23 +32,17 @@ async def set_tp_sl_for_position_async(exchange: ccxt.binanceusdm, position: Pos
     full_symbol = position.full_symbol
     if stop_event.is_set(): raise InterruptedError()
 
-    # --- 核心修改：增加一个顶层的 try...except 块来捕获和记录所有异常 ---
     try:
-        await async_logger(f"[LOG] >> SLTP Worker for {full_symbol}: Starting pre-check...", "normal")
+        # --- 核心修改：换回使用 fetch_positions (复数)，这是经过验证的正确方法 ---
+        live_positions_raw = await exchange.fetch_positions([full_symbol])
+        live_pos = next(
+            (p for p in live_positions_raw if p['symbol'] == full_symbol and float(p.get('contracts', 0)) != 0), None)
 
-        # 记录日志，确认我们将要调用 fetchPosition
-        print(f"[DIAGNOSTIC] About to call exchange.fetch_position('{full_symbol}')")
-        await async_logger(f"[LOG] >> SLTP Worker for {full_symbol}: Calling fetchPosition...", "normal")
-
-        live_pos_raw = await exchange.fetch_position(full_symbol)
-
-        print(f"[DIAGNOSTIC] fetch_position('{full_symbol}') returned: {live_pos_raw}")
-        await async_logger(f"[LOG] >> SLTP Worker for {full_symbol}: fetchPosition call successful.", "normal")
-
-        if not live_pos_raw or float(live_pos_raw.get('contracts', 0)) == 0:
+        if not live_pos:
             await async_logger(f"⚠️ 为 {position.symbol} 校准前检查发现仓位已不存在，将仅执行清理操作。", "warning")
             await _cancel_sl_tp_orders_async(exchange, full_symbol, async_logger)
-            return True
+            return True  # 视为成功
+        # --- 修改结束 ---
 
         is_long = position.side == i18n.SIDE_LONG
 
@@ -99,16 +93,15 @@ async def set_tp_sl_for_position_async(exchange: ccxt.binanceusdm, position: Pos
     except InterruptedError:
         await async_logger(f"为 {position.symbol} 设置SL/TP的操作被中断。", "warning")
         return False
-    except Exception as e:
-        # 捕获所有其他异常，并打印详细的诊断信息
-        print("==================== EXCEPTION IN set_tp_sl_for_position_async ====================")
-        print(f"            SYMBOL: {full_symbol}")
-        print(f"      EXCEPTION TYPE: {type(e).__name__}")
-        print(f"      EXCEPTION INFO: {str(e)}")
-        print("===================================================================================")
-        await async_logger(f"❌ 设置 {position.symbol} SL/TP时发生未处理的错误: {type(e).__name__}", "error")
+    except ccxt.ExchangeError as e:
+        if '-1106' in str(e):
+            await async_logger(f"⚠️ 为 {position.symbol} 设置SL/TP失败 (仓位可能已关闭): {e.args[0]}", "warning")
+            return True
+        await async_logger(f"❌ 设置 {position.symbol} SL/TP时发生未处理的交易所错误: {e}", "error")
         return False
-    # --- 修改结束 ---
+    except Exception as e:
+        await async_logger(f"❌ 设置 {position.symbol} SL/TP时发生严重错误: {e}", "error")
+        return False
 
 
 async def cleanup_orphan_sltp_orders_async(exchange: ccxt.binanceusdm, active_symbols: Set[str], async_logger):
