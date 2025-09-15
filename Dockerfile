@@ -1,4 +1,4 @@
-# Dockerfile (最终单进程版)
+# Dockerfile (语法修正版)
 
 # =================================================================
 # STAGE 1: Build Frontend
@@ -25,12 +25,14 @@ COPY backend/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY backend/ ./backend
-COPY --from-frontend-builder /app/frontend/dist ./backend/app/frontend_dist
+
+# --- 核心修改在这里：修复 --from 的语法 ---
+# 将 --from-frontend-builder 改为 --from=frontend-builder
+COPY --from=frontend-builder /app/frontend/dist ./backend/app/frontend_dist
+# --- 修改结束 ---
 
 WORKDIR /app/backend
 EXPOSE 8000
 
-# --- 核心修改：强制使用单 worker ---
-# 移除了 --workers 参数，让 Uvicorn 以默认的单进程模式运行。
-# 这将确保 TradingService 和 asyncio 事件循环是真正的全局单例，彻底解决状态不一致和“僵尸”进程问题。
+# 使用稳定的单进程模式
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
