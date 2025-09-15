@@ -1,10 +1,14 @@
-<!-- frontend/src/views/TradingView.vue (最终修复版) -->
+<!-- frontend/src/views/TradingView.vue (最终智能悬浮版) -->
 <template>
   <div :style="{ paddingBottom: $vuetify.display.smAndDown ? '128px' : '80px' }">
     <v-container fluid>
       <v-row>
         <v-col cols="12">
-          <ControlPanel @generate-rebalance-plan="handleGenerateRebalancePlan" />
+          <!-- 核心修改：使用 v-model 将父子的 tab 状态双向绑定 -->
+          <ControlPanel
+            v-model="activeTab"
+            @generate-rebalance-plan="handleGenerateRebalancePlan"
+          />
         </v-col>
       </v-row>
     </v-container>
@@ -15,7 +19,10 @@
     class="pa-0"
     :style="{ bottom: $vuetify.display.smAndDown ? '56px' : '0px' }"
   >
+    <!-- 核心修改：v-card 现在会根据 activeTab 动态显示内容 -->
     <v-card flat tile class="d-flex align-center px-4 w-100" height="64px">
+      <!-- 当 tab 是 'general' 时显示 -->
+      <template v-if="activeTab === 'general'">
         <v-btn color="info" variant="tonal" @click="handleSyncSlTp" :disabled="uiStore.isRunning">
           校准 SL/TP
         </v-btn>
@@ -30,24 +37,34 @@
         >
           开始开仓
         </v-btn>
+      </template>
+
+      <!-- 当 tab 是 'rebalance' 时显示 -->
+      <template v-if="activeTab === 'rebalance'">
+        <v-spacer></v-spacer>
+        <v-btn color="primary" variant="tonal" @click="handleGenerateRebalancePlan" :disabled="uiStore.isRunning">
+          生成再平衡计划
+        </v-btn>
+      </template>
     </v-card>
   </v-footer>
 </template>
 
 <script setup lang="ts">
-import { onMounted } from 'vue';
+import { ref, onMounted } from 'vue';
 import { useUiStore } from '@/stores/uiStore';
 import { usePositionStore } from '@/stores/positionStore';
 import { useSettingsStore } from '@/stores/settingsStore';
 import ControlPanel from '@/components/ControlPanel.vue';
 import apiClient from '@/services/api';
-// --- 核心修改在这里：移除了不存在的 SyncSltpRequest 类型 ---
 import type { UserSettings, RebalanceCriteria } from '@/models/types';
-// --- 修改结束 ---
 
 const uiStore = useUiStore();
 const positionStore = usePositionStore();
 const settingsStore = useSettingsStore();
+
+// 新增一个 ref 来追踪 ControlPanel 的当前激活 tab
+const activeTab = ref('general');
 
 const fireAndForgetApiCall = (endpoint: string, payload: any, taskName: string, totalTasks: number = 1) => {
   if (uiStore.isRunning) {
@@ -75,20 +92,16 @@ const fireAndForgetApiCall = (endpoint: string, payload: any, taskName: string, 
 
 const handleStartTrading = () => {
   if (settingsStore.settings) {
-    const plan = settingsStore.settings;
-    const total = (plan.enable_long_trades ? plan.long_coin_list.length : 0) +
-                  (plan.enable_short_trades ? plan.short_coin_list.length : 0);
-    fireAndForgetApiCall('/api/trading/start', plan, '自动开仓', total);
+    fireAndForgetApiCall('/api/trading/start', settingsStore.settings, '自动开仓',
+      (settingsStore.settings.enable_long_trades ? settingsStore.settings.long_coin_list.length : 0) +
+      (settingsStore.settings.enable_short_trades ? settingsStore.settings.short_coin_list.length : 0)
+    );
   }
 };
 
 const handleSyncSlTp = () => {
   if (settingsStore.settings) {
-    // --- 核心修改在这里：直接传递完整的 settings 对象 ---
-    // 后端 /api/trading/sync-sltp 端点被定义为接收一个通用字典 (dict)
-    // 所以我们可以安全地传递整个 settings 对象
     fireAndForgetApiCall('/api/trading/sync-sltp', settingsStore.settings, '同步SL/TP', positionStore.positions.length);
-    // --- 修改结束 ---
   }
 };
 

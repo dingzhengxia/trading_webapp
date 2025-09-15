@@ -2,12 +2,13 @@
 <template>
   <v-card v-if="settingsStore.settings">
     <v-card-title class="text-h6">交易参数</v-card-title>
-    <v-tabs v-model="tab" bg-color="primary">
+    <!-- 核心修改：使用 :model-value 和 @update:modelValue 实现 v-model -->
+    <v-tabs :model-value="modelValue" @update:modelValue="$emit('update:modelValue', $event)" bg-color="primary">
       <v-tab value="general">通用开仓设置</v-tab>
       <v-tab value="rebalance">智能再平衡</v-tab>
     </v-tabs>
     <v-card-text>
-      <v-window v-model="tab">
+      <v-window :model-value="modelValue">
         <!-- 通用开仓设置 -->
         <v-window-item value="general">
           <v-row>
@@ -59,13 +60,6 @@
               <div v-if="settingsStore.settings.rebalance_method === 'foam'"><v-text-field v-model.number="settingsStore.settings.rebalance_foam_days" label="FOAM动量天数" type="number"></v-text-field></div>
             </v-col>
           </v-row>
-           <!-- 核心修改：将 "生成再平衡计划" 按钮放回到这里 -->
-          <v-card-actions class="px-0 pt-4">
-            <v-spacer></v-spacer>
-            <v-btn color="primary" variant="tonal" @click="onGenerateRebalancePlan" :disabled="uiStore.isRunning">
-              生成再平衡计划
-            </v-btn>
-          </v-card-actions>
         </v-window-item>
       </v-window>
     </v-card-text>
@@ -75,39 +69,25 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue';
 import { useSettingsStore } from '@/stores/settingsStore';
 import { useUiStore } from '@/stores/uiStore';
 import WeightConfigDialog from './WeightConfigDialog.vue';
 import type { RebalanceCriteria } from '@/models/types';
 
-// 核心修改：移除 props，只保留 emit
-const emit = defineEmits<{
+// 核心修改：接收 modelValue prop 并定义 update:modelValue emit，实现 v-model
+defineProps<{ modelValue: string }>();
+defineEmits<{
+  (e: 'update:modelValue', value: any): void;
   (e: 'generateRebalancePlan', criteria: RebalanceCriteria): void;
 }>();
 
 const settingsStore = useSettingsStore();
 const uiStore = useUiStore();
-const tab = ref('general'); // tab 状态现在是组件内部的
 
 const rebalanceMethods = [
   { value: 'multi_factor_weakest', text: '多因子弱势策略' },
   { value: 'foam', text: 'FOAM强势动量' }
 ];
-
-const onGenerateRebalancePlan = () => {
-  if (settingsStore.settings) {
-    const criteria = {
-      method: settingsStore.settings.rebalance_method,
-      top_n: settingsStore.settings.rebalance_top_n,
-      min_volume_usd: settingsStore.settings.rebalance_min_volume_usd,
-      abs_momentum_days: settingsStore.settings.rebalance_abs_momentum_days,
-      rel_strength_days: settingsStore.settings.rebalance_rel_strength_days,
-      foam_days: settingsStore.settings.rebalance_foam_days,
-    };
-    emit('generateRebalancePlan', criteria);
-  }
-};
 
 const updateWeights = (newWeights: { [key: string]: number }) => {
   if (settingsStore.settings) {
