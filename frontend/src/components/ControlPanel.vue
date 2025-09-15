@@ -98,9 +98,9 @@
 
 <script setup lang="ts">
 import { ref, watch, onMounted } from 'vue';
-import { useSettingsStore } from '@/stores/settings';
+import { useSettingsStore } from '@/stores/settingsStore';
 import WeightConfigDialog from './WeightConfigDialog.vue';
-import type { TradePlan } from '@/types/trading';
+import type { TradePlan } from '@/models/types';
 
 // 步骤1: 定义从父组件接收的 props 和要发出的 emits
 const props = defineProps<{
