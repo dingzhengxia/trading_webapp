@@ -1,10 +1,11 @@
-<!-- frontend/src/views/TradingView.vue (最终智能悬浮版) -->
+<!-- frontend/src/views/TradingView.vue (最终完整版) -->
 <template>
+  <!-- 占位div，为悬浮的footer留出空间，并根据手机/PC动态调整高度 -->
   <div :style="{ paddingBottom: $vuetify.display.smAndDown ? '128px' : '80px' }">
     <v-container fluid>
       <v-row>
         <v-col cols="12">
-          <!-- 核心修改：使用 v-model 将父子的 tab 状态双向绑定 -->
+          <!-- 使用 v-model 将本页面的 activeTab 与子组件的 tab 状态双向绑定 -->
           <ControlPanel
             v-model="activeTab"
             @generate-rebalance-plan="handleGenerateRebalancePlan"
@@ -14,14 +15,14 @@
     </v-container>
   </div>
 
+  <!-- 固定在页面底部的悬浮操作栏 -->
   <v-footer
     style="position: fixed; bottom: 0; left: 0; right: 0; z-index: 1000; border-top: 1px solid rgba(255, 255, 255, 0.12);"
     class="pa-0"
     :style="{ bottom: $vuetify.display.smAndDown ? '56px' : '0px' }"
   >
-    <!-- 核心修改：v-card 现在会根据 activeTab 动态显示内容 -->
     <v-card flat tile class="d-flex align-center px-4 w-100" height="64px">
-      <!-- 当 tab 是 'general' 时显示 -->
+      <!-- 当 tab 是 'general' 时，显示 "校准" 和 "开仓" -->
       <template v-if="activeTab === 'general'">
         <v-btn color="info" variant="tonal" @click="handleSyncSlTp" :disabled="uiStore.isRunning">
           校准 SL/TP
@@ -39,10 +40,10 @@
         </v-btn>
       </template>
 
-      <!-- 当 tab 是 'rebalance' 时显示 -->
+      <!-- 当 tab 是 'rebalance' 时，显示 "生成计划" -->
       <template v-if="activeTab === 'rebalance'">
         <v-spacer></v-spacer>
-        <v-btn color="primary" variant="tonal" @click="handleGenerateRebalancePlan" :disabled="uiStore.isRunning">
+        <v-btn color="primary" variant="tonal" @click="onGenerateRebalancePlan" :disabled="uiStore.isRunning">
           生成再平衡计划
         </v-btn>
       </template>
@@ -63,24 +64,17 @@ const uiStore = useUiStore();
 const positionStore = usePositionStore();
 const settingsStore = useSettingsStore();
 
-// 新增一个 ref 来追踪 ControlPanel 的当前激活 tab
+// 用于追踪和控制 ControlPanel 的激活标签页
 const activeTab = ref('general');
 
+// 统一的API调用函数
 const fireAndForgetApiCall = (endpoint: string, payload: any, taskName: string, totalTasks: number = 1) => {
-  if (uiStore.isRunning) {
-    uiStore.logStore.addLog({ message: '已有任务在运行中，请稍后再试。', level: 'warning', timestamp: new Date().toLocaleTimeString() });
-    return;
-  }
+  if (uiStore.isRunning) return;
   const requestId = `req-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
   const payloadWithId = { ...payload, request_id: requestId };
-
   uiStore.setStatus(`正在提交: ${taskName}...`, true);
-  uiStore.updateProgress({
-    success_count: 0, failed_count: 0, total: totalTasks,
-    task_name: taskName, is_final: false
-  });
+  uiStore.updateProgress({ success_count: 0, failed_count: 0, total: totalTasks, task_name: taskName, is_final: false });
   uiStore.logStore.addLog({ message: `[前端] 已发送 '${taskName}' 启动指令 (ID: ${requestId})。`, level: 'info', timestamp: new Date().toLocaleTimeString() });
-
   apiClient.post(endpoint, payloadWithId)
     .then(response => { console.log('API call successful:', response.data.message); })
     .catch(error => {
@@ -90,21 +84,41 @@ const fireAndForgetApiCall = (endpoint: string, payload: any, taskName: string, 
     });
 };
 
+// 悬浮栏按钮的事件处理器
 const handleStartTrading = () => {
   if (settingsStore.settings) {
-    fireAndForgetApiCall('/api/trading/start', settingsStore.settings, '自动开仓',
-      (settingsStore.settings.enable_long_trades ? settingsStore.settings.long_coin_list.length : 0) +
-      (settingsStore.settings.enable_short_trades ? settingsStore.settings.short_coin_list.length : 0)
-    );
+    const plan = settingsStore.settings;
+    const total = (plan.enable_long_trades ? plan.long_coin_list.length : 0) +
+                  (plan.enable_short_trades ? plan.short_coin_list.length : 0);
+    fireAndForgetApiCall('/api/trading/start', plan, '自动开仓', total);
   }
 };
 
 const handleSyncSlTp = () => {
   if (settingsStore.settings) {
+    // 直接传递完整的 settings 对象，后端会自动选择所需字段
     fireAndForgetApiCall('/api/trading/sync-sltp', settingsStore.settings, '同步SL/TP', positionStore.positions.length);
   }
 };
 
+// 这个函数现在是给悬浮栏的 "生成计划" 按钮使用的
+const onGenerateRebalancePlan = () => {
+  // 从 ControlPanel 组件 emit 事件
+  // 为了简单起见，我们直接在这里触发
+  if (settingsStore.settings) {
+    const criteria = {
+      method: settingsStore.settings.rebalance_method,
+      top_n: settingsStore.settings.rebalance_top_n,
+      min_volume_usd: settingsStore.settings.rebalance_min_volume_usd,
+      abs_momentum_days: settingsStore.settings.rebalance_abs_momentum_days,
+      rel_strength_days: settingsStore.settings.rebalance_rel_strength_days,
+      foam_days: settingsStore.settings.rebalance_foam_days,
+    };
+    handleGenerateRebalancePlan(criteria);
+  }
+};
+
+// 这个函数处理来自 ControlPanel 的 emit（虽然现在按钮在父组件，但保留以备将来之用）
 const handleGenerateRebalancePlan = async (criteria: RebalanceCriteria) => {
   if (uiStore.isRunning) return;
   uiStore.logStore.addLog({ message: '[前端] 正在生成再平衡计划...', level: 'info', timestamp: new Date().toLocaleTimeString() });

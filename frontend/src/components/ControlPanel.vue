@@ -1,8 +1,8 @@
-<!-- frontend/src/components/ControlPanel.vue (最终修复版) -->
+<!-- frontend/src/components/ControlPanel.vue (最终完整版) -->
 <template>
   <v-card v-if="settingsStore.settings">
     <v-card-title class="text-h6">交易参数</v-card-title>
-    <!-- 核心修改：使用 :model-value 和 @update:modelValue 实现 v-model -->
+    <!-- 使用 :model-value 和 @update:modelValue 实现 v-model -->
     <v-tabs :model-value="modelValue" @update:modelValue="$emit('update:modelValue', $event)" bg-color="primary">
       <v-tab value="general">通用开仓设置</v-tab>
       <v-tab value="rebalance">智能再平衡</v-tab>
@@ -72,15 +72,11 @@
 import { useSettingsStore } from '@/stores/settingsStore';
 import { useUiStore } from '@/stores/uiStore';
 import WeightConfigDialog from './WeightConfigDialog.vue';
-import type { RebalanceCriteria } from '@/models/types';
 
-// 核心修改：接收 modelValue prop 并定义 update:modelValue emit，实现 v-model
-defineProps<{ modelValue: string }>();
-defineEmits<{
-  (e: 'update:modelValue', value: any): void;
-  (e: 'generateRebalancePlan', criteria: RebalanceCriteria): void;
-}>();
+// 使用 defineModel 来实现 v-model 的双向绑定
+const modelValue = defineModel<string>();
 
+// generateRebalancePlan 事件现在由父组件处理，所以不再需要 emit
 const settingsStore = useSettingsStore();
 const uiStore = useUiStore();
 
