@@ -1,9 +1,11 @@
 <!-- frontend/src/views/TradingView.vue (最终修复版) -->
 <template>
+  <!-- 占位div，为悬浮的footer和手机底部导航留出空间 -->
   <div :style="{ paddingBottom: $vuetify.display.smAndDown ? '128px' : '80px' }">
     <v-container fluid>
       <v-row>
         <v-col cols="12">
+          <!-- 使用 v-model 将本页面的 activeTab 与子组件的 tab 状态双向绑定 -->
           <ControlPanel
             v-model="activeTab"
             @generate-rebalance-plan="handleGenerateRebalancePlan"
@@ -13,17 +15,22 @@
     </v-container>
   </div>
 
+  <!-- 固定在页面底部的悬浮操作栏 -->
   <v-footer
     style="position: fixed; bottom: 0; right: 0; z-index: 1000; border-top: 1px solid rgba(255, 255, 255, 0.12);"
     class="pa-0"
     :style="footerStyle"
   >
     <v-card flat tile class="d-flex align-center px-4 w-100" height="64px">
+      <!-- 核心修改：将 v-spacer 放在最前面，将所有按钮推到右侧 -->
+      <v-spacer></v-spacer>
+
+      <!-- 当 tab 是 'general' 时显示 -->
       <template v-if="activeTab === 'general'">
+        <!-- 校准按钮已恢复，并添加了右边距 -->
         <v-btn color="info" variant="tonal" @click="handleSyncSlTp" :disabled="uiStore.isRunning" class="mr-3">
           校准 SL/TP
         </v-btn>
-        <v-spacer></v-spacer>
         <v-btn
           color="success"
           variant="tonal"
@@ -36,8 +43,8 @@
         </v-btn>
       </template>
 
+      <!-- 当 tab 是 'rebalance' 时显示 -->
       <template v-if="activeTab === 'rebalance'">
-        <v-spacer></v-spacer>
         <v-btn
           color="primary"
           variant="tonal"
@@ -54,7 +61,7 @@
 
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue';
-import { useDisplay } from 'vuetify'; // <-- 只导入 useDisplay
+import { useDisplay } from 'vuetify';
 import { useUiStore } from '@/stores/uiStore';
 import { usePositionStore } from '@/stores/positionStore';
 import { useSettingsStore } from '@/stores/settingsStore';
@@ -66,29 +73,29 @@ const uiStore = useUiStore();
 const positionStore = usePositionStore();
 const settingsStore = useSettingsStore();
 
-// --- 核心修改在这里：正确使用 Vuetify 的 useDisplay ---
+// 修复 TypeError 的安全样式计算
 const vuetifyDisplay = useDisplay();
-
 const footerStyle = computed(() => {
   const styles: { bottom: string, left: string } = {
     bottom: vuetifyDisplay.smAndDown.value ? '56px' : '0px',
-    left: '0px' // 默认 left 为 0
+    left: '0px'
   };
-
-  // 安全地访问 application 属性
   if (vuetifyDisplay.mdAndUp.value && vuetifyDisplay.application) {
     styles.left = `${vuetifyDisplay.application.left}px`;
   }
-
   return styles;
 });
-// --- 修改结束 ---
+
 
 const activeTab = ref('general');
 const isGeneratingPlan = ref(false);
 
+// 统一的、健壮的API调用函数
 const fireAndForgetApiCall = (endpoint: string, payload: any, taskName: string, totalTasks: number = 1) => {
-  if (uiStore.isRunning) return;
+  if (uiStore.isRunning) {
+    uiStore.logStore.addLog({ message: '已有任务在运行中，请稍后再试。', level: 'warning', timestamp: new Date().toLocaleTimeString() });
+    return;
+  }
   const requestId = `req-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
   const payloadWithId = { ...payload, request_id: requestId };
   uiStore.setStatus(`正在提交: ${taskName}...`, true);
@@ -105,15 +112,16 @@ const fireAndForgetApiCall = (endpoint: string, payload: any, taskName: string, 
 
 const handleStartTrading = () => {
   if (settingsStore.settings) {
-    fireAndForgetApiCall('/api/trading/start', settingsStore.settings, '自动开仓',
-      (settingsStore.settings.enable_long_trades ? settingsStore.settings.long_coin_list.length : 0) +
-      (settingsStore.settings.enable_short_trades ? settingsStore.settings.short_coin_list.length : 0)
-    );
+    const plan = settingsStore.settings;
+    const total = (plan.enable_long_trades ? plan.long_coin_list.length : 0) +
+                  (plan.enable_short_trades ? plan.short_coin_list.length : 0);
+    fireAndForgetApiCall('/api/trading/start', plan, '自动开仓', total);
   }
 };
 
 const handleSyncSlTp = () => {
   if (settingsStore.settings) {
+    // 修复：直接传递完整的 settings 对象，不再使用不存在的 SyncSltpRequest
     fireAndForgetApiCall('/api/trading/sync-sltp', settingsStore.settings, '同步SL/TP', positionStore.positions.length);
   }
 };
