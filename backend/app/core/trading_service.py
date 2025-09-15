@@ -84,7 +84,12 @@ class TradingService:
     async def _run_task_loop(self, items: List[Any], worker_func: Callable, concurrency: int, task_name: str):
         total_tasks = len(items)
         success_count, failure_count = 0, 0
-        self._task_progress = {"success_count": 0, "failed_count": 0, "total": total_tasks, "task_name": task_name}
+        self._task_progress = {
+            "success_count": 0,
+            "failed_count": 0,
+            "total": total_tasks,
+            "task_name": task_name
+        }
         await broadcast_progress_details(**self._task_progress)
         print(f"[RUN_LOOP] '{task_name}' loop started. Total tasks: {total_tasks}, Concurrency: {concurrency}")
         await log_message(f"[LOG] '{task_name}' 循环开始，总任务数: {total_tasks}, 并发数: {concurrency}", "info")
@@ -121,10 +126,13 @@ class TradingService:
                         await log_message(f"[LOG] >> ⚠️ 子任务 {index + 1} 失败。", "warning")
 
                     processed = success_count + failure_count
-                    current_progress = self._task_progress.copy()
-                    current_progress.update({"success_count": success_count, "failed_count": failure_count,
-                                             "task_name": f"{task_name}: {processed}/{total_tasks}"})
-                    await broadcast_progress_details(**current_progress)
+                    self._task_progress.update({
+                        "success_count": success_count,
+                        "failed_count": failure_count
+                    })
+                    progress_to_broadcast = self._task_progress.copy()
+                    progress_to_broadcast['task_name'] = f"{task_name}: {processed}/{total_tasks}"
+                    await broadcast_progress_details(**progress_to_broadcast)
 
         tasks = [asyncio.create_task(worker_wrapper(item, i)) for i, item in enumerate(items)]
         await asyncio.wait(tasks)
@@ -135,9 +143,7 @@ class TradingService:
 
         status_text = "部分成功" if failure_count > 0 else "全部成功"
         final_progress = self._task_progress.copy()
-        final_progress.update(
-            {"is_final": True, "task_name": f"{task_name} {status_text}", "success_count": success_count,
-             "failed_count": failure_count})
+        final_progress.update({"is_final": True, "task_name": f"{task_name} {status_text}"})
         await broadcast_progress_details(**final_progress)
         print(f"[RUN_LOOP] '{task_name}' loop finished. Success: {success_count}, Failure: {failure_count}")
         await log_message(f"[LOG] '{task_name}' 循环结束, 成功: {success_count}, 失败: {failure_count}", "info")
