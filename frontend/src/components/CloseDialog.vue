@@ -1,3 +1,4 @@
+<!-- 文件路径: frontend/src/components/CloseDialog.vue (最终正确版) -->
 <template>
   <v-dialog v-model="uiStore.showCloseDialog" max-width="400px" persistent>
     <v-card v-if="uiStore.closeTarget">
@@ -27,8 +28,8 @@
       </v-card-text>
       <v-card-actions>
         <v-spacer></v-spacer>
-        <v-btn color="blue-darken-1" variant="text" @click="uiStore.showCloseDialog = false">取消</v-btn>
-        <v-btn color="red-darken-1" variant="tonal" @click="executeClose" :disabled="closeRatio === 0" :loading="isLoading">
+        <v-btn color="blue-darken-1" variant="text" @click="closeDialog">取消</v-btn>
+        <v-btn color="red-darken-1" variant="tonal" @click="executeClose" :disabled="closeRatio === 0 || isLoading" :loading="isLoading">
           确认平仓 {{ closeRatio }}%
         </v-btn>
       </v-card-actions>
@@ -39,11 +40,9 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue';
 import { useUiStore } from '@/stores/uiStore';
-import { usePositionStore } from '@/stores/positionStore';
 import api from '@/services/api';
 
 const uiStore = useUiStore();
-const positionStore = usePositionStore();
 const closeRatio = ref(100);
 const isLoading = ref(false);
 
@@ -60,47 +59,29 @@ const dialogTitle = computed(() => {
   return '确认平仓';
 });
 
+const closeDialog = () => {
+  uiStore.showCloseDialog = false;
+  // 在关闭对话框时重置状态，以便下次打开是干净的
+  isLoading.value = false;
+  closeRatio.value = 100;
+};
+
 const executeClose = async () => {
   const target = uiStore.closeTarget;
   if (!target) return;
 
   isLoading.value = true;
-  uiStore.showCloseDialog = false;
-
   const ratio = closeRatio.value / 100;
 
-  if (target.type === 'single') {
-    if (Math.abs(ratio - 1.0) < 1e-9) { // 浮点数比较
-      positionStore.removePositions([target.position.full_symbol]);
-    } else {
-      positionStore.updatePositionContracts(target.position.full_symbol, ratio);
-    }
-  } else if (target.type === 'selected') {
-    const symbolsToClose = target.positions.map(p => p.full_symbol);
-    if (Math.abs(ratio - 1.0) < 1e-9) {
-      positionStore.removePositions(symbolsToClose);
-    } else {
-      symbolsToClose.forEach(s => positionStore.updatePositionContracts(s, ratio));
-    }
-  } else if (target.type === 'by_side') {
-    const positionsToClose = (target.side === 'long')
-      ? positionStore.longPositions
-      : (target.side === 'short' ? positionStore.shortPositions : positionStore.positions);
-
-    const symbolsToClose = positionsToClose.map(p => p.full_symbol);
-    if (Math.abs(ratio - 1.0) < 1e-9) {
-      positionStore.removePositions(symbolsToClose);
-    } else {
-      symbolsToClose.forEach(s => positionStore.updatePositionContracts(s, ratio));
-    }
-  }
+  // --- 核心修改：移除所有 positionStore.removePositions 和 positionStore.updatePositionContracts 调用 ---
+  // 这个函数现在只负责调用 API，不负责更新UI状态
 
   try {
     if (target.type === 'single') {
       const logMessage = `正在提交 ${target.position.full_symbol} 的平仓指令 (${closeRatio.value}%)...`;
       await postWithLog('/api/positions/close', { full_symbol: target.position.full_symbol, ratio }, logMessage);
     } else if (target.type === 'by_side') {
-      const sideText = dialogTitle.value;
+      const sideText = target.side === 'long' ? '多头' : (target.side === 'short' ? '空头' : '全部');
       const logMessage = `正在提交批量平仓 ${sideText} 的指令 (${closeRatio.value}%)...`;
       await postWithLog('/api/positions/close-by-side', { side: target.side, ratio }, logMessage);
     } else if (target.type === 'selected') {
@@ -108,9 +89,12 @@ const executeClose = async () => {
       const logMessage = `正在提交批量平仓 ${symbolsToClose.length} 个选中仓位的指令...`;
       await postWithLog('/api/positions/close-multiple', { full_symbols: symbolsToClose, ratio }, logMessage);
     }
+  } catch (error) {
+    // 错误已在 postWithLog 中记录，这里不需要额外处理
   } finally {
-    isLoading.value = false;
-    closeRatio.value = 100;
+    // 无论API调用成功还是失败，都关闭对话框。
+    // UI的更新将完全由后端的WebSocket消息驱动。
+    closeDialog();
   }
 };
 
@@ -121,6 +105,8 @@ const postWithLog = async (url: string, data: any, logMessage: string) => {
   } catch(e: any) {
     const errorMsg = e.response?.data?.detail || e.message;
     uiStore.logStore.addLog({ message: `操作失败: ${errorMsg}`, level: 'error', timestamp: new Date().toLocaleTimeString() });
+    // 向上抛出错误，这样 finally 块可以捕获到，同时能让调用者知道发生了错误
+    throw e;
   }
 }
 </script>
