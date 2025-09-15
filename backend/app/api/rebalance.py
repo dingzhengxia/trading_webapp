@@ -105,6 +105,7 @@ async def generate_rebalance_plan(
         exchange: ccxt.binanceusdm = Depends(get_exchange_dependency)
 ):
     try:
+        print("--- 📢 API HIT: /api/rebalance/plan ---")  # <-- 新增
         config = load_settings()
 
         positions_task = ex_async.fetch_positions_with_pnl_async(exchange, config.get('leverage', 1))
@@ -170,4 +171,5 @@ async def generate_rebalance_plan(
 
 @router.post("/execute")
 async def execute_rebalance_plan(plan: ExecutionPlanRequest):
+    print("--- 📢 API HIT: /api/rebalance/execute ---")  # <-- 新增
     return await trading_service.execute_rebalance_plan(plan)

@@ -1,4 +1,4 @@
-<!-- frontend/src/components/RebalanceDialog.vue (完整代码) -->
+<!-- frontend/src/components/RebalanceDialog.vue (最终完整版) -->
 <template>
   <v-dialog v-model="uiStore.showRebalanceDialog" max-width="600px" persistent>
     <v-card v-if="uiStore.rebalancePlan">
@@ -30,7 +30,7 @@
         <v-spacer></v-spacer>
         <v-btn color="blue-darken-1" variant="text" @click="close">取消</v-btn>
         <v-btn color="primary" variant="text" @click="applyList">应用列表到配置</v-btn>
-        <v-btn color="red-darken-1" variant="tonal" @click="executePlan">确认执行</v-btn>
+        <v-btn color="red-darken-1" variant="tonal" @click="executePlan" :disabled="uiStore.isRunning">确认执行</v-btn>
       </v-card-actions>
     </v-card>
   </v-dialog>
@@ -39,74 +39,52 @@
 <script setup lang="ts">
 import { useUiStore } from '@/stores/uiStore';
 import { useSettingsStore } from '@/stores/settingsStore';
-import api from '@/services/api';
+import apiClient from '@/services/api';
 
 const uiStore = useUiStore();
 const settingsStore = useSettingsStore();
 
-const close = () => {
-  uiStore.showRebalanceDialog = false;
-};
+const close = () => { uiStore.showRebalanceDialog = false; };
 
 const applyList = () => {
   if (!uiStore.rebalancePlan || !settingsStore.settings) return;
-
   const openSymbols = new Set(uiStore.rebalancePlan.positions_to_open.map(p => p.symbol));
-  const symbolsToKeep = new Set(
-    uiStore.rebalancePlan.positions_to_close
-      .filter(p => p.close_ratio_perc < 100)
-      .map(p => p.symbol)
-  );
+  const symbolsToKeep = new Set(uiStore.rebalancePlan.positions_to_close.filter(p => p.close_ratio_perc < 100).map(p => p.symbol));
   const newShortList = Array.from(new Set([...openSymbols, ...symbolsToKeep])).sort();
-
   settingsStore.settings.short_coin_list = newShortList;
-
-  uiStore.logStore.addLog({
-    message: `空头币种列表已更新为 ${newShortList.length} 个币种并自动保存。`,
-    level: 'success',
-    timestamp: new Date().toLocaleTimeString()
-  });
+  uiStore.logStore.addLog({ message: `空头币种列表已更新为 ${newShortList.length} 个币种并自动保存。`, level: 'success', timestamp: new Date().toLocaleTimeString() });
   close();
 };
 
 const executePlan = async () => {
-  if (!uiStore.rebalancePlan) return;
+  if (!uiStore.rebalancePlan || uiStore.isRunning) return;
 
   const executionOrders = [];
   for (const item of uiStore.rebalancePlan.positions_to_close) {
-    executionOrders.push({
-      symbol: item.symbol,
-      action: 'CLOSE',
-      side: 'buy',
-      close_ratio: item.close_ratio_perc / 100,
-    });
+    executionOrders.push({ symbol: item.symbol, action: 'CLOSE', side: 'buy', close_ratio: item.close_ratio_perc / 100 });
   }
   for (const item of uiStore.rebalancePlan.positions_to_open) {
-    executionOrders.push({
-      symbol: item.symbol,
-      action: 'OPEN',
-      side: 'sell',
-      value_to_trade: item.open_value,
-    });
+    executionOrders.push({ symbol: item.symbol, action: 'OPEN', side: 'sell', value_to_trade: item.open_value });
   }
 
-  // 立即关闭弹窗并更新UI
   close();
-  uiStore.setStatus("正在提交再平衡任务...", true);
+
+  const taskName = '执行再平衡';
+  const totalTasks = executionOrders.length;
+
+  uiStore.logStore.addLog({ message: `[前端] 正在准备提交 '${taskName}' 任务...`, level: 'info', timestamp: new Date().toLocaleTimeString() });
+  uiStore.setStatus(`正在提交: ${taskName}...`, true);
   uiStore.updateProgress({
-    success_count: 0,
-    failed_count: 0,
-    total: executionOrders.length,
-    task_name: '执行再平衡',
-    is_final: false
+    success_count: 0, failed_count: 0, total: totalTasks,
+    task_name: taskName, is_final: false
   });
 
-  // 在后台发送API请求
   try {
-    await api.post('/api/rebalance/execute', { orders: executionOrders });
+    const response = await apiClient.post('/api/rebalance/execute', { orders: executionOrders });
+    uiStore.logStore.addLog({ message: `[后端] ✅ 已确认接收任务: ${response.data.message}`, level: 'success', timestamp: new Date().toLocaleTimeString() });
   } catch (e: any) {
     const errorMsg = e.response?.data?.detail || e.message;
-    uiStore.logStore.addLog({ message: `提交再平衡计划失败: ${errorMsg}`, level: 'error', timestamp: new Date().toLocaleTimeString() });
+    uiStore.logStore.addLog({ message: `[后端] ❌ 提交再平衡计划失败: ${errorMsg}`, level: 'error', timestamp: new Date().toLocaleTimeString() });
     uiStore.setStatus("任务启动失败", false);
   }
 };
