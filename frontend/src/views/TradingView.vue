@@ -1,9 +1,11 @@
-<!-- frontend/src/views/TradingView.vue (最终按钮靠右版) -->
+<!-- frontend/src/views/TradingView.vue (最终完整版) -->
 <template>
+  <!-- 占位div，为悬浮的footer和手机底部导航留出空间 -->
   <div :style="{ paddingBottom: $vuetify.display.smAndDown ? '128px' : '80px' }">
     <v-container fluid>
       <v-row>
         <v-col cols="12">
+          <!-- 使用 v-model 将本页面的 activeTab 与子组件的 tab 状态双向绑定 -->
           <ControlPanel
             v-model="activeTab"
             @generate-rebalance-plan="handleGenerateRebalancePlan"
@@ -13,19 +15,22 @@
     </v-container>
   </div>
 
+  <!-- 固定在页面底部的悬浮操作栏 -->
   <v-footer
     style="position: fixed; bottom: 0; left: 0; right: 0; z-index: 1000; border-top: 1px solid rgba(255, 255, 255, 0.12);"
     class="pa-0"
-    :style="{ bottom: $vuetify.display.smAndDown ? '56px' : '0px' }"
+    :style="{
+      bottom: $vuetify.display.smAndDown ? '56px' : '0px',
+      left: $vuetify.display.mdAndUp ? ($vuetify.application.left + 'px') : '0px'
+    }"
   >
     <v-card flat tile class="d-flex align-center px-4 w-100" height="64px">
-      <!-- 核心修改：移除 v-spacer，让所有内容自然靠左，然后用一个 spacer 推到最右 -->
-      <v-spacer></v-spacer>
-
+      <!-- 根据 activeTab 动态显示不同的按钮组 -->
       <template v-if="activeTab === 'general'">
-        <v-btn color="info" variant="tonal" @click="handleSyncSlTp" :disabled="uiStore.isRunning" class="mr-3">
+        <v-btn color="info" variant="tonal" @click="handleSyncSlTp" :disabled="uiStore.isRunning">
           校准 SL/TP
         </v-btn>
+        <v-spacer></v-spacer>
         <v-btn
           color="success"
           variant="tonal"
@@ -39,7 +44,14 @@
       </template>
 
       <template v-if="activeTab === 'rebalance'">
-        <v-btn color="primary" variant="tonal" @click="onGenerateRebalancePlan" :disabled="uiStore.isRunning">
+        <v-spacer></v-spacer>
+        <v-btn
+          color="primary"
+          variant="tonal"
+          @click="onGenerateRebalancePlan"
+          :loading="isGeneratingPlan"
+          :disabled="uiStore.isRunning || isGeneratingPlan"
+        >
           生成再平衡计划
         </v-btn>
       </template>
@@ -61,6 +73,7 @@ const positionStore = usePositionStore();
 const settingsStore = useSettingsStore();
 
 const activeTab = ref('general');
+const isGeneratingPlan = ref(false);
 
 const fireAndForgetApiCall = (endpoint: string, payload: any, taskName: string, totalTasks: number = 1) => {
   if (uiStore.isRunning) {
@@ -69,9 +82,14 @@ const fireAndForgetApiCall = (endpoint: string, payload: any, taskName: string, 
   }
   const requestId = `req-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
   const payloadWithId = { ...payload, request_id: requestId };
+
   uiStore.setStatus(`正在提交: ${taskName}...`, true);
-  uiStore.updateProgress({ success_count: 0, failed_count: 0, total: totalTasks, task_name: taskName, is_final: false });
+  uiStore.updateProgress({
+    success_count: 0, failed_count: 0, total: totalTasks,
+    task_name: taskName, is_final: false
+  });
   uiStore.logStore.addLog({ message: `[前端] 已发送 '${taskName}' 启动指令 (ID: ${requestId})。`, level: 'info', timestamp: new Date().toLocaleTimeString() });
+
   apiClient.post(endpoint, payloadWithId)
     .then(response => { console.log('API call successful:', response.data.message); })
     .catch(error => {
@@ -111,8 +129,11 @@ const onGenerateRebalancePlan = () => {
 };
 
 const handleGenerateRebalancePlan = async (criteria: RebalanceCriteria) => {
-  if (uiStore.isRunning) return;
+  if (uiStore.isRunning || isGeneratingPlan.value) return;
+
+  isGeneratingPlan.value = true;
   uiStore.logStore.addLog({ message: '[前端] 正在生成再平衡计划...', level: 'info', timestamp: new Date().toLocaleTimeString() });
+
   try {
     const response = await apiClient.post('/api/rebalance/plan', criteria);
     const planData = response.data;
@@ -125,6 +146,8 @@ const handleGenerateRebalancePlan = async (criteria: RebalanceCriteria) => {
   } catch (error: any) {
      const errorMsg = error.response?.data?.detail || error.message;
     uiStore.logStore.addLog({ message: `[后端] ❌ 生成计划请求失败: ${errorMsg}`, level: 'error', timestamp: new Date().toLocaleTimeString() });
+  } finally {
+    isGeneratingPlan.value = false;
   }
 };
 

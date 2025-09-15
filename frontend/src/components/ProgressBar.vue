@@ -1,53 +1,62 @@
-<!-- frontend/src/components/ProgressBar.vue (最终修复版) -->
+<!-- frontend/src/components/ProgressBar.vue (最终优化版) -->
 <template>
   <v-footer v-if="uiStore.progress.show" app class="pa-0" style="z-index: 1008; border-top: 1px solid rgba(255, 255, 255, 0.12);">
-    <v-card flat tile class="d-flex align-center px-4 w-100" :color="cardColor" height="48px">
+    <v-card flat tile class="d-flex align-center px-2 px-sm-4 w-100" :color="cardColor" height="48px">
 
-        <!-- === 核心修改在这里 === -->
-        <!-- 左侧任务名现在是一个计算属性，负责拼接字符串 -->
-        <span class="text-caption font-weight-bold flex-shrink-0 mr-4 d-none d-sm-flex">
-          {{ progressTaskName }}
-        </span>
-        <!-- =================== -->
+      <!-- 左侧任务名 -->
+      <span class="text-caption font-weight-bold flex-shrink-0 mr-4 d-none d-md-flex">
+        {{ uiStore.progress.task_name }}
+      </span>
 
-        <v-progress-linear
-          :model-value="progressPercentage"
-          :color="progressColor"
-          :indeterminate="uiStore.isStopping"
-          height="20"
-          :striped="!uiStore.isStopping"
-          stream
-          class="flex-grow-1"
-        >
-          <strong v-if="!uiStore.isStopping" class="text-white">{{ Math.ceil(progressPercentage) }}%</strong>
-           <strong v-else class="text-white">正在停止...</strong>
-        </v-progress-linear>
+      <!-- 核心修改：将统计数字放在 v-progress-linear 的插槽中 -->
+      <v-progress-linear
+        :model-value="progressPercentage"
+        :color="progressColor"
+        :indeterminate="uiStore.isStopping"
+        height="25"
+        rounded
+        :striped="!uiStore.isStopping"
+        stream
+        class="flex-grow-1 font-weight-bold"
+      >
+        <template v-slot:default>
+          <div class="d-flex justify-space-between align-center w-100 px-2 text-white text-caption">
+            <!-- 左侧：任务名 (手机端) -->
+            <span class="d-md-none">{{ uiStore.progress.task_name }}</span>
+            <v-spacer class="d-md-none"></v-spacer>
 
-        <div class="d-flex flex-shrink-0 ml-4 align-center text-caption">
-          <v-chip size="x-small" color="green" label class="mr-1 mr-sm-2">
-            <v-icon start icon="mdi-check-circle"></v-icon>
-            {{ uiStore.progress.success_count }}
-          </v-chip>
-          <v-chip size="x-small" :color="uiStore.progress.failed_count > 0 ? 'red' : 'grey'" label class="mr-1 mr-sm-2">
-            <v-icon start icon="mdi-close-circle"></v-icon>
-            {{ uiStore.progress.failed_count }}
-          </v-chip>
-          <v-chip size="x-small" color="blue-grey" label class="d-none d-md-flex">
-             总数: {{ uiStore.progress.total }}
-          </v-chip>
-        </div>
+            <!-- 中间：进度百分比 -->
+            <span v-if="!uiStore.isStopping" class="mx-2">{{ Math.ceil(progressPercentage) }}%</span>
+            <span v-else class="mx-2">正在停止...</span>
 
-        <v-btn
-          color="white"
-          variant="text"
-          size="small"
-          @click="stopTrading"
-          :disabled="!uiStore.isRunning || uiStore.isStopping"
-          :loading="uiStore.isStopping"
-          class="flex-shrink-0 ml-2"
-        >
-          ⏹ 停止
-        </v-btn>
+            <!-- 右侧：成功/失败/总数 统计 -->
+            <v-spacer></v-spacer>
+            <div class="d-flex align-center">
+              <v-icon size="small" color="light-green-accent-3" class="mr-1">mdi-check-circle</v-icon>
+              <span>{{ uiStore.progress.success_count }}</span>
+              <span class="mx-1">/</span>
+              <v-icon size="small" :color="uiStore.progress.failed_count > 0 ? 'red-accent-2' : 'grey-lighten-1'" class="mr-1">mdi-close-circle</v-icon>
+              <span>{{ uiStore.progress.failed_count }}</span>
+              <span class="mx-1">/</span>
+              <v-icon size="small" color="grey-lighten-1" class="mr-1">mdi-gauge-full</v-icon>
+              <span>{{ uiStore.progress.total }}</span>
+            </div>
+          </div>
+        </template>
+      </v-progress-linear>
+
+      <!-- 停止按钮 -->
+      <v-btn
+        color="white"
+        variant="text"
+        size="small"
+        @click="stopTrading"
+        :disabled="!uiStore.isRunning || uiStore.isStopping"
+        :loading="uiStore.isStopping"
+        class="flex-shrink-0 ml-2"
+        icon="mdi-stop-circle-outline"
+      >
+      </v-btn>
 
     </v-card>
   </v-footer>
@@ -60,21 +69,6 @@ import api from '@/services/api';
 
 const uiStore = useUiStore();
 
-// --- 核心修改在这里 ---
-// 创建一个计算属性来生成用于显示的task_name
-const progressTaskName = computed(() => {
-  const p = uiStore.progress;
-  if (p.is_final) {
-    return p.task_name; // 最终状态下，直接显示后端传来的 "任务 xxx 全部成功"
-  }
-  const processed = p.success_count + p.failed_count;
-  // 避免在 total 为 0 时显示 NaN/Infinity
-  const total = p.total || 0;
-  return `${p.task_name}: ${processed}/${total}`;
-});
-// --- 修改结束 ---
-
-
 const progressPercentage = computed(() => {
   const total = uiStore.progress.total;
   if (total === 0) return 0;
@@ -84,8 +78,6 @@ const progressPercentage = computed(() => {
 
 const stopTrading = () => {
   uiStore.initiateStop();
-  uiStore.logStore.addLog({ message: "前端已发送停止指令，等待后端确认...", level: 'warning', timestamp: new Date().toLocaleTimeString() });
-
   api.post('/api/trading/stop').catch(e => {
     uiStore.logStore.addLog({ message: `发送停止指令失败: ${e.message}`, level: "error", timestamp: new Date().toLocaleTimeString() });
     uiStore.setStatus("停止失败", false);
