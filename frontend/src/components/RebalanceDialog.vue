@@ -1,3 +1,4 @@
+<!-- frontend/src/components/RebalanceDialog.vue (完整代码) -->
 <template>
   <v-dialog v-model="uiStore.showRebalanceDialog" max-width="600px" persistent>
     <v-card v-if="uiStore.rebalancePlan">
@@ -28,24 +29,20 @@
       <v-card-actions>
         <v-spacer></v-spacer>
         <v-btn color="blue-darken-1" variant="text" @click="close">取消</v-btn>
-
-        <v-btn color="primary" variant="text" @click="applyList">应用列表</v-btn>
-
-        <v-btn color="red-darken-1" variant="tonal" @click="executePlan" :loading="isExecuting">确认执行</v-btn>
+        <v-btn color="primary" variant="text" @click="applyList">应用列表到配置</v-btn>
+        <v-btn color="red-darken-1" variant="tonal" @click="executePlan">确认执行</v-btn>
       </v-card-actions>
     </v-card>
   </v-dialog>
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue';
 import { useUiStore } from '@/stores/uiStore';
 import { useSettingsStore } from '@/stores/settingsStore';
 import api from '@/services/api';
 
 const uiStore = useUiStore();
 const settingsStore = useSettingsStore();
-const isExecuting = ref(false);
 
 const close = () => {
   uiStore.showRebalanceDialog = false;
@@ -55,19 +52,17 @@ const applyList = () => {
   if (!uiStore.rebalancePlan || !settingsStore.settings) return;
 
   const openSymbols = new Set(uiStore.rebalancePlan.positions_to_open.map(p => p.symbol));
-
   const symbolsToKeep = new Set(
     uiStore.rebalancePlan.positions_to_close
       .filter(p => p.close_ratio_perc < 100)
       .map(p => p.symbol)
   );
+  const newShortList = Array.from(new Set([...openSymbols, ...symbolsToKeep])).sort();
 
-  const newShortList = new Set([...openSymbols, ...symbolsToKeep]);
-
-  settingsStore.settings.short_coin_list = Array.from(newShortList).sort();
+  settingsStore.settings.short_coin_list = newShortList;
 
   uiStore.logStore.addLog({
-    message: `空头币种列表已更新为 ${newShortList.size} 个币种并自动保存。`,
+    message: `空头币种列表已更新为 ${newShortList.length} 个币种并自动保存。`,
     level: 'success',
     timestamp: new Date().toLocaleTimeString()
   });
@@ -77,14 +72,6 @@ const applyList = () => {
 const executePlan = async () => {
   if (!uiStore.rebalancePlan) return;
 
-  isExecuting.value = true;
-
-  // --- 核心修复：立即关闭弹窗 ---
-  // 1. 先关闭弹窗
-  uiStore.showRebalanceDialog = false;
-  // --------------------------
-
-  // 2. 然后在后台发送请求和处理
   const executionOrders = [];
   for (const item of uiStore.rebalancePlan.positions_to_close) {
     executionOrders.push({
@@ -103,14 +90,24 @@ const executePlan = async () => {
     });
   }
 
+  // 立即关闭弹窗并更新UI
+  close();
+  uiStore.setStatus("正在提交再平衡任务...", true);
+  uiStore.updateProgress({
+    success_count: 0,
+    failed_count: 0,
+    total: executionOrders.length,
+    task_name: '执行再平衡',
+    is_final: false
+  });
+
+  // 在后台发送API请求
   try {
-    uiStore.logStore.addLog({ message: "正在提交再平衡执行计划...", level: 'info', timestamp: new Date().toLocaleTimeString() });
     await api.post('/api/rebalance/execute', { orders: executionOrders });
   } catch (e: any) {
     const errorMsg = e.response?.data?.detail || e.message;
-    uiStore.logStore.addLog({ message: `提交执行计划失败: ${errorMsg}`, level: 'error', timestamp: new Date().toLocaleTimeString() });
-  } finally {
-    isExecuting.value = false;
+    uiStore.logStore.addLog({ message: `提交再平衡计划失败: ${errorMsg}`, level: 'error', timestamp: new Date().toLocaleTimeString() });
+    uiStore.setStatus("任务启动失败", false);
   }
 };
 </script>

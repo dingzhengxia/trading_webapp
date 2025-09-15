@@ -13,6 +13,7 @@ export const useUiStore = defineStore('ui', () => {
   const logStore = useLogStore();
   const statusMessage = ref('准备就绪');
   const isRunning = ref(false);
+  const isStopping = ref(false); // 新增：停止状态锁
   const showLogDrawer = ref(false);
   const showRebalanceDialog = ref(false);
   const rebalancePlan = ref<RebalancePlan | null>(null);
@@ -32,6 +33,7 @@ export const useUiStore = defineStore('ui', () => {
   });
 
   const statusColor = computed(() => {
+    if (isStopping.value) return 'error';
     if (isRunning.value) return 'warning';
     if (statusMessage.value === '已断开') return 'error';
     return 'success';
@@ -41,23 +43,31 @@ export const useUiStore = defineStore('ui', () => {
     statusMessage.value = message;
     if (running !== undefined) isRunning.value = running;
 
-    if (running === false && progress.value.is_final) {
-      clearTimeout(progressResetTimer);
-      progressResetTimer = window.setTimeout(() => {
+    if (running === false) {
+      isStopping.value = false; // 解除停止状态锁
+
+      if (progress.value.is_final) {
+        clearTimeout(progressResetTimer);
+        progressResetTimer = window.setTimeout(() => {
+          progress.value.show = false;
+          progress.value.is_final = false;
+        }, 3000);
+      } else {
         progress.value.show = false;
-        progress.value.is_final = false; // 重置final状态
-      }, 3000);
-    } else if (running === false) {
-      // 如果任务不是正常结束（例如被用户停止），则立即隐藏
-      progress.value.show = false;
+      }
     }
   }
 
   function updateProgress(data: { success_count: number; failed_count: number; total: number; task_name: string; is_final: boolean }) {
-    // 核心修改：收到任何进度更新，立即清除隐藏计时器并强制显示
+    if (isStopping.value) return;
     clearTimeout(progressResetTimer);
-    // 将传入的数据与 show: true 合并，确保进度条始终可见
     progress.value = { ...data, show: true };
+  }
+
+  function initiateStop() {
+    if (!isRunning.value) return;
+    isStopping.value = true;
+    statusMessage.value = "正在停止...";
   }
 
   function toggleLogDrawer() { showLogDrawer.value = !showLogDrawer.value; }
@@ -67,10 +77,10 @@ export const useUiStore = defineStore('ui', () => {
   }
 
   return {
-    statusMessage, isRunning, showLogDrawer, showRebalanceDialog,
+    statusMessage, isRunning, isStopping, showLogDrawer, showRebalanceDialog,
     statusColor, logStore, rebalancePlan, showCloseDialog, closeTarget,
     showWeightDialog, progress,
     setStatus, toggleLogDrawer, openCloseDialog,
-    updateProgress
+    updateProgress, initiateStop
   };
 });
