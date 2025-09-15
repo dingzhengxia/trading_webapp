@@ -6,7 +6,6 @@ import asyncio
 import os
 
 from .api import positions, trading, rebalance, settings
-from .core.exchange_manager import close_exchange
 from .core.websocket_manager import manager
 from .core.trading_service import trading_service
 
