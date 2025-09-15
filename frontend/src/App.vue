@@ -1,4 +1,4 @@
-<!-- frontend/src/App.vue (最终完整版) -->
+<!-- frontend/src/App.vue (完整代码) -->
 <template>
   <v-app>
     <v-app-bar app density="compact">
@@ -73,6 +73,7 @@ const drawer = ref(mdAndUp.value);
 onMounted(() => {
   settingsStore.fetchSettings();
   websocketService.connect();
+  uiStore.checkInitialStatus();
 });
 </script>
 

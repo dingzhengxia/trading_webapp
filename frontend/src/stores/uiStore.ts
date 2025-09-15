@@ -3,6 +3,7 @@ import { defineStore } from 'pinia';
 import { computed, ref } from 'vue';
 import { useLogStore } from './logStore';
 import type { RebalancePlan, Position } from '@/models/types';
+import api from '@/services/api';
 
 export type CloseTarget =
   | { type: 'single'; position: Position }
@@ -13,7 +14,7 @@ export const useUiStore = defineStore('ui', () => {
   const logStore = useLogStore();
   const statusMessage = ref('准备就绪');
   const isRunning = ref(false);
-  const isStopping = ref(false); // 新增：停止状态锁
+  const isStopping = ref(false);
   const showLogDrawer = ref(false);
   const showRebalanceDialog = ref(false);
   const rebalancePlan = ref<RebalancePlan | null>(null);
@@ -24,12 +25,8 @@ export const useUiStore = defineStore('ui', () => {
   let progressResetTimer: number;
 
   const progress = ref({
-    success_count: 0,
-    failed_count: 0,
-    total: 0,
-    task_name: '',
-    show: false,
-    is_final: false
+    success_count: 0, failed_count: 0, total: 0,
+    task_name: '', show: false, is_final: false
   });
 
   const statusColor = computed(() => {
@@ -44,8 +41,7 @@ export const useUiStore = defineStore('ui', () => {
     if (running !== undefined) isRunning.value = running;
 
     if (running === false) {
-      isStopping.value = false; // 解除停止状态锁
-
+      isStopping.value = false;
       if (progress.value.is_final) {
         clearTimeout(progressResetTimer);
         progressResetTimer = window.setTimeout(() => {
@@ -70,6 +66,20 @@ export const useUiStore = defineStore('ui', () => {
     statusMessage.value = "正在停止...";
   }
 
+  async function checkInitialStatus() {
+    try {
+      const response = await api.get('/api/status');
+      const data = response.data;
+      if (data.is_running) {
+        setStatus(`正在执行: ${data.task_name}...`, true);
+        updateProgress({
+            success_count: 0, failed_count: 0, total: 1,
+            task_name: data.task_name, is_final: false
+        });
+      }
+    } catch (error) { console.error("检查初始状态失败:", error); }
+  }
+
   function toggleLogDrawer() { showLogDrawer.value = !showLogDrawer.value; }
   function openCloseDialog(target: CloseTarget) {
     closeTarget.value = target;
@@ -81,6 +91,6 @@ export const useUiStore = defineStore('ui', () => {
     statusColor, logStore, rebalancePlan, showCloseDialog, closeTarget,
     showWeightDialog, progress,
     setStatus, toggleLogDrawer, openCloseDialog,
-    updateProgress, initiateStop
+    updateProgress, initiateStop, checkInitialStatus
   };
 });
