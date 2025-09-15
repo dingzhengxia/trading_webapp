@@ -1,4 +1,4 @@
-<!-- frontend/src/App.vue (完整代码) -->
+<!-- frontend/src/App.vue (最终完整版) -->
 <template>
   <v-app>
     <v-app-bar app density="compact">
@@ -48,7 +48,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue';
+import { onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { useDisplay } from 'vuetify';
 import { useUiStore } from '@/stores/uiStore';
@@ -62,7 +62,7 @@ import WeightConfigDialog from '@/components/WeightConfigDialog.vue';
 import ProgressBar from '@/components/ProgressBar.vue';
 
 const router = useRouter();
-const routes = router.getRoutes().filter(r => r.meta.title && r.meta.icon);
+const routes = router.getRoutes().filter(r => r.meta && r.meta.title && r.meta.icon);
 
 const uiStore = useUiStore();
 const settingsStore = useSettingsStore();
@@ -70,10 +70,27 @@ const { mdAndUp } = useDisplay();
 
 const drawer = ref(mdAndUp.value);
 
-onMounted(() => {
-  settingsStore.fetchSettings();
-  websocketService.connect();
-  uiStore.checkInitialStatus();
+onMounted(async () => {
+  try {
+    // 步骤 1: 获取应用的基础配置
+    await settingsStore.fetchSettings();
+
+    // 步骤 2: 检查并恢复持久化的任务状态
+    const isTaskRunningInitially = await uiStore.checkInitialStatus();
+
+    // 步骤 3: 在所有初始状态都已确定后，再连接WebSocket
+    websocketService.connect();
+
+    // 步骤 4: 如果恢复时发现有任务在运行，主动获取一次最新的仓位数据
+    if (isTaskRunningInitially) {
+      // 动态导入以避免循环依赖
+      const { usePositionStore } = await import('@/stores/positionStore');
+      usePositionStore().fetchPositions();
+    }
+  } catch (error) {
+    console.error("应用初始化失败:", error);
+    uiStore.setStatus("应用初始化失败", false);
+  }
 });
 </script>
 
