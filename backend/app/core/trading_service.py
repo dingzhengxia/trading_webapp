@@ -1,4 +1,4 @@
-# backend/app/core/trading_service.py (最终完整版)
+# backend/app/core/trading_service.py (最终修复版)
 import asyncio
 from fastapi import HTTPException
 from typing import Dict, Any, List, Tuple, Callable, Awaitable
@@ -20,6 +20,7 @@ class TradingService:
         self._current_task_name: str = ""
         self._stop_event = asyncio.Event()
         self._task_progress: Dict[str, Any] = {}
+        self._active_workers: set[asyncio.Task] = set()
 
         self.CONCURRENT_OPEN_TASKS = 5
         self.CONCURRENT_CLOSE_TASKS = 10
@@ -28,7 +29,6 @@ class TradingService:
         return self._is_running
 
     def get_current_status(self) -> Dict[str, Any]:
-        """返回当前服务的运行状态和进度"""
         if self._is_running:
             return {"is_running": True, "progress": self._task_progress}
         return {"is_running": False}
@@ -39,7 +39,7 @@ class TradingService:
         try:
             await log_message(f"--- 开始执行任务: {task_name} ---", "info")
             await task_coro
-        except InterruptedError:
+        except (InterruptedError, asyncio.CancelledError):
             await log_message(f"--- ⚠️ 任务 '{task_name}' 已被用户停止 ---", "warning")
         except Exception as e:
             await log_message(f"--- ❌ 任务 '{task_name}' 执行失败: {e} ---", "error")
@@ -48,7 +48,22 @@ class TradingService:
             self._current_task = None
             self._current_task_name = ""
             self._task_progress = {}
+            self._active_workers.clear()
             await update_status(f"'{task_name}' 已结束", is_running=False)
+
+    async def stop_trading(self):
+        if not self._is_running: return {"message": "No active task."}
+        await log_message("收到停止信号，正在立即中断所有子任务...", "warning")
+        self._stop_event.set()
+
+        # 双保险：在设置事件后，也尝试取消任务
+        for worker in self._active_workers:
+            if not worker.done():
+                worker.cancel()
+        if self._current_task and not self._current_task.done():
+            self._current_task.cancel()
+
+        return {"message": "Stop signal sent, task cancellation initiated."}
 
     async def _run_task_loop(self, items: List[Any], worker_func: Callable, concurrency: int, task_name: str):
         total_tasks = len(items)
@@ -58,11 +73,11 @@ class TradingService:
 
         if not items:
             await log_message(f"任务 '{task_name}' 列表为空。", "info")
-            await broadcast_progress_details(0, 0, 0, "任务列表为空", is_final=True)
+            await broadcast_progress_details(success_count=0, failed_count=0, total=0, task_name="任务列表为空",
+                                             is_final=True)
             return
 
         semaphore = asyncio.Semaphore(concurrency)
-        tasks = []
 
         async def worker_wrapper(item):
             nonlocal success_count, failure_count
@@ -72,6 +87,8 @@ class TradingService:
                 is_success = False
                 try:
                     is_success = await worker_func(item)
+                except asyncio.CancelledError:
+                    await log_message("一个子任务被强制取消。", "warning")
                 except Exception as e:
                     await log_message(f"执行子任务时发生意外错误: {e}", "error")
                 finally:
@@ -80,12 +97,20 @@ class TradingService:
                     else:
                         failure_count += 1
                     processed = success_count + failure_count
-                    self._task_progress.update({"success_count": success_count, "failed_count": failure_count})
-                    await broadcast_progress_details(**self._task_progress,
-                                                     task_name=f"{task_name}: {processed}/{total_tasks}")
 
-        tasks = [asyncio.create_task(worker_wrapper(item)) for item in items]
-        await asyncio.wait(tasks)
+                    # --- 核心修改在这里 ---
+                    # 先更新字典中的 task_name，然后再解包
+                    current_progress = self._task_progress.copy()
+                    current_progress.update({
+                        "success_count": success_count,
+                        "failed_count": failure_count,
+                        "task_name": f"{task_name}: {processed}/{total_tasks}"
+                    })
+                    await broadcast_progress_details(**current_progress)
+                    # --- 修改结束 ---
+
+        self._active_workers = {asyncio.create_task(worker_wrapper(item)) for item in items}
+        await asyncio.gather(*self._active_workers)
 
         if self._stop_event.is_set(): raise InterruptedError()
 
@@ -105,12 +130,6 @@ class TradingService:
         )
         return {"message": "自动开仓任务已开始执行。"}
 
-    async def stop_trading(self):
-        if not self._is_running: return {"message": "No active task."}
-        await log_message("收到停止信号，任务将在当前子项完成后停止。", "warning")
-        self._stop_event.set()
-        return {"message": "Stop event set. Task will terminate shortly."}
-
     async def _trading_loop_task(self, config: Dict[str, Any]):
         long_plan, short_plan = calculate_trade_plan(config, config.get('long_custom_weights', {}))
         order_plan = [item for item in (
@@ -122,8 +141,7 @@ class TradingService:
                       )]
 
         async def worker(plan_item):
-            async with get_exchange_for_task() as exchange:
-                return await process_order_with_sl_tp_async(exchange, plan_item, config, log_message, self._stop_event)
+            return await process_order_with_sl_tp_async(config, log_message, self._stop_event, **plan_item)
 
         await self._run_task_loop(order_plan, worker, self.CONCURRENT_OPEN_TASKS, "自动开仓")
 
@@ -141,12 +159,11 @@ class TradingService:
         async def worker(task_item):
             if task_type == 'CLOSE_ORDER':
                 full_symbol, ratio = task_item
-                async with get_exchange_for_task() as exchange:
-                    is_success = await close_position_async(exchange, full_symbol, ratio, log_message, self._stop_event)
-                    if is_success:
-                        await ws_manager.broadcast(
-                            {"type": "position_closed", "payload": {"full_symbol": full_symbol, "ratio": ratio}})
-                    return is_success
+                is_success = await close_position_async(config, log_message, self._stop_event, full_symbol, ratio)
+                if is_success:
+                    await ws_manager.broadcast(
+                        {"type": "position_closed", "payload": {"full_symbol": full_symbol, "ratio": ratio}})
+                return is_success
             return False
 
         await self._run_task_loop(tasks_data, worker, self.CONCURRENT_CLOSE_TASKS, task_name)
@@ -162,16 +179,7 @@ class TradingService:
 
     async def _sync_sltp_task(self, settings: dict):
         task_name = "同步SL/TP"
-        # --- 新增日志 ---
-        await log_message(f"'{task_name}' 任务后台线程已启动，正在获取交易所连接...", "info")
-        # -----------------
-
-        await update_status(f"正在执行: {task_name}...", is_running=True)
-
         async with get_exchange_for_task() as exchange:
-            # --- 新增日志 ---
-            await log_message("交易所连接成功，正在获取持仓...", "info")
-            # -----------------
             positions = await fetch_positions_with_pnl_async(exchange, settings.get('leverage', 1))
 
             async def worker(pos):
@@ -199,20 +207,16 @@ class TradingService:
         async def worker(order_item):
             if self._stop_event.is_set(): return False
             if order_item.action == 'CLOSE':
-                async with get_exchange_for_task() as exchange:
-                    is_success = await close_position_async(exchange, order_item.symbol, order_item.close_ratio,
-                                                            log_message, self._stop_event)
-                    if is_success:
-                        await ws_manager.broadcast({"type": "position_closed",
-                                                    "payload": {"full_symbol": order_item.symbol,
-                                                                "ratio": order_item.close_ratio}})
-                    return is_success
+                is_success = await close_position_async(config, log_message, self._stop_event, order_item.symbol,
+                                                        order_item.close_ratio)
+                if is_success:
+                    await ws_manager.broadcast({"type": "position_closed", "payload": {"full_symbol": order_item.symbol,
+                                                                                       "ratio": order_item.close_ratio}})
+                return is_success
             elif order_item.action == 'OPEN':
-                order_plan_item = {'coin': order_item.symbol.split('/')[0], 'value': order_item.value_to_trade,
-                                   'side': order_item.side}
-                async with get_exchange_for_task() as task_exchange:
-                    return await process_order_with_sl_tp_async(task_exchange, order_plan_item, config, log_message,
-                                                                self._stop_event)
+                return await process_order_with_sl_tp_async(config, log_message, self._stop_event,
+                                                            coin=order_item.symbol.split('/')[0],
+                                                            value=order_item.value_to_trade, side=order_item.side)
             return False
 
         await self._run_task_loop(plan.orders, worker, self.CONCURRENT_OPEN_TASKS, task_name)
