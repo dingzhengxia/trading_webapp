@@ -1,4 +1,4 @@
-// frontend/src/stores/uiStore.ts (完整代码)
+// frontend/src/stores/uiStore.ts (最终完整版)
 import { defineStore } from 'pinia';
 import { computed, ref } from 'vue';
 import { useLogStore } from './logStore';
@@ -66,18 +66,23 @@ export const useUiStore = defineStore('ui', () => {
     statusMessage.value = "正在停止...";
   }
 
-  async function checkInitialStatus() {
+  async function checkInitialStatus(): Promise<boolean> {
     try {
       const response = await api.get('/api/status');
-      const data = response.data;
-      if (data.is_running) {
-        setStatus(`正在执行: ${data.task_name}...`, true);
+      const { is_running, progress: progressData } = response.data;
+      if (is_running && progressData) {
+        setStatus(`正在执行: ${progressData.task_name}...`, true);
         updateProgress({
-            success_count: 0, failed_count: 0, total: 1,
-            task_name: data.task_name, is_final: false
+            success_count: progressData.success_count || 0,
+            failed_count: progressData.failed_count || 0,
+            total: progressData.total || 1,
+            task_name: progressData.task_name,
+            is_final: false
         });
+        return true;
       }
     } catch (error) { console.error("检查初始状态失败:", error); }
+    return false;
   }
 
   function toggleLogDrawer() { showLogDrawer.value = !showLogDrawer.value; }

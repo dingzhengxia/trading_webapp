@@ -2,27 +2,12 @@
 <template>
   <v-dialog v-model="uiStore.showCloseDialog" max-width="400px" persistent>
     <v-card v-if="uiStore.closeTarget">
-      <v-card-title class="text-h5">
-        {{ dialogTitle }}
-      </v-card-title>
+      <v-card-title class="text-h5">{{ dialogTitle }}</v-card-title>
       <v-card-text>
         <p>请选择要平仓的仓位比例:</p>
-        <v-slider
-          v-model="closeRatio"
-          :step="1"
-          thumb-label="always"
-          class="my-4"
-        >
+        <v-slider v-model="closeRatio" :step="1" thumb-label="always" class="my-4">
           <template v-slot:append>
-            <v-text-field
-              v-model="closeRatio"
-              type="number"
-              style="width: 80px"
-              density="compact"
-              hide-details
-              variant="outlined"
-              suffix="%"
-            ></v-text-field>
+            <v-text-field v-model="closeRatio" type="number" style="width: 80px" density="compact" hide-details variant="outlined" suffix="%"></v-text-field>
           </template>
         </v-slider>
       </v-card-text>
@@ -41,7 +26,7 @@
 import { ref, computed } from 'vue';
 import { useUiStore } from '@/stores/uiStore';
 import { usePositionStore } from '@/stores/positionStore';
-import api from '@/services/api';
+import apiClient from '@/services/api';
 
 const uiStore = useUiStore();
 const positionStore = usePositionStore();
@@ -70,24 +55,25 @@ const executeClose = async () => {
   if (!target || uiStore.isRunning) return;
 
   const ratio = closeRatio.value / 100;
-  let url: string = '';
+  let endpoint: string = '';
   let payload: any = {};
   let taskName: string = '';
   let totalTasks: number = 0;
 
   if (target.type === 'single') {
-    url = '/api/positions/close';
+    endpoint = '/api/positions/close';
     payload = { full_symbol: target.position.full_symbol, ratio };
     taskName = `平仓 ${target.position.symbol}`;
     totalTasks = 1;
   } else if (target.type === 'by_side') {
-    url = '/api/positions/close-by-side';
+    endpoint = '/api/positions/close-by-side';
     payload = { side: target.side, ratio };
     taskName = `批量平仓-${target.side}`;
-    // 前端无法精确知道持仓数量，先设为1，后端会用精确值覆盖
-    totalTasks = 1;
+    if(target.side === 'long') totalTasks = positionStore.longPositions.length;
+    else if(target.side === 'short') totalTasks = positionStore.shortPositions.length;
+    else totalTasks = positionStore.positions.length;
   } else if (target.type === 'selected') {
-    url = '/api/positions/close-multiple';
+    endpoint = '/api/positions/close-multiple';
     const symbols = target.positions.map(p => p.full_symbol);
     payload = { full_symbols: symbols, ratio };
     taskName = `平掉选中`;
@@ -97,16 +83,16 @@ const executeClose = async () => {
   // 1. 立即关闭弹窗
   closeDialog();
 
-  // 2. 立即更新UI状态
+  // 2. 使用统一的API调用逻辑
   uiStore.setStatus( `正在提交: ${taskName}...`, true);
   uiStore.updateProgress({
     success_count: 0, failed_count: 0, total: totalTasks,
     task_name: taskName, is_final: false
   });
 
-  // 3. 后台发送API请求
   try {
-    await api.post(url, payload);
+    const response = await apiClient.post(endpoint, payload);
+    uiStore.logStore.addLog({ message: response.data.message || `${taskName} 已成功开始执行。`, level: 'info', timestamp: new Date().toLocaleTimeString() });
   } catch (e: any) {
     const errorMsg = e.response?.data?.detail || e.message;
     uiStore.logStore.addLog({ message: `任务启动失败: ${errorMsg}`, level: 'error', timestamp: new Date().toLocaleTimeString() });
