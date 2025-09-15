@@ -7,7 +7,7 @@ from ..config.config import load_settings
 # --- 配置 ---
 settings = load_settings()
 # 从 user_settings.json 中读取预设的访问密钥
-APP_ACCESS_KEY = settings.get("app_access_key", "qq")
+APP_ACCESS_KEY = settings.get("app_access_key", "dP3hF0dE6bJ3gA1")
 
 # 定义请求头中期望的密钥名称，例如 'X-API-KEY'
 api_key_header = APIKeyHeader(name="X-API-KEY", auto_error=False)
