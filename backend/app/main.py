@@ -56,4 +56,19 @@ else:
         CORSMiddleware,
         allow_origins=["*"],
         allow_credentials=True,
-        allow_methods=[
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+
+# --- 核心修改：移除整个 startup_event ---
+# @app.on_event("startup")
+# async def startup_event():
+#     # 这部分代码已被移除，因为它调用的 start_worker 不再存在
+#     asyncio.create_task(trading_service.start_worker())
+# --- 修改结束 ---
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    pass
