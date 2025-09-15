@@ -35,11 +35,18 @@ class TradingService:
         await log_message(f"交易任务处理器 #{worker_id} 已启动...", "info")
         while True:
             try:
-                task_type, data, config_dict = await TRADE_TASK_QUEUE.get()
-
                 if self.stop_event.is_set():
-                    TRADE_TASK_QUEUE.task_done()
+                    # 如果队列中还有任务，我们需要“消费”掉它以让 join() 结束
+                    if not TRADE_TASK_QUEUE.empty():
+                        try:
+                            TRADE_TASK_QUEUE.get_nowait()
+                            TRADE_TASK_QUEUE.task_done()
+                        except asyncio.QueueEmpty:
+                            pass  # 忽略并发清空时可能引发的错误
+                    await asyncio.sleep(0.1)
                     continue
+
+                task_type, data, config_dict = await TRADE_TASK_QUEUE.get()
 
                 async with self.is_running_lock:
                     if self.current_task_info.get('total', 0) > 0:
@@ -87,7 +94,6 @@ class TradingService:
             await log_message(f"{task_name}任务列表为空。", "info")
             return
 
-        # 记录本批次涉及的交易对
         self.active_symbols_in_batch.clear()
         for task_data in tasks:
             if task_type == 'SINGLE_ORDER':
@@ -166,7 +172,7 @@ class TradingService:
             self.is_running = False
             await update_status("任务已停止", is_running=False)
 
-        return {"message": "停止信号已发送，清理任务已在后台启动。"}
+        return {"message": "停止信号已发送"}
 
     async def _cleanup_exchange_orders(self):
         if not self.active_symbols_in_batch:

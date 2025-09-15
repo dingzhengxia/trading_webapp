@@ -4,7 +4,7 @@ import ccxt.async_support as ccxt
 from typing import List  # <-- 核心修复：导入 List 类型
 from ..config import i18n
 from ..models.schemas import Position
-from .exchange_logic_async import resolve_full_symbol
+from .utils import resolve_full_symbol
 
 
 async def _cancel_sl_tp_orders_async(exchange: ccxt.binanceusdm, symbol: str, async_logger):

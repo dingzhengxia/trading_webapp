@@ -3,9 +3,11 @@ import datetime
 import ccxt.async_support as ccxt
 from typing import List, Optional, Dict
 
+from .utils import resolve_full_symbol
 from ..models.schemas import Position
 from ..config.config import load_settings, STABLECOIN_PREFERENCE
 from ..config import i18n
+from .sl_tp_logic_async import _cancel_sl_tp_orders_async
 
 
 class RetriableOrderError(Exception): pass
@@ -41,22 +43,6 @@ async def initialize_exchange_async(api_key: str, api_secret: str, use_testnet: 
 
     await exchange.load_markets()
     return exchange
-
-
-def resolve_full_symbol(exchange: ccxt.binanceusdm, base_coin: str) -> Optional[str]:
-    base_upper = base_coin.upper()
-    quote_preferences = STABLECOIN_PREFERENCE
-
-    for quote in quote_preferences:
-        simple_symbol = f"{base_upper}/{quote}"
-        if simple_symbol in exchange.markets:
-            return exchange.markets[simple_symbol]['symbol']
-
-        suffixed_symbol = f"{simple_symbol}:{quote}"
-        if suffixed_symbol in exchange.markets:
-            return exchange.markets[suffixed_symbol]['symbol']
-
-    return None
 
 
 async def fetch_positions_with_pnl_async(exchange: ccxt.binanceusdm, leverage: int) -> List[Position]:
@@ -117,9 +103,6 @@ async def fetch_positions_with_pnl_async(exchange: ccxt.binanceusdm, leverage: i
 
 
 async def close_position_async(exchange: ccxt.binanceusdm, full_symbol_to_close: str, ratio: float, async_logger):
-    # --- 核心修复：在函数内部进行导入 ---
-    from .sl_tp_logic_async import _cancel_sl_tp_orders_async
-    # ------------------------------------
     base_coin = full_symbol_to_close.split('/')[0]
     await async_logger(f"准备为 {full_symbol_to_close} 执行平仓（Maker限价单），比例 {ratio * 100:.1f}%...")
 
@@ -194,8 +177,7 @@ async def _execute_maker_order_with_retry_async(
     order_type_log = "开仓" if not params.get('reduceOnly') else "平仓"
 
     for attempt in range(retries + 1):
-        if stop_event.is_set():
-            raise InterruptedError(f"{order_type_log} 操作被用户取消。")
+        if stop_event.is_set(): raise InterruptedError(f"{order_type_log} 操作在开始前被取消。")
 
         try:
             if attempt > 0:
@@ -233,8 +215,16 @@ async def _execute_maker_order_with_retry_async(
             start_time = asyncio.get_event_loop().time()
             while asyncio.get_event_loop().time() - start_time < timeout:
                 if stop_event.is_set():
-                    await exchange.cancel_order(order_id, symbol)
-                    raise InterruptedError("操作被用户取消。")
+                    try:
+                        await async_logger(f"收到停止信号，正在尝试取消订单 {order_id}...")
+                        await exchange.cancel_order(order_id, symbol)
+                        await async_logger(f"✅ 订单 {order_id} 已成功取消。", "success")
+                    except ccxt.OrderNotFound:
+                        await async_logger(f"订单 {order_id} 已不存在（可能已成交或被取消），无需再次取消。")
+                    except Exception as e:
+                        await async_logger(f"⚠️ 尝试取消订单 {order_id} 时出错: {e}", "warning")
+                    finally:
+                        raise InterruptedError("操作被用户取消。")
 
                 try:
                     order_status = await exchange.fetch_order(order_id, symbol)
@@ -252,6 +242,8 @@ async def _execute_maker_order_with_retry_async(
             await exchange.cancel_order(order_id, symbol)
             raise RetriableOrderError(f"订单 {order_id} 在 {timeout}s 内未成交。")
 
+        except InterruptedError as e:
+            raise e
         except (ccxt.RequestTimeout, ccxt.DDoSProtection, ccxt.ExchangeNotAvailable, ccxt.OrderImmediatelyFillable,
                 ccxt.OrderNotFillable, RetriableOrderError) as e:
             await async_logger(f"尝试失败: 可重试错误 ({type(e).__name__}): {e}", "warning")
@@ -309,7 +301,7 @@ async def process_order_with_sl_tp_async(exchange: ccxt.binanceusdm, plan: dict,
     if not final_pos:
         raise Exception("下单成功后，仍无法获取最终仓位信息。")
 
-    from ..logic.sl_tp_logic_async import set_tp_sl_for_position_async
+    from .sl_tp_logic_async import set_tp_sl_for_position_async
     await set_tp_sl_for_position_async(exchange, final_pos, config, async_logger)
 
     await async_logger(f"✅ {base_coin} 订单流程完全成功！", "success")

@@ -2,62 +2,59 @@ import json
 import os
 from pathlib import Path
 
-# --- 核心修复：使用绝对路径 ---
-# 检查是否在 Docker 容器中
+# --- 核心修复：统一路径解析 ---
+# 无论在本地还是Docker，都从项目根目录寻找配置文件
+# 在 Docker 中, 我们将挂载配置文件到 /app 目录
+# 在本地, 我们向上追溯到项目根目录
 if os.environ.get("IS_DOCKER"):
-    # 在 Docker 容器内，我们确切地知道配置文件就在 /app/backend/ 目录下
-    _CONFIG_BASE_DIR = Path('/app/backend')
+    _PROJECT_ROOT = Path('/app')
 else:
-    # 在本地开发时，我们假设配置文件与 backend 文件夹同级（在项目根目录）
     # Path(__file__) -> .../backend/app/config/config.py
     # .parent.parent.parent -> .../backend/
     # .parent -> .../trading_webapp/ (项目根目录)
-    _CONFIG_BASE_DIR = Path(__file__).resolve().parent.parent.parent.parent
+    _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 
-USER_SETTINGS_FILE = _CONFIG_BASE_DIR / 'user_settings.json'
-COIN_LISTS_FILE = _CONFIG_BASE_DIR / 'coin_lists.json'
+USER_SETTINGS_FILE = _PROJECT_ROOT / 'user_settings.json'
+COIN_LISTS_FILE = _PROJECT_ROOT / 'coin_lists.json'
 # --- 修复结束 ---
 
 STABLECOIN_PREFERENCE = ['USDC', 'USDT']
 
 DEFAULT_CONFIG = {
     'api_key': '', 'api_secret': '', 'use_testnet': True,
-
+    'app_access_key': 'CHANGE_THIS_IN_USER_SETTINGS.JSON',
     'enable_long_trades': True,
     'enable_short_trades': True,
-
-    'total_long_position_value': 1000.0, 'total_short_position_value': 500.0,
+    'total_long_position_value': 1000.0,
+    'total_short_position_value': 500.0,
     'leverage': 20,
-
-    'enable_long_sl_tp': True, 'long_stop_loss_percentage': 50.0, 'long_take_profit_percentage': 100.0,
-    'enable_short_sl_tp': True, 'short_stop_loss_percentage': 80.0, 'short_take_profit_percentage': 150.0,
-
+    'enable_long_sl_tp': True,
+    'long_stop_loss_percentage': 50.0,
+    'long_take_profit_percentage': 100.0,
+    'enable_short_sl_tp': True,
+    'short_stop_loss_percentage': 80.0,
+    'short_take_profit_percentage': 150.0,
     'long_coin_list': ["BTC", "ETH"],
     'short_coin_list': ["SOL", "AVAX"],
     'long_custom_weights': {},
-
     'open_order_fill_timeout_seconds': 120,
     'open_maker_retries': 5,
     'close_order_fill_timeout_seconds': 12,
     'close_maker_retries': 3,
-
     'enable_proxy': False,
     'proxy_url': 'http://127.0.0.1:7890',
-
     'rebalance_method': 'multi_factor_weakest',
     'rebalance_top_n': 50,
     'rebalance_min_volume_usd': 20000000.0,
     'rebalance_abs_momentum_days': 30,
     'rebalance_rel_strength_days': 60,
     'rebalance_foam_days': 1,
-
     'rebalance_short_ratio_max': 0.70,
     'rebalance_short_ratio_min': 0.35
 }
 
 
 def load_coin_pools():
-    """加载多头和空头的备选币种池"""
     try:
         if not COIN_LISTS_FILE.exists():
             print(f"严重警告: 核心配置文件 {COIN_LISTS_FILE} 未找到！将使用空列表。")
@@ -76,7 +73,6 @@ AVAILABLE_LONG_COINS, AVAILABLE_SHORT_COINS = load_coin_pools()
 
 
 def load_settings():
-    """加载用户设置，如果文件不存在或无效，则使用默认值"""
     config = DEFAULT_CONFIG.copy()
     if not USER_SETTINGS_FILE.exists():
         print(f"用户配置文件 {USER_SETTINGS_FILE} 不存在，将使用默认配置。")
@@ -94,7 +90,6 @@ def load_settings():
 
 
 def save_settings(current_config):
-    """保存当前配置到 user_settings.json"""
     try:
         with open(USER_SETTINGS_FILE, 'w') as f:
             settings_to_save = {key: current_config.get(key) for key in DEFAULT_CONFIG}

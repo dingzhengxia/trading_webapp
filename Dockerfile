@@ -1,19 +1,14 @@
-# Dockerfile (Final Multi-Stage Version)
+# Dockerfile
 
 # =================================================================
-# STAGE 1: Frontend Builder
+# STAGE 1: Build Frontend
 # =================================================================
 FROM node:20-alpine AS frontend-builder
 WORKDIR /app/frontend
-
-# 缓存 npm 依赖
 COPY frontend/package*.json ./
 RUN npm install
-
-# 复制源代码并构建
 COPY frontend/ ./
 RUN npm run build
-
 
 # =================================================================
 # STAGE 2: Final Production Image
@@ -30,7 +25,7 @@ WORKDIR /app
 COPY backend/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# 复制后端代码和配置文件
+# 复制后端代码 (不包括配置文件)
 COPY backend/ ./backend
 
 # 从前端构建阶段复制编译好的静态文件
