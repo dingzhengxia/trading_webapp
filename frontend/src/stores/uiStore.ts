@@ -1,4 +1,4 @@
-// frontend/src/stores/uiStore.ts (最终修复版)
+// frontend/src/stores/uiStore.ts (终极日志诊断版)
 import { defineStore } from 'pinia';
 import { computed, ref } from 'vue';
 import { useLogStore } from './logStore';
@@ -11,6 +11,7 @@ export type CloseTarget =
   | { type: 'selected'; positions: Position[] };
 
 export const useUiStore = defineStore('ui', () => {
+  console.log('[uiStore] Store instance created/re-created.');
   const logStore = useLogStore();
   const statusMessage = ref('初始化中...');
   const isRunning = ref(false);
@@ -42,60 +43,77 @@ export const useUiStore = defineStore('ui', () => {
   });
 
   function hideProgress() {
+    console.log(`%c[uiStore] HIDE_PROGRESS called. Setting progress.show to false.`, 'color: orange;');
     progress.value.show = false;
     progress.value.is_final = false;
   }
 
-  // --- 核心修改在这里 ---
   function setStatus(message: string, running?: boolean) {
-    // 保护逻辑：如果只是一个普通的 "已断开" 消息，并且我们知道有任务正在运行，
-    // 那么我们只更新状态文字，但 **不能** 将 isRunning 设为 false。
+    console.log(`%c[uiStore] SET_STATUS called with: message="${message}", running=${running}`, 'color: lightblue;', 'Current isRunning:', isRunning.value);
+
+    // 保护逻辑
     if (message === '已断开' && isRunning.value && running === false) {
-      statusMessage.value = message; // 只更新文字
-      return; // 提前退出，不执行下面的危险逻辑
+      console.log('%c[uiStore] SET_STATUS protection activated: Task is running, but WS disconnected. ONLY updating message.', 'color: violet;');
+      statusMessage.value = message;
+      return;
     }
 
     statusMessage.value = message;
     if (running !== undefined) {
+      console.log(`[uiStore] SET_STATUS changing isRunning from ${isRunning.value} to ${running}`);
       isRunning.value = running;
     }
 
     if (running === false) {
+      console.log('[uiStore] SET_STATUS detected running === false.');
       isStopping.value = false;
       if (progress.value.is_final) {
+        console.log('[uiStore] SET_STATUS: is_final is true. Hiding progress in 3s.');
         clearTimeout(progressResetTimer);
         progressResetTimer = window.setTimeout(hideProgress, 3000);
       } else {
+        console.log('[uiStore] SET_STATUS: is_final is false. Hiding progress immediately.');
         hideProgress();
       }
     }
   }
-  // --- 修改结束 ---
 
   function updateProgress(data: { success_count: number; failed_count: number; total: number; task_name: string; is_final: boolean }) {
-    if (isStopping.value) return;
+    console.log('%c[uiStore] UPDATE_PROGRESS called with data:', 'color: lightgreen;', data);
+    if (isStopping.value) {
+      console.log('[uiStore] UPDATE_PROGRESS ignored because isStopping is true.');
+      return;
+    }
     clearTimeout(progressResetTimer);
     progress.value = { ...data, show: true };
+    console.log('[uiStore] UPDATE_PROGRESS finished. New progress.show state:', progress.value.show);
 
     if (data.is_final) {
+        console.log('[uiStore] UPDATE_PROGRESS detected is_final flag. Hiding progress in 3s.');
         clearTimeout(progressResetTimer);
         progressResetTimer = window.setTimeout(hideProgress, 3000);
     }
   }
 
   function initiateStop() {
-    if (!isRunning.value) return;
+    console.log('%c[uiStore] INITIATE_STOP called.', 'color: red;');
+    if (!isRunning.value) {
+      console.log('[uiStore] INITIATE_STOP ignored because isRunning is false.');
+      return;
+    }
     isStopping.value = true;
     statusMessage.value = "正在停止...";
   }
 
   async function checkInitialStatus(): Promise<boolean> {
+    console.log('%c[uiStore] CHECK_INITIAL_STATUS starting...', 'color: cyan;');
     try {
       const response = await api.get('/api/status');
       const { is_running, progress: progressData } = response.data;
+      console.log('[uiStore] CHECK_INITIAL_STATUS API response received:', { is_running, progressData });
 
       if (is_running && progressData && typeof progressData.total !== 'undefined') {
-        console.log("恢复UI状态:", progressData);
+        console.log('[uiStore] CHECK_INITIAL_STATUS found a running task. Restoring state directly.');
         isRunning.value = true;
         statusMessage.value = `正在执行: ${progressData.task_name}...`;
         progress.value = {
@@ -106,15 +124,18 @@ export const useUiStore = defineStore('ui', () => {
             show: true,
             is_final: false
         };
+        console.log('[uiStore] CHECK_INITIAL_STATUS finished. State restored. isRunning:', isRunning.value, 'progress.show:', progress.value.show);
         return true;
       } else {
+        console.log('[uiStore] CHECK_INITIAL_STATUS found no running task.');
         isRunning.value = false;
         statusMessage.value = "准备就绪";
       }
     } catch (error) {
-      console.error("检查初始状态失败:", error);
+      console.error("[uiStore] CHECK_INITIAL_STATUS failed:", error);
       statusMessage.value = "状态检查失败";
     }
+    console.log('%c[uiStore] CHECK_INITIAL_STATUS finished.', 'color: cyan;');
     return false;
   }
 
