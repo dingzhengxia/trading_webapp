@@ -10,9 +10,7 @@
           @generate-rebalance-plan="handleGenerateRebalancePlan"
         />
       </v-col>
-      <v-col cols="12" md="5">
-        <!-- 日志区占位 -->
-      </v-col>
+      <v-col cols="12" md="5"></v-col>
     </v-row>
   </v-container>
 </template>
@@ -23,42 +21,54 @@ import { useUiStore } from '@/stores/uiStore';
 import { usePositionStore } from '@/stores/positionStore';
 import ControlPanel from '@/components/ControlPanel.vue';
 import apiClient from '@/services/api';
-import type { UserSettings, RebalanceCriteria } from '@/models/types';
+import type { UserSettings, RebalanceCriteria, SyncSltpRequest } from '@/models/types';
 
 const uiStore = useUiStore();
 const positionStore = usePositionStore();
 
-const handleTaskApiCall = async (endpoint: string, payload: any, taskName: string, totalTasks: number = 1) => {
+const fireAndForgetApiCall = (endpoint: string, payload: any, taskName: string, totalTasks: number = 1) => {
   if (uiStore.isRunning) {
     uiStore.logStore.addLog({ message: '已有任务在运行中，请稍后再试。', level: 'warning', timestamp: new Date().toLocaleTimeString() });
     return;
   }
+  const requestId = `req-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
+  const payloadWithId = { ...payload, request_id: requestId };
 
-  uiStore.logStore.addLog({ message: `[前端] 正在准备提交 '${taskName}' 任务...`, level: 'info', timestamp: new Date().toLocaleTimeString() });
   uiStore.setStatus(`正在提交: ${taskName}...`, true);
   uiStore.updateProgress({
     success_count: 0, failed_count: 0, total: totalTasks,
     task_name: taskName, is_final: false
   });
+  uiStore.logStore.addLog({ message: `[前端] 已发送 '${taskName}' 启动指令 (ID: ${requestId})。`, level: 'info', timestamp: new Date().toLocaleTimeString() });
 
-  try {
-    const response = await apiClient.post(endpoint, payload);
-    uiStore.logStore.addLog({ message: `[后端] ✅ 已确认接收任务: ${response.data.message}`, level: 'success', timestamp: new Date().toLocaleTimeString() });
-  } catch (error: any) {
-    const errorMsg = error.response?.data?.detail || error.message;
-    uiStore.logStore.addLog({ message: `[后端] ❌ 任务提交失败: ${errorMsg}`, level: 'error', timestamp: new Date().toLocaleTimeString() });
-    uiStore.setStatus("任务提交失败", false);
-  }
+  apiClient.post(endpoint, payloadWithId)
+    .then(response => {
+      console.log('API call successful:', response.data.message);
+    })
+    .catch(error => {
+      const errorMsg = error.response?.data?.detail || error.message;
+      uiStore.logStore.addLog({ message: `[前端] 任务提交失败: ${errorMsg}`, level: 'error', timestamp: new Date().toLocaleTimeString() });
+      uiStore.setStatus("任务提交失败", false);
+    });
 };
 
 const handleStartTrading = (plan: UserSettings) => {
   const total = (plan.enable_long_trades ? plan.long_coin_list.length : 0) +
                 (plan.enable_short_trades ? plan.short_coin_list.length : 0);
-  handleTaskApiCall('/api/trading/start', plan, '自动开仓', total);
+  fireAndForgetApiCall('/api/trading/start', plan, '自动开仓', total);
 };
 
-const handleSyncSlTp = (settings: any) => {
-  handleTaskApiCall('/api/trading/sync-sltp', settings, '同步SL/TP', positionStore.positions.length);
+const handleSyncSlTp = (settings: UserSettings) => {
+  const payload: Partial<SyncSltpRequest> = {
+      enable_long_sl_tp: settings.enable_long_sl_tp,
+      long_stop_loss_percentage: settings.long_stop_loss_percentage,
+      long_take_profit_percentage: settings.long_take_profit_percentage,
+      enable_short_sl_tp: settings.enable_short_sl_tp,
+      short_stop_loss_percentage: settings.short_stop_loss_percentage,
+      short_take_profit_percentage: settings.short_take_profit_percentage,
+      leverage: settings.leverage
+  };
+  fireAndForgetApiCall('/api/trading/sync-sltp', payload, '同步SL/TP', positionStore.positions.length);
 };
 
 const handleGenerateRebalancePlan = async (criteria: RebalanceCriteria) => {
@@ -66,7 +76,6 @@ const handleGenerateRebalancePlan = async (criteria: RebalanceCriteria) => {
   uiStore.logStore.addLog({ message: '[前端] 正在生成再平衡计划...', level: 'info', timestamp: new Date().toLocaleTimeString() });
   try {
     const response = await apiClient.post('/api/rebalance/plan', criteria);
-    uiStore.logStore.addLog({ message: '[后端] ✅ 再平衡计划已成功生成。', level: 'success', timestamp: new Date().toLocaleTimeString() });
     const planData = response.data;
     if (planData.error) {
       uiStore.logStore.addLog({ message: `计划生成逻辑错误: ${planData.error}`, level: 'error', timestamp: new Date().toLocaleTimeString() });

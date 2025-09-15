@@ -1,7 +1,7 @@
 # backend/app/api/trading.py (最终完整版)
 from fastapi import APIRouter, BackgroundTasks
 from ..core.trading_service import trading_service
-from ..models.schemas import TradePlanRequest
+from ..models.schemas import TradePlanRequest, SyncSltpRequest
 
 router = APIRouter(prefix="/api/trading", tags=["Trading"])
 
@@ -16,6 +16,6 @@ async def stop_trading_task():
     return await trading_service.stop_trading()
 
 @router.post("/sync-sltp")
-def sync_sltp_task(settings: dict, background_tasks: BackgroundTasks):
+def sync_sltp_task(settings: SyncSltpRequest, background_tasks: BackgroundTasks):
     print("--- 📢 API HIT: /api/trading/sync-sltp ---")
     return trading_service.sync_all_sltp(settings, background_tasks)
