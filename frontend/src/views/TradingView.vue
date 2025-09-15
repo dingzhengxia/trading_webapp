@@ -1,7 +1,5 @@
 <!-- frontend/src/views/TradingView.vue (最终修复版) -->
 <template>
-  <!-- 核心修改：增加一个占位 div，并为其设置动态的 padding-bottom -->
-  <!-- 在手机端 (smAndDown)，padding-bottom 会更大，以避开底部导航和悬浮按钮 -->
   <div :style="{ paddingBottom: $vuetify.display.smAndDown ? '128px' : '80px' }">
     <v-container fluid>
       <v-row>
@@ -12,21 +10,16 @@
     </v-container>
   </div>
 
-  <!-- 核心修改：悬浮操作栏现在会根据不同的 Tab 显示不同的按钮 -->
   <v-footer
     style="position: fixed; bottom: 0; left: 0; right: 0; z-index: 1000; border-top: 1px solid rgba(255, 255, 255, 0.12);"
     class="pa-0"
     :style="{ bottom: $vuetify.display.smAndDown ? '56px' : '0px' }"
   >
     <v-card flat tile class="d-flex align-center px-4 w-100" height="64px">
-      <!-- 校准按钮现在在这里 -->
-      <v-btn color="info" variant="tonal" @click="handleSyncSlTp" :disabled="uiStore.isRunning">
-        校准 SL/TP
-      </v-btn>
-      <v-spacer></v-spacer>
-
-      <!-- 根据 ControlPanel 内部的 tab 状态显示不同的主操作按钮 -->
-      <template v-if="controlPanelTab === 'general'">
+        <v-btn color="info" variant="tonal" @click="handleSyncSlTp" :disabled="uiStore.isRunning">
+          校准 SL/TP
+        </v-btn>
+        <v-spacer></v-spacer>
         <v-btn
           color="success"
           variant="tonal"
@@ -37,33 +30,25 @@
         >
           开始开仓
         </v-btn>
-      </template>
-      <template v-if="controlPanelTab === 'rebalance'">
-        <v-btn color="primary" variant="tonal" @click="handleGenerateRebalancePlan" :disabled="uiStore.isRunning">
-          生成再平衡计划
-        </v-btn>
-      </template>
     </v-card>
   </v-footer>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue';
+import { onMounted } from 'vue';
 import { useUiStore } from '@/stores/uiStore';
 import { usePositionStore } from '@/stores/positionStore';
 import { useSettingsStore } from '@/stores/settingsStore';
 import ControlPanel from '@/components/ControlPanel.vue';
 import apiClient from '@/services/api';
-import type { UserSettings, RebalanceCriteria, SyncSltpRequest } from '@/models/types';
+// --- 核心修改在这里：移除了不存在的 SyncSltpRequest 类型 ---
+import type { UserSettings, RebalanceCriteria } from '@/models/types';
+// --- 修改结束 ---
 
 const uiStore = useUiStore();
 const positionStore = usePositionStore();
 const settingsStore = useSettingsStore();
 
-// 新增一个 ref 来接收 ControlPanel 内部的 tab 状态
-const controlPanelTab = ref('general');
-
-// ... (fireAndForgetApiCall 函数保持不变)
 const fireAndForgetApiCall = (endpoint: string, payload: any, taskName: string, totalTasks: number = 1) => {
   if (uiStore.isRunning) {
     uiStore.logStore.addLog({ message: '已有任务在运行中，请稍后再试。', level: 'warning', timestamp: new Date().toLocaleTimeString() });
@@ -88,7 +73,6 @@ const fireAndForgetApiCall = (endpoint: string, payload: any, taskName: string, 
     });
 };
 
-
 const handleStartTrading = () => {
   if (settingsStore.settings) {
     const plan = settingsStore.settings;
@@ -100,17 +84,11 @@ const handleStartTrading = () => {
 
 const handleSyncSlTp = () => {
   if (settingsStore.settings) {
-    const settings = settingsStore.settings;
-    const payload: Partial<SyncSltpRequest> = {
-      enable_long_sl_tp: settings.enable_long_sl_tp,
-      long_stop_loss_percentage: settings.long_stop_loss_percentage,
-      long_take_profit_percentage: settings.long_take_profit_percentage,
-      enable_short_sl_tp: settings.enable_short_sl_tp,
-      short_stop_loss_percentage: settings.short_stop_loss_percentage,
-      short_take_profit_percentage: settings.short_take_profit_percentage,
-      leverage: settings.leverage
-    };
-    fireAndForgetApiCall('/api/trading/sync-sltp', payload, '同步SL/TP', positionStore.positions.length);
+    // --- 核心修改在这里：直接传递完整的 settings 对象 ---
+    // 后端 /api/trading/sync-sltp 端点被定义为接收一个通用字典 (dict)
+    // 所以我们可以安全地传递整个 settings 对象
+    fireAndForgetApiCall('/api/trading/sync-sltp', settingsStore.settings, '同步SL/TP', positionStore.positions.length);
+    // --- 修改结束 ---
   }
 };
 
