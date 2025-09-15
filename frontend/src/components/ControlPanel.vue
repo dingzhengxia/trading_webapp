@@ -1,76 +1,51 @@
-<!-- frontend/src/components/ControlPanel.vue (悬浮按钮版) -->
+<!-- frontend/src/components/ControlPanel.vue (最终完整版) -->
 <template>
-  <!-- 核心修改：给 v-card 增加 position: relative -->
-  <v-card v-if="settingsStore.settings" style="position: relative; padding-bottom: 68px;">
+  <v-card v-if="settingsStore.settings">
     <v-card-title class="text-h6">交易参数</v-card-title>
-
     <v-tabs v-model="tab" bg-color="primary">
       <v-tab value="general">通用开仓设置</v-tab>
       <v-tab value="rebalance">智能再平衡</v-tab>
     </v-tabs>
-
     <v-card-text>
-      <!-- ... (v-window 和内部的所有表单元素保持不变) ... -->
       <v-window v-model="tab">
         <!-- 通用开仓设置 -->
         <v-window-item value="general">
           <v-row>
-            <!-- 多头设置 -->
             <v-col cols="12" md="6">
               <v-card variant="outlined" class="d-flex flex-column" style="height: 100%;">
                 <v-card-title>多头设置</v-card-title>
                 <v-card-text class="flex-grow-1">
                   <v-switch v-model="settingsStore.settings.enable_long_trades" label="开启多头交易" color="success" inset></v-switch>
-                  <v-text-field v-model.number="settingsStore.settings.total_long_position_value" label="多头总价值 (USD)" type="number"
-                    :disabled="!settingsStore.settings.enable_long_trades"></v-text-field>
-                  <v-autocomplete v-model="settingsStore.settings.long_coin_list" :items="settingsStore.availableLongCoins"
-                    label="多头币种列表" multiple chips closable-chips :disabled="!settingsStore.settings.enable_long_trades">
-                  </v-autocomplete>
+                  <v-text-field v-model.number="settingsStore.settings.total_long_position_value" label="多头总价值 (USD)" type="number" :disabled="!settingsStore.settings.enable_long_trades"></v-text-field>
+                  <v-autocomplete v-model="settingsStore.settings.long_coin_list" :items="settingsStore.availableLongCoins" label="多头币种列表" multiple chips closable-chips :disabled="!settingsStore.settings.enable_long_trades"></v-autocomplete>
                   <v-btn size="small" @click="uiStore.showWeightDialog = true" :disabled="!settingsStore.settings.enable_long_trades">配置权重</v-btn>
-
                   <v-divider class="my-4"></v-divider>
                   <v-switch v-model="settingsStore.settings.enable_long_sl_tp" label="开启多头 SL/TP" color="info" inset :disabled="!settingsStore.settings.enable_long_trades"></v-switch>
                   <v-row dense>
-                    <v-col cols="6">
-                      <v-text-field v-model.number="settingsStore.settings.long_stop_loss_percentage" label="止损 (%)" type="number" :disabled="!settingsStore.settings.enable_long_sl_tp"></v-text-field>
-                    </v-col>
-                    <v-col cols="6">
-                      <v-text-field v-model.number="settingsStore.settings.long_take_profit_percentage" label="止盈 (%)" type="number" :disabled="!settingsStore.settings.enable_long_sl_tp"></v-text-field>
-                    </v-col>
+                    <v-col cols="6"><v-text-field v-model.number="settingsStore.settings.long_stop_loss_percentage" label="止损 (%)" type="number" :disabled="!settingsStore.settings.enable_long_sl_tp"></v-text-field></v-col>
+                    <v-col cols="6"><v-text-field v-model.number="settingsStore.settings.long_take_profit_percentage" label="止盈 (%)" type="number" :disabled="!settingsStore.settings.enable_long_sl_tp"></v-text-field></v-col>
                   </v-row>
                 </v-card-text>
               </v-card>
             </v-col>
-
-            <!-- 空头设置 -->
             <v-col cols="12" md="6">
               <v-card variant="outlined" class="d-flex flex-column" style="height: 100%;">
                 <v-card-title>空头设置</v-card-title>
                 <v-card-text class="flex-grow-1">
                   <v-switch v-model="settingsStore.settings.enable_short_trades" label="开启空头交易" color="error" inset></v-switch>
-                  <v-text-field v-model.number="settingsStore.settings.total_short_position_value" label="空头总价值 (USD)" type="number"
-                    :disabled="!settingsStore.settings.enable_short_trades"></v-text-field>
-                  <v-autocomplete v-model="settingsStore.settings.short_coin_list" :items="settingsStore.availableShortCoins"
-                    label="空头币种列表" multiple chips closable-chips :disabled="!settingsStore.settings.enable_short_trades">
-                  </v-autocomplete>
-
+                  <v-text-field v-model.number="settingsStore.settings.total_short_position_value" label="空头总价值 (USD)" type="number" :disabled="!settingsStore.settings.enable_short_trades"></v-text-field>
+                  <v-autocomplete v-model="settingsStore.settings.short_coin_list" :items="settingsStore.availableShortCoins" label="空头币种列表" multiple chips closable-chips :disabled="!settingsStore.settings.enable_short_trades"></v-autocomplete>
                   <v-divider class="my-4"></v-divider>
                    <v-switch v-model="settingsStore.settings.enable_short_sl_tp" label="开启空头 SL/TP" color="info" inset :disabled="!settingsStore.settings.enable_short_trades"></v-switch>
                   <v-row dense>
-                    <v-col cols="6">
-                      <v-text-field v-model.number="settingsStore.settings.short_stop_loss_percentage" label="止损 (%)" type="number" :disabled="!settingsStore.settings.enable_short_sl_tp"></v-text-field>
-                    </v-col>
-                    <v-col cols="6">
-                      <v-text-field v-model.number="settingsStore.settings.short_take_profit_percentage" label="止盈 (%)" type="number" :disabled="!settingsStore.settings.enable_short_sl_tp"></v-text-field>
-                    </v-col>
+                    <v-col cols="6"><v-text-field v-model.number="settingsStore.settings.short_stop_loss_percentage" label="止损 (%)" type="number" :disabled="!settingsStore.settings.enable_short_sl_tp"></v-text-field></v-col>
+                    <v-col cols="6"><v-text-field v-model.number="settingsStore.settings.short_take_profit_percentage" label="止盈 (%)" type="number" :disabled="!settingsStore.settings.enable_short_sl_tp"></v-text-field></v-col>
                   </v-row>
                 </v-card-text>
               </v-card>
             </v-col>
           </v-row>
         </v-window-item>
-
-        <!-- 智能再平衡 -->
         <v-window-item value="rebalance">
           <p class="mb-4">根据市场指标动态筛选弱势币种，并生成调整空头仓位的交易计划。</p>
           <v-row>
@@ -96,38 +71,18 @@
               </div>
             </v-col>
           </v-row>
+           <!-- 智能再平衡的操作按钮放在这里 -->
+          <v-card-actions class="px-0 pt-4">
+            <v-spacer></v-spacer>
+            <v-btn color="primary" variant="tonal" @click="onGenerateRebalancePlan" :disabled="uiStore.isRunning">
+              生成再平衡计划
+            </v-btn>
+          </v-card-actions>
         </v-window-item>
       </v-window>
     </v-card-text>
-
-    <!-- 核心修改：将 v-card-actions 变为悬浮 -->
-    <v-card-actions class="px-4 py-3" style="position: absolute; bottom: 0; right: 0; width: 100%; background-color: rgb(var(--v-theme-surface)); border-top: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));">
-      <v-btn color="info" variant="tonal" @click="onSyncSlTp" :disabled="props.isRunning">校准 SL/TP</v-btn>
-      <v-spacer></v-spacer>
-
-      <template v-if="tab === 'general'">
-        <v-btn
-          color="success"
-          variant="tonal"
-          prepend-icon="mdi-play"
-          @click="onStartTrading"
-          :loading="props.isRunning"
-          :disabled="props.isRunning"
-        >
-          开始开仓
-        </v-btn>
-      </template>
-
-      <template v-if="tab === 'rebalance'">
-        <v-btn color="primary" variant="tonal" @click="onGenerateRebalancePlan" :disabled="props.isRunning">
-          生成再平衡计划
-        </v-btn>
-      </template>
-    </v-card-actions>
   </v-card>
-
   <v-skeleton-loader v-else type="card, article"></v-skeleton-loader>
-
   <WeightConfigDialog
     v-if="settingsStore.settings"
     v-model="uiStore.showWeightDialog"
@@ -142,36 +97,23 @@ import { ref } from 'vue';
 import { useSettingsStore } from '@/stores/settingsStore';
 import { useUiStore } from '@/stores/uiStore';
 import WeightConfigDialog from './WeightConfigDialog.vue';
-import type { UserSettings } from '@/models/types';
+import type { RebalanceCriteria } from '@/models/types';
 
-const rebalanceMethods = [
-  { value: 'multi_factor_weakest', text: '多因子弱势策略' },
-  { value: 'foam', text: 'FOAM强势动量' }
-];
-
-const props = defineProps<{ isRunning: boolean }>();
+// 从父组件 TradingView.vue 接收事件处理器
 const emit = defineEmits<{
-  (e: 'startTrading', plan: UserSettings): void;
-  (e: 'syncSltp', settings: any): void;
-  (e: 'generateRebalancePlan', criteria: any): void;
+  (e: 'generateRebalancePlan', criteria: RebalanceCriteria): void;
 }>();
 
 const settingsStore = useSettingsStore();
 const uiStore = useUiStore();
 const tab = ref('general');
 
-const onStartTrading = () => {
-  if (settingsStore.settings) {
-    emit('startTrading', settingsStore.settings);
-  }
-};
+const rebalanceMethods = [
+  { value: 'multi_factor_weakest', text: '多因子弱势策略' },
+  { value: 'foam', text: 'FOAM强势动量' }
+];
 
-const onSyncSlTp = () => {
-  if (settingsStore.settings) {
-    emit('syncSltp', settingsStore.settings);
-  }
-};
-
+// “生成再平衡计划”按钮的点击事件处理器
 const onGenerateRebalancePlan = () => {
   if (settingsStore.settings) {
     const criteria = {
@@ -186,6 +128,7 @@ const onGenerateRebalancePlan = () => {
   }
 };
 
+// 更新权重的函数保持不变
 const updateWeights = (newWeights: { [key: string]: number }) => {
   if (settingsStore.settings) {
     settingsStore.settings.long_custom_weights = newWeights;
