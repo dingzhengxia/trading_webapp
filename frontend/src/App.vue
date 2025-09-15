@@ -1,4 +1,4 @@
-<!-- frontend/src/App.vue (最终版) -->
+<!-- frontend/src/App.vue (最终完整版) -->
 <template>
   <v-app>
     <v-app-bar app density="compact">
@@ -26,7 +26,7 @@
       </v-list>
     </v-navigation-drawer>
 
-    <v-bottom-navigation v-if="$vuetify.display.smAndDown" app grow>
+    <v-bottom-navigation v-if="$vuetify.display.smAndDown" app grow style="z-index: 1007;">
        <v-btn v-for="route in routes" :key="`bottom-${route.name?.toString()}`" :to="route.path">
         <v-icon>{{ route.meta.icon }}</v-icon>
         <span>{{ route.meta.title }}</span>
@@ -72,16 +72,10 @@ const drawer = ref(mdAndUp.value);
 
 onMounted(() => {
   settingsStore.fetchSettings();
-  // 即使 onMounted 被多次调用，我们的新版 websocketService 也只会连接一次
   websocketService.connect();
 });
 </script>
 
 <style>
-main.v-main { padding-bottom: 56px !important; }
-.v-footer ~ main.v-main { padding-bottom: calc(56px + 48px) !important; }
-@media (min-width: 960px) {
-  main.v-main { padding-bottom: 0 !important; }
-  .v-footer ~ main.v-main { padding-bottom: 48px !important; }
-}
+/* 移除自定义的 main padding-bottom, 让 Vuetify 的 app 属性自动处理布局 */
 </style>
