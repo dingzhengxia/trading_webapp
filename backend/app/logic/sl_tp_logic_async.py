@@ -1,8 +1,8 @@
-# backend/app/logic/sl_tp_logic_async.py (最终修复版)
+# backend/app/logic/sl_tp_logic_async.py (最终日志诊断版)
 import asyncio
 import math
 import ccxt.async_support as ccxt
-from typing import List
+from typing import List, Set
 from ..config import i18n
 from ..models.schemas import Position
 from .utils import resolve_full_symbol
@@ -32,19 +32,26 @@ async def set_tp_sl_for_position_async(exchange: ccxt.binanceusdm, position: Pos
     full_symbol = position.full_symbol
     if stop_event.is_set(): raise InterruptedError()
 
+    # --- 核心修改：增加一个顶层的 try...except 块来捕获和记录所有异常 ---
     try:
-        # --- 核心修改 1：进行一次精确、实时的持仓检查 ---
+        await async_logger(f"[LOG] >> SLTP Worker for {full_symbol}: Starting pre-check...", "normal")
+
+        # 记录日志，确认我们将要调用 fetchPosition
+        print(f"[DIAGNOSTIC] About to call exchange.fetch_position('{full_symbol}')")
+        await async_logger(f"[LOG] >> SLTP Worker for {full_symbol}: Calling fetchPosition...", "normal")
+
         live_pos_raw = await exchange.fetch_position(full_symbol)
+
+        print(f"[DIAGNOSTIC] fetch_position('{full_symbol}') returned: {live_pos_raw}")
+        await async_logger(f"[LOG] >> SLTP Worker for {full_symbol}: fetchPosition call successful.", "normal")
+
         if not live_pos_raw or float(live_pos_raw.get('contracts', 0)) == 0:
             await async_logger(f"⚠️ 为 {position.symbol} 校准前检查发现仓位已不存在，将仅执行清理操作。", "warning")
-            # 即使仓位不在，也尝试清理一下可能残留的挂单
             await _cancel_sl_tp_orders_async(exchange, full_symbol, async_logger)
-            return True  # 视为成功，因为目标已达成（确保没有不正确的挂单）
-        # --- 修改结束 ---
+            return True
 
         is_long = position.side == i18n.SIDE_LONG
 
-        # ... (后续的 SL/TP 参数计算逻辑不变) ...
         sl_perc = config.get('long_stop_loss_percentage' if is_long else 'short_stop_loss_percentage', 0)
         tp_perc = config.get('long_take_profit_percentage' if is_long else 'short_take_profit_percentage', 0)
 
@@ -54,7 +61,8 @@ async def set_tp_sl_for_position_async(exchange: ccxt.binanceusdm, position: Pos
             return await _cancel_sl_tp_orders_async(exchange, full_symbol, async_logger)
 
         leverage = config.get('leverage', 1)
-        sl_ratio, tp_ratio = float(sl_perc) / 100 / leverage, float(tp_perc) / 100 / leverage
+        sl_ratio = float(sl_perc) / 100 / leverage
+        tp_ratio = float(tp_perc) / 100 / leverage
         entry_price = position.entry_price
         target_sl_price = float(
             exchange.price_to_precision(full_symbol, entry_price * (1 - (sl_ratio if is_long else -sl_ratio))))
@@ -79,7 +87,6 @@ async def set_tp_sl_for_position_async(exchange: ccxt.binanceusdm, position: Pos
         success_count = sum(1 for res in results if isinstance(res, dict) and res.get('id'))
 
         if success_count < 2:
-            # 将详细的错误信息记录下来
             for res in results:
                 if isinstance(res, Exception):
                     await async_logger(f"  > ❌ {position.symbol} 订单提交失败: {res}", "error")
@@ -92,20 +99,19 @@ async def set_tp_sl_for_position_async(exchange: ccxt.binanceusdm, position: Pos
     except InterruptedError:
         await async_logger(f"为 {position.symbol} 设置SL/TP的操作被中断。", "warning")
         return False
-    # --- 核心修改 2：精确捕获并优雅处理 reduceOnly 错误 ---
-    except ccxt.ExchangeError as e:
-        if '-1106' in str(e):
-            await async_logger(f"⚠️ 为 {position.symbol} 设置SL/TP失败 (仓位可能已关闭): {e.args[0]}", "warning")
-            return True  # 视为成功，因为目标是确保没有不正确的挂单
-        await async_logger(f"❌ 设置 {position.symbol} SL/TP时发生未处理的交易所错误: {e}", "error")
+    except Exception as e:
+        # 捕获所有其他异常，并打印详细的诊断信息
+        print("==================== EXCEPTION IN set_tp_sl_for_position_async ====================")
+        print(f"            SYMBOL: {full_symbol}")
+        print(f"      EXCEPTION TYPE: {type(e).__name__}")
+        print(f"      EXCEPTION INFO: {str(e)}")
+        print("===================================================================================")
+        await async_logger(f"❌ 设置 {position.symbol} SL/TP时发生未处理的错误: {type(e).__name__}", "error")
         return False
     # --- 修改结束 ---
-    except Exception as e:
-        await async_logger(f"❌ 设置 {position.symbol} SL/TP时发生严重错误: {e}", "error")
-        return False
 
 
-async def cleanup_orphan_sltp_orders_async(exchange: ccxt.binanceusdm, active_symbols: set, async_logger):
+async def cleanup_orphan_sltp_orders_async(exchange: ccxt.binanceusdm, active_symbols: Set[str], async_logger):
     await async_logger("开始全局清理无主(孤儿)SL/TP订单...", "info")
     try:
         all_open_orders = await exchange.fetch_open_orders()
