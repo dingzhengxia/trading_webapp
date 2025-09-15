@@ -1,4 +1,4 @@
-# backend/app/core/trading_service.py (最终完整版)
+# backend/app/core/trading_service.py (已修复 Attribute Error)
 import asyncio
 from fastapi import HTTPException
 from typing import Dict, Any, List, Tuple
@@ -8,7 +8,7 @@ from ..logic.plan_calculator import calculate_trade_plan
 from ..logic.exchange_logic_async import process_order_with_sl_tp_async, close_position_async, \
     InterruptedError, fetch_positions_with_pnl_async
 from ..logic.sl_tp_logic_async import set_tp_sl_for_position_async, cleanup_orphan_sltp_orders_async
-from ..models.schemas import ExecutionPlanRequest
+from ..models.schemas import ExecutionPlanRequest, TradePlanRequest
 from .websocket_manager import log_message, update_status, broadcast_progress_details, manager as ws_manager
 from .exchange_manager import get_exchange_for_task
 
@@ -52,15 +52,22 @@ class TradingService:
             self._is_running = False
             await update_status(f"'{task_name}' 已结束", is_running=False)
 
-    async def start_trading(self, plan_request: Dict[str, Any]):
+    # --- 核心修改在这里 ---
+    async def start_trading(self, plan_request: TradePlanRequest):  # FastAPI 会传入 Pydantic 模型实例
         if self._is_running:
             raise HTTPException(status_code=400, detail="A trading task is already in progress.")
         self._is_running = True
         self._stop_event.clear()
+
+        # 将 Pydantic 模型转换为字典，再传递给后续逻辑
+        config_dict = plan_request.model_dump()
+
         self._current_task = asyncio.create_task(
-            self._execute_and_log_task("自动开仓", self._trading_loop_task(plan_request))
+            self._execute_and_log_task("自动开仓", self._trading_loop_task(config_dict))
         )
         return {"message": "Trading task started successfully."}
+
+    # --- 修改结束 ---
 
     async def stop_trading(self):
         if not self._is_running or not self._current_task:
@@ -78,7 +85,7 @@ class TradingService:
             await update_status("交易已停止", is_running=False)
         return {"message": "Trading task stopped."}
 
-    async def _trading_loop_task(self, config: Dict[str, Any]):
+    async def _trading_loop_task(self, config: Dict[str, Any]):  # 这里接收的是字典
         task_name = "自动开仓"
         await update_status(f"正在执行: {task_name}...", is_running=True)
         long_plan, short_plan = calculate_trade_plan(config, config.get('long_custom_weights', {}))
@@ -206,7 +213,7 @@ class TradingService:
             success_count = 0
             failure_count = 0
 
-            semaphore = asyncio.Semaphore(self.CONCURRENT_CLOSE_TASKS)  # Use a semaphore for concurrency
+            semaphore = asyncio.Semaphore(self.CONCURRENT_CLOSE_TASKS)
 
             async def worker(pos):
                 nonlocal success_count, failure_count
@@ -241,27 +248,18 @@ class TradingService:
     async def execute_rebalance_plan(self, plan: ExecutionPlanRequest):
         if self._is_running:
             raise HTTPException(status_code=400, detail="有其他任务正在运行。")
-
         self._is_running = True
         self._stop_event.clear()
-
         self._current_task = asyncio.create_task(
-            self._execute_and_log_task(
-                "执行仓位再平衡",
-                self._rebalance_execution_task(plan)
-            )
+            self._execute_and_log_task("执行仓位再平衡", self._rebalance_execution_task(plan))
         )
         return {"message": "再平衡任务已开始执行。"}
 
     async def _rebalance_execution_task(self, plan: ExecutionPlanRequest):
-        # Note: This task can also be refactored to provide detailed progress,
-        # but for now, it retains its original simpler progress logic.
         config = load_settings()
         task_name = "执行再平衡"
-
         close_orders = [o for o in plan.orders if o.action == 'CLOSE']
         open_orders = [o for o in plan.orders if o.action == 'OPEN']
-
         total_steps = len(close_orders) + len(open_orders)
         current_step = 0
         success_count, failure_count = 0, 0
