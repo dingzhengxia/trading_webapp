@@ -162,7 +162,16 @@ class TradingService:
 
     async def _sync_sltp_task(self, settings: dict):
         task_name = "同步SL/TP"
+        # --- 新增日志 ---
+        await log_message(f"'{task_name}' 任务后台线程已启动，正在获取交易所连接...", "info")
+        # -----------------
+
+        await update_status(f"正在执行: {task_name}...", is_running=True)
+
         async with get_exchange_for_task() as exchange:
+            # --- 新增日志 ---
+            await log_message("交易所连接成功，正在获取持仓...", "info")
+            # -----------------
             positions = await fetch_positions_with_pnl_async(exchange, settings.get('leverage', 1))
 
             async def worker(pos):
