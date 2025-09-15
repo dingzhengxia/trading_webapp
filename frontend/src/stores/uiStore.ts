@@ -1,3 +1,4 @@
+// frontend/src/stores/uiStore.ts (完整代码)
 import { defineStore } from 'pinia';
 import { computed, ref } from 'vue';
 import { useLogStore } from './logStore';
@@ -10,24 +11,24 @@ export type CloseTarget =
 
 export const useUiStore = defineStore('ui', () => {
   const logStore = useLogStore();
-
   const statusMessage = ref('准备就绪');
   const isRunning = ref(false);
   const showLogDrawer = ref(false);
-
   const showRebalanceDialog = ref(false);
   const rebalancePlan = ref<RebalancePlan | null>(null);
-
   const showCloseDialog = ref(false);
   const closeTarget = ref<CloseTarget | null>(null);
-
   const showWeightDialog = ref(false);
 
+  let progressResetTimer: number;
+
   const progress = ref({
-    current: 0,
+    success_count: 0,
+    failed_count: 0,
     total: 0,
     task_name: '',
-    show: false
+    show: false,
+    is_final: false
   });
 
   const statusColor = computed(() => {
@@ -38,23 +39,25 @@ export const useUiStore = defineStore('ui', () => {
 
   function setStatus(message: string, running?: boolean) {
     statusMessage.value = message;
-    if (running !== undefined) {
-      isRunning.value = running;
-    }
-    if (running === false) {
+    if (running !== undefined) isRunning.value = running;
+
+    if (running === false && progress.value.is_final) {
+      clearTimeout(progressResetTimer);
+      progressResetTimer = window.setTimeout(() => {
+        progress.value.show = false;
+        progress.value.is_final = false;
+      }, 3000); // 最终状态显示3秒
+    } else if (running === false) {
+      // 如果任务结束但不是 final 状态（例如被用户停止），则立即隐藏
       progress.value.show = false;
     }
   }
 
-  function updateProgress(data: { current: number; total: number; task_name: string }) {
-    progress.value.current = data.current;
-    progress.value.total = data.total;
-    progress.value.task_name = data.task_name;
-    progress.value.show = true;
+  function updateProgress(data: { success_count: number; failed_count: number; total: number; task_name: string; is_final: boolean }) {
+    clearTimeout(progressResetTimer);
+    progress.value = { ...data, show: true };
   }
 
-  function openLogDrawer() { showLogDrawer.value = true; }
-  function closeLogDrawer() { showLogDrawer.value = false; }
   function toggleLogDrawer() { showLogDrawer.value = !showLogDrawer.value; }
   function openCloseDialog(target: CloseTarget) {
     closeTarget.value = target;
@@ -65,7 +68,7 @@ export const useUiStore = defineStore('ui', () => {
     statusMessage, isRunning, showLogDrawer, showRebalanceDialog,
     statusColor, logStore, rebalancePlan, showCloseDialog, closeTarget,
     showWeightDialog, progress,
-    setStatus, toggleLogDrawer, openCloseDialog, openLogDrawer, closeLogDrawer,
+    setStatus, toggleLogDrawer, openCloseDialog,
     updateProgress
   };
 });

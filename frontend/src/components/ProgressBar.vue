@@ -1,39 +1,51 @@
+<!-- frontend/src/components/ProgressBar.vue (完整代码) -->
 <template>
   <v-footer v-if="uiStore.progress.show" app class="pa-0" style="z-index: 1008;">
-    <v-card flat tile class="flex" color="blue-grey-darken-3">
+    <v-card flat tile class="flex" :color="cardColor">
       <v-card-text class="py-2">
-        <v-row align="center" no-gutters>
-          <v-col cols="12" sm="4" md="3">
-            <span class="text-caption font-weight-bold">
-              {{ uiStore.progress.task_name }} ({{ uiStore.progress.current }} / {{ uiStore.progress.total }})
-            </span>
-          </v-col>
+        <div class="d-flex align-center w-100">
+          <!-- 左侧任务名 -->
+          <span class="text-caption font-weight-bold flex-shrink-0 mr-4">
+            {{ uiStore.progress.task_name }}
+          </span>
 
-          <v-col cols="12" sm="5" md="7">
-            <v-progress-linear
-              :model-value="progressPercentage"
-              color="light-blue-accent-3"
-              height="20"
-              striped
-              stream
-            >
-              <strong class="text-white">{{ Math.ceil(progressPercentage) }}%</strong>
-            </v-progress-linear>
-          </v-col>
+          <!-- 中间进度条 -->
+          <v-progress-linear
+            :model-value="progressPercentage"
+            :color="progressColor"
+            height="20"
+            striped
+            stream
+            class="flex-grow-1"
+          >
+            <strong class="text-white">{{ Math.ceil(progressPercentage) }}%</strong>
+          </v-progress-linear>
 
-          <v-col cols="12" sm="3" md="2" class="text-sm-right pl-sm-4 mt-2 mt-sm-0">
-            <v-btn
-              color="error"
-              variant="tonal"
-              size="small"
-              @click="stopTrading"
-              :disabled="!uiStore.isRunning"
-              block
-            >
-              ⏹ 停止执行
-            </v-btn>
-          </v-col>
-        </v-row>
+          <!-- 右侧详细统计 -->
+          <div class="d-flex flex-shrink-0 ml-4 align-center text-caption">
+            <v-chip size="x-small" color="green" label class="mr-2">
+              成功: {{ uiStore.progress.success_count }}
+            </v-chip>
+            <v-chip size="x-small" :color="uiStore.progress.failed_count > 0 ? 'red' : 'grey'" label class="mr-2">
+              失败: {{ uiStore.progress.failed_count }}
+            </v-chip>
+            <v-chip size="x-small" color="blue-grey" label>
+              总数: {{ uiStore.progress.total }}
+            </v-chip>
+          </div>
+
+          <!-- 停止按钮 -->
+          <v-btn
+            color="white"
+            variant="text"
+            size="small"
+            @click="stopTrading"
+            :disabled="!uiStore.isRunning"
+            class="flex-shrink-0 ml-2"
+          >
+            ⏹ 停止
+          </v-btn>
+        </div>
       </v-card-text>
     </v-card>
   </v-footer>
@@ -47,8 +59,10 @@ import api from '@/services/api';
 const uiStore = useUiStore();
 
 const progressPercentage = computed(() => {
-  if (uiStore.progress.total === 0) return 0;
-  return (uiStore.progress.current / uiStore.progress.total) * 100;
+  const total = uiStore.progress.total;
+  if (total === 0) return 0;
+  const processed = uiStore.progress.success_count + uiStore.progress.failed_count;
+  return (processed / total) * 100;
 });
 
 const stopTrading = async () => {
@@ -59,4 +73,16 @@ const stopTrading = async () => {
     uiStore.logStore.addLog({ message: `发送停止指令失败: ${e.message}`, level: "error", timestamp: new Date().toLocaleTimeString() });
   }
 };
+
+const cardColor = computed(() => {
+  const hasErrors = uiStore.progress.failed_count > 0;
+  if (uiStore.progress.is_final) {
+    return hasErrors ? 'red-darken-3' : 'green-darken-3';
+  }
+  return hasErrors ? 'red-darken-3' : 'blue-grey-darken-3';
+});
+
+const progressColor = computed(() => {
+  return uiStore.progress.failed_count > 0 ? 'red-lighten-2' : 'light-blue-accent-3';
+});
 </script>
