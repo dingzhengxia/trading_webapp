@@ -1,4 +1,4 @@
-# backend/app/core/trading_service.py (最终日志增强版)
+# backend/app/core/trading_service.py (最终修复版)
 import asyncio
 from fastapi import HTTPException, BackgroundTasks
 from typing import Dict, Any, List, Tuple, Callable, Awaitable
@@ -11,7 +11,7 @@ from ..logic.exchange_logic_async import process_order_with_sl_tp_async, close_p
     InterruptedError, fetch_positions_with_pnl_async
 from ..logic.sl_tp_logic_async import set_tp_sl_for_position_async, cleanup_orphan_sltp_orders_async
 from ..models.schemas import ExecutionPlanRequest, TradePlanRequest
-from .websocket_manager import log_message, update_status, broadcast_progress_details
+from .websocket_manager import log_message, update_status, broadcast_progress_details, manager as ws_manager
 from .exchange_manager import get_exchange_for_task
 
 
@@ -49,7 +49,8 @@ class TradingService:
                               "success")
             await update_status(f"'{task_name}' 已结束", is_running=False)
 
-    def _start_task(self, task_name: str, task_coro: Awaitable, background_tasks: BackgroundTasks):
+    # --- 核心修改在这里：将 def 改为 async def ---
+    async def _start_task(self, task_name: str, task_coro: Awaitable, background_tasks: BackgroundTasks):
         await log_message(f"[LOG] 接收到启动 '{task_name}' 的请求...", "info")
         with self._lock:
             if self._is_running:
@@ -116,8 +117,8 @@ class TradingService:
         await broadcast_progress_details(**final_progress)
         await log_message(f"[LOG] '{task_name}' 循环结束, 成功: {success_count}, 失败: {failure_count}", "info")
 
-    def start_trading(self, plan_request: TradePlanRequest, background_tasks: BackgroundTasks):
-        return self._start_task("自动开仓", self._trading_loop_task(plan_request.model_dump()), background_tasks)
+    async def start_trading(self, plan_request: TradePlanRequest, background_tasks: BackgroundTasks):
+        return await self._start_task("自动开仓", self._trading_loop_task(plan_request.model_dump()), background_tasks)
 
     async def stop_trading(self):
         if not self._is_running:
@@ -141,10 +142,10 @@ class TradingService:
 
         await self._run_task_loop(order_plan, worker, self.CONCURRENT_OPEN_TASKS, "自动开仓")
 
-    def dispatch_tasks(self, task_name: str, tasks_data: List[Tuple[str, float]], task_type: str,
-                       config: Dict[str, Any], background_tasks: BackgroundTasks):
+    async def dispatch_tasks(self, task_name: str, tasks_data: List[Tuple[str, float]], task_type: str,
+                             config: Dict[str, Any], background_tasks: BackgroundTasks):
         task_coro = self._generic_task_loop(tasks_data, task_type, config, task_name)
-        return self._start_task(task_name, task_coro, background_tasks)
+        return await self._start_task(task_name, task_coro, background_tasks)
 
     async def _generic_task_loop(self, tasks_data: List, task_type: str, config: Dict[str, Any], task_name: str):
         async def worker(task_item):
@@ -153,7 +154,6 @@ class TradingService:
                 async with get_exchange_for_task() as exchange:
                     is_success = await close_position_async(exchange, full_symbol, ratio, log_message, self._stop_event)
                     if is_success:
-                        # This broadcast is for instant UI removal of a position
                         await ws_manager.broadcast(
                             {"type": "position_closed", "payload": {"full_symbol": full_symbol, "ratio": ratio}})
                     return is_success
@@ -161,8 +161,8 @@ class TradingService:
 
         await self._run_task_loop(tasks_data, worker, self.CONCURRENT_CLOSE_TASKS, task_name)
 
-    def sync_all_sltp(self, settings: dict, background_tasks: BackgroundTasks):
-        return self._start_task("同步所有止盈止损", self._sync_sltp_task(settings), background_tasks)
+    async def sync_all_sltp(self, settings: dict, background_tasks: BackgroundTasks):
+        return await self._start_task("同步所有止盈止损", self._sync_sltp_task(settings), background_tasks)
 
     async def _sync_sltp_task(self, settings: dict):
         task_name = "同步SL/TP"
@@ -181,8 +181,8 @@ class TradingService:
                 active_symbols = {p.full_symbol for p in positions}
                 await cleanup_orphan_sltp_orders_async(exchange, active_symbols, log_message)
 
-    def execute_rebalance_plan(self, plan: ExecutionPlanRequest, background_tasks: BackgroundTasks):
-        return self._start_task("执行仓位再平衡", self._rebalance_execution_task(plan), background_tasks)
+    async def execute_rebalance_plan(self, plan: ExecutionPlanRequest, background_tasks: BackgroundTasks):
+        return await self._start_task("执行仓位再平衡", self._rebalance_execution_task(plan), background_tasks)
 
     async def _rebalance_execution_task(self, plan: ExecutionPlanRequest):
         config = load_settings()
