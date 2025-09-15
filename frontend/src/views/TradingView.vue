@@ -1,226 +1,97 @@
+<!-- 文件路径: frontend/src/views/TradingView.vue (精简版) -->
 <template>
   <v-container fluid>
     <v-row>
-      <!-- 左侧主控制区 -->
-      <v-col cols="12" md="8">
-        <v-row>
-          <v-col cols="12">
-            <!-- 步骤A: 传递 isRunning 状态, 并监听子组件发出的操作事件 -->
-            <ControlPanel
-              :is-running="isRunning"
-              @start-trading="handleStartTrading"
-              @sync-sltp="handleSyncSlTp"
-              @generate-rebalance-plan="handleGenerateRebalancePlan"
-            />
-          </v-col>
-          <v-col cols="12">
-            <PnlSummary />
-          </v-col>
-          <v-col cols="12">
-            <PositionsTable title="多头持仓 (Long Positions)" :positions="longPositions" />
-          </v-col>
-          <v-col cols="12">
-            <PositionsTable title="空头持仓 (Short Positions)" :positions="shortPositions" />
-          </v-col>
-        </v-row>
+      <!-- 左侧主控制区 (7/12 宽度) -->
+      <v-col cols="12" md="7">
+        <!-- 只保留 ControlPanel，它是此页面的核心 -->
+        <ControlPanel
+          :is-running="uiStore.isRunning"
+          @start-trading="handleStartTrading"
+          @sync-sltp="handleSyncSlTp"
+          @generate-rebalance-plan="handleGenerateRebalancePlan"
+        />
       </v-col>
 
-      <!-- 右侧日志区 -->
-      <v-col cols="12" md="4">
-        <!-- 步骤B: 将日志数据(logs)传递给 LogDrawer -->
-        <LogDrawer :logs="logs" @clear-logs="logs = []" />
+      <!-- 右侧日志区 (5/12 宽度) -->
+      <v-col cols="12" md="5">
+        <!-- LogDrawer 现在由 App.vue 控制显隐，这里不再需要直接管理它 -->
+        <!-- 这个 v-col 只是为了布局占位 -->
       </v-col>
     </v-row>
 
-    <!-- 全局组件 -->
-    <ProgressBar
-      :visible="progress.visible"
-      :task-name="progress.task_name"
-      :current="progress.current"
-      :total="progress.total"
-      @stop="handleStopTrading"
-    />
+    <!-- 全局组件保持不变 -->
+    <RebalanceDialog />
+    <ProgressBar />
     <Snackbar />
-    <RebalanceDialog v-model="isRebalanceDialogVisible" :plan="rebalancePlan" />
+
   </v-container>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, computed, reactive } from 'vue';
+import { onMounted } from 'vue';
+import { useUiStore } from '@/stores/uiStore';
+import { usePositionStore } from '@/stores/positionStore'; // 仍然需要 positionStore 来更新仓位
 import ControlPanel from '@/components/ControlPanel.vue';
-import PnlSummary from '@/components/PnlSummary.vue';
-import PositionsTable from '@/components/PositionsTable.vue';
-import LogDrawer from '@/components/LogDrawer.vue';
 import ProgressBar from '@/components/ProgressBar.vue';
 import Snackbar from '@/components/Snackbar.vue';
 import RebalanceDialog from '@/components/RebalanceDialog.vue';
-import { useSnackbarStore } from '@/stores/snackbar';
 import apiClient from '@/services/api';
-import type { Position, TradePlan, RebalanceCriteria, RebalancePlan, Log, Progress } from '@/models/types';
+import type { TradePlan, RebalanceCriteria } from '@/models/types';
 
+const uiStore = useUiStore();
+const positionStore = usePositionStore();
 
-const snackbarStore = useSnackbarStore();
-
-// 1. 在父组件中定义所有需要共享的状态
-const isRunning = ref(false);
-const logs = ref<Log[]>([]);
-const progress = reactive<Progress>({
-  visible: false,
-  current: 0,
-  total: 1,
-  task_name: '',
-});
-const positions = ref<Position[]>([]);
-const isRebalanceDialogVisible = ref(false);
-const rebalancePlan = ref<RebalancePlan | null>(null);
-
-// 2. WebSocket 逻辑集中在此处
-let socket: WebSocket | null = null;
-let socketReconnectTimer: number | undefined;
-
-const connectWebSocket = () => {
-  const socketUrl = import.meta.env.VITE_WS_URL || 'ws://127.0.0.1:8000/ws';
-  socket = new WebSocket(socketUrl);
-
-  socket.onopen = () => {
-    console.log('WebSocket connected');
-    snackbarStore.show({ message: '连接成功', color: 'success' });
-  };
-
-  socket.onmessage = (event) => {
-    const data = JSON.parse(event.data);
-    switch (data.type) {
-      case 'log':
-        // LogDrawer 现在可以收到日志了
-        if (data.payload.message !== "--- 加载历史日志 ---") {
-          logs.value.unshift(data.payload);
-        }
-        break;
-      case 'status':
-        // ControlPanel 现在可以收到状态了
-        isRunning.value = data.payload.isRunning;
-        if (!isRunning.value) {
-          progress.visible = false;
-        }
-        break;
-      case 'progress_update':
-        // ProgressBar 现在可以收到进度了
-        progress.current = data.payload.current;
-        progress.total = data.payload.total;
-        progress.task_name = data.payload.task_name;
-        if (isRunning.value) {
-          progress.visible = true;
-        }
-        break;
-    }
-  };
-
-  socket.onclose = () => {
-    console.log('WebSocket disconnected. Reconnecting...');
-    snackbarStore.show({ message: '连接已断开，3秒后重连...', color: 'warning' });
-    clearTimeout(socketReconnectTimer);
-    socketReconnectTimer = setTimeout(connectWebSocket, 3000);
-  };
-
-  socket.onerror = (error) => {
-    console.error('WebSocket error:', error);
-    snackbarStore.show({ message: '连接错误', color: 'error' });
-    socket?.close();
-  };
-};
-
-// 3. API 调用逻辑集中在此处
-let positionsInterval: number | undefined;
-const fetchPositions = async () => {
-  try {
-    const response = await apiClient.get('/positions');
-    positions.value = response.data;
-  } catch (error) {
-    console.error("Failed to fetch positions:", error);
-  }
-};
-
-onMounted(() => {
-  connectWebSocket();
-  fetchPositions();
-  positionsInterval = setInterval(fetchPositions, 5000);
-});
-
-onUnmounted(() => {
-  if (socket) {
-    socket.onclose = null; // 防止重连
-    socket.close();
-  }
-  clearInterval(positionsInterval);
-  clearTimeout(socketReconnectTimer);
-});
-
-const longPositions = computed(() => positions.value.filter(p => p.side === 'long'));
-const shortPositions = computed(() => positions.value.filter(p => p.side === 'short'));
-
-// 4. 定义处理子组件事件的函数
-const handleStartTrading = async (plan: TradePlan) => {
-  if (isRunning.value) {
-    snackbarStore.show({ message: '任务正在进行中', color: 'warning' });
+// API 调用逻辑集中在此处
+const handleApiCall = async (endpoint: string, payload: any, startMsg: string, successMsg: string) => {
+  if (uiStore.isRunning) {
+    uiStore.logStore.addLog({ message: '任务正在进行中，请勿重复操作', level: 'warning', timestamp: new Date().toLocaleTimeString() });
     return;
   }
+  uiStore.logStore.addLog({ message: startMsg, level: 'info', timestamp: new Date().toLocaleTimeString() });
   try {
-    // 乐观更新UI
-    isRunning.value = true;
-    await apiClient.post('/trading/start', plan);
-    snackbarStore.show({ message: '开仓任务已启动', color: 'info' });
+    await apiClient.post(endpoint, payload);
+    // 成功后不需要显示 snackbar, 因为 websocket 会更新状态
   } catch (error: any) {
-    snackbarStore.show({ message: `启动失败: ${error.response?.data?.detail || error.message}`, color: 'error' });
-    isRunning.value = false; // 失败时重置UI
+    const errorMsg = error.response?.data?.detail || error.message;
+    uiStore.logStore.addLog({ message: `${successMsg}失败: ${errorMsg}`, level: 'error', timestamp: new Date().toLocaleTimeString() });
   }
 };
 
-const handleStopTrading = async () => {
-  if (!isRunning.value) return;
-  if (confirm('您确定要停止当前正在执行的任务吗？')) {
-    try {
-      await apiClient.post('/trading/stop');
-      snackbarStore.show({ message: '停止信号已发送', color: 'info' });
-    } catch (error: any) {
-      snackbarStore.show({ message: `停止失败: ${error.response?.data?.detail || error.message}`, color: 'error' });
-    }
-  }
+const handleStartTrading = (plan: TradePlan) => {
+  handleApiCall('/api/trading/start', plan, '正在提交开仓任务...', '开仓任务启动');
 };
 
-const handleSyncSlTp = async (settings: any) => {
-   if (isRunning.value) {
-    snackbarStore.show({ message: '任务正在进行中', color: 'warning' });
-    return;
-  }
-  try {
-    isRunning.value = true;
-    await apiClient.post('/trading/sync-sltp', settings);
-    snackbarStore.show({ message: 'SL/TP 校准任务已启动', color: 'info' });
-  } catch (error: any) {
-    snackbarStore.show({ message: `同步失败: ${error.response?.data?.detail || error.message}`, color: 'error' });
-    isRunning.value = false;
-  }
+const handleSyncSlTp = (settings: any) => {
+  handleApiCall('/api/trading/sync-sltp', settings, '正在提交SL/TP校准任务...', 'SL/TP校准任务启动');
 };
 
 const handleGenerateRebalancePlan = async (criteria: RebalanceCriteria) => {
-  if (isRunning.value) {
-    snackbarStore.show({ message: '任务正在进行中', color: 'warning' });
+  if (uiStore.isRunning) {
+    uiStore.logStore.addLog({ message: '任务正在进行中，无法生成计划', level: 'warning', timestamp: new Date().toLocaleTimeString() });
     return;
   }
+  uiStore.logStore.addLog({ message: '正在生成再平衡计划...', level: 'info', timestamp: new Date().toLocaleTimeString() });
   try {
-    isRunning.value = true;
-    const response = await apiClient.post('/rebalance/plan', criteria);
+    const response = await apiClient.post('/api/rebalance/plan', criteria);
     const planData = response.data;
     if (planData.error) {
-      snackbarStore.show({ message: `生成计划失败: ${planData.error}`, color: 'error' });
+      uiStore.logStore.addLog({ message: `生成计划失败: ${planData.error}`, level: 'error', timestamp: new Date().toLocaleTimeString() });
     } else {
-      rebalancePlan.value = planData;
-      isRebalanceDialogVisible.value = true;
+      uiStore.rebalancePlan = planData;
+      uiStore.showRebalanceDialog = true;
     }
   } catch (error: any) {
-    snackbarStore.show({ message: `生成计划错误: ${error.response?.data?.detail || error.message}`, color: 'error' });
-  } finally {
-    isRunning.value = false; // 生成计划是快速操作，完成后重置状态
+     const errorMsg = error.response?.data?.detail || error.message;
+    uiStore.logStore.addLog({ message: `生成计划时发生错误: ${errorMsg}`, level: 'error', timestamp: new Date().toLocaleTimeString() });
   }
 };
+
+// 页面加载时依然需要获取一次持仓数据，因为再平衡计划需要基于当前持仓来计算
+onMounted(() => {
+  if (positionStore.positions.length === 0) {
+    positionStore.fetchPositions();
+  }
+});
+
 </script>
