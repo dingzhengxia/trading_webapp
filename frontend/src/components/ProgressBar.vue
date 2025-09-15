@@ -1,11 +1,14 @@
-<!-- frontend/src/components/ProgressBar.vue (完整代码) -->
+<!-- frontend/src/components/ProgressBar.vue (最终修复版) -->
 <template>
   <v-footer v-if="uiStore.progress.show" app class="pa-0" style="z-index: 1008; border-top: 1px solid rgba(255, 255, 255, 0.12);">
     <v-card flat tile class="d-flex align-center px-4 w-100" :color="cardColor" height="48px">
 
+        <!-- === 核心修改在这里 === -->
+        <!-- 左侧任务名现在是一个计算属性，负责拼接字符串 -->
         <span class="text-caption font-weight-bold flex-shrink-0 mr-4 d-none d-sm-flex">
-          {{ uiStore.progress.task_name }}
+          {{ progressTaskName }}
         </span>
+        <!-- =================== -->
 
         <v-progress-linear
           :model-value="progressPercentage"
@@ -56,6 +59,21 @@ import { useUiStore } from '@/stores/uiStore';
 import api from '@/services/api';
 
 const uiStore = useUiStore();
+
+// --- 核心修改在这里 ---
+// 创建一个计算属性来生成用于显示的task_name
+const progressTaskName = computed(() => {
+  const p = uiStore.progress;
+  if (p.is_final) {
+    return p.task_name; // 最终状态下，直接显示后端传来的 "任务 xxx 全部成功"
+  }
+  const processed = p.success_count + p.failed_count;
+  // 避免在 total 为 0 时显示 NaN/Infinity
+  const total = p.total || 0;
+  return `${p.task_name}: ${processed}/${total}`;
+});
+// --- 修改结束 ---
+
 
 const progressPercentage = computed(() => {
   const total = uiStore.progress.total;

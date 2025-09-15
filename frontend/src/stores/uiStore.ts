@@ -1,4 +1,4 @@
-// frontend/src/stores/uiStore.ts (最终完整版)
+// frontend/src/stores/uiStore.ts (最终修复版)
 import { defineStore } from 'pinia';
 import { computed, ref } from 'vue';
 import { useLogStore } from './logStore';
@@ -25,8 +25,12 @@ export const useUiStore = defineStore('ui', () => {
   let progressResetTimer: number;
 
   const progress = ref({
-    success_count: 0, failed_count: 0, total: 0,
-    task_name: '', show: false, is_final: false
+    success_count: 0,
+    failed_count: 0,
+    total: 0,
+    task_name: '', // <--- 永远存储原始的任务名，如 "自动开仓"
+    show: false,
+    is_final: false
   });
 
   const statusColor = computed(() => {
@@ -39,7 +43,6 @@ export const useUiStore = defineStore('ui', () => {
   function setStatus(message: string, running?: boolean) {
     statusMessage.value = message;
     if (running !== undefined) isRunning.value = running;
-
     if (running === false) {
       isStopping.value = false;
       if (progress.value.is_final) {
@@ -57,6 +60,7 @@ export const useUiStore = defineStore('ui', () => {
   function updateProgress(data: { success_count: number; failed_count: number; total: number; task_name: string; is_final: boolean }) {
     if (isStopping.value) return;
     clearTimeout(progressResetTimer);
+    // 直接存储后端传来的原始数据
     progress.value = { ...data, show: true };
   }
 
@@ -71,20 +75,11 @@ export const useUiStore = defineStore('ui', () => {
       const response = await api.get('/api/status');
       const { is_running, progress: progressData } = response.data;
 
-      if (is_running && progressData && progressData.total !== undefined) {
-        console.log("检测到后台任务正在运行，正在恢复UI状态:", progressData);
-
-        const processed = (progressData.success_count || 0) + (progressData.failed_count || 0);
+      if (is_running && progressData && typeof progressData.total !== 'undefined') {
+        console.log("恢复UI状态:", progressData);
+        // 直接使用后端返回的完整、干净的数据
         setStatus(`正在执行: ${progressData.task_name}...`, true);
-
-        // 直接用后端返回的数据更新进度条
-        updateProgress({
-            success_count: progressData.success_count || 0,
-            failed_count: progressData.failed_count || 0,
-            total: progressData.total || 0,
-            task_name: `${progressData.task_name}: ${processed}/${progressData.total}`,
-            is_final: false
-        });
+        updateProgress({ ...progressData, is_final: false });
         return true;
       }
     } catch (error) { console.error("检查初始状态失败:", error); }
