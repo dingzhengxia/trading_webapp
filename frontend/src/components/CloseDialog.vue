@@ -1,4 +1,4 @@
-<!-- frontend/src/components/CloseDialog.vue (最终完整版) -->
+<!-- frontend/src/components/CloseDialog.vue (最终确认版) -->
 <template>
   <v-dialog v-model="uiStore.showCloseDialog" max-width="400px" persistent>
     <v-card v-if="uiStore.closeTarget">
@@ -45,20 +45,14 @@ const dialogTitle = computed(() => {
   return '确认平仓';
 });
 
-const closeDialog = () => {
-  uiStore.showCloseDialog = false;
-  closeRatio.value = 100;
-};
+const closeDialog = () => { uiStore.showCloseDialog = false; closeRatio.value = 100; };
 
-const executeClose = async () => {
+const executeClose = () => {
   const target = uiStore.closeTarget;
   if (!target || uiStore.isRunning) return;
 
   const ratio = closeRatio.value / 100;
-  let endpoint: string = '';
-  let payload: any = {};
-  let taskName: string = '';
-  let totalTasks: number = 0;
+  let endpoint: string = '', payload: any = {}, taskName: string = '', totalTasks: number = 0;
 
   if (target.type === 'single') {
     endpoint = '/api/positions/close';
@@ -74,29 +68,32 @@ const executeClose = async () => {
     else totalTasks = positionStore.positions.length;
   } else if (target.type === 'selected') {
     endpoint = '/api/positions/close-multiple';
-    const symbols = target.positions.map(p => p.full_symbol);
-    payload = { full_symbols: symbols, ratio };
+    payload = { full_symbols: target.positions.map(p => p.full_symbol), ratio };
     taskName = `平掉选中`;
-    totalTasks = symbols.length;
+    totalTasks = payload.full_symbols.length;
   }
 
-  // 1. 立即关闭弹窗
   closeDialog();
 
-  // 2. 使用统一的API调用逻辑
+  // 使用统一的 "发射后不管" 逻辑
+  const requestId = `req-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
+  const payloadWithId = { ...payload, request_id: requestId };
+
   uiStore.setStatus( `正在提交: ${taskName}...`, true);
   uiStore.updateProgress({
     success_count: 0, failed_count: 0, total: totalTasks,
     task_name: taskName, is_final: false
   });
+  uiStore.logStore.addLog({ message: `[前端] 已发送 '${taskName}' 启动指令 (ID: ${requestId})。`, level: 'info', timestamp: new Date().toLocaleTimeString() });
 
-  try {
-    const response = await apiClient.post(endpoint, payload);
-    uiStore.logStore.addLog({ message: response.data.message || `${taskName} 已成功开始执行。`, level: 'info', timestamp: new Date().toLocaleTimeString() });
-  } catch (e: any) {
-    const errorMsg = e.response?.data?.detail || e.message;
-    uiStore.logStore.addLog({ message: `任务启动失败: ${errorMsg}`, level: 'error', timestamp: new Date().toLocaleTimeString() });
-    uiStore.setStatus("任务启动失败", false);
-  }
+  apiClient.post(endpoint, payloadWithId)
+    .then(response => {
+      console.log('API call successful:', response.data.message);
+    })
+    .catch(e => {
+      const errorMsg = e.response?.data?.detail || e.message;
+      uiStore.logStore.addLog({ message: `[前端] 任务提交失败: ${errorMsg}`, level: 'error', timestamp: new Date().toLocaleTimeString() });
+      uiStore.setStatus("任务启动失败", false);
+    });
 };
 </script>

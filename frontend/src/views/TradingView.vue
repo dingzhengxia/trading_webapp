@@ -1,4 +1,4 @@
-<!-- frontend/src/views/TradingView.vue (最终完整版) -->
+<!-- frontend/src/views/TradingView.vue (最终确认版) -->
 <template>
   <v-container fluid>
     <v-row>
@@ -10,7 +10,9 @@
           @generate-rebalance-plan="handleGenerateRebalancePlan"
         />
       </v-col>
-      <v-col cols="12" md="5"></v-col>
+      <v-col cols="12" md="5">
+        <!-- 日志区占位 -->
+      </v-col>
     </v-row>
   </v-container>
 </template>
@@ -31,6 +33,7 @@ const fireAndForgetApiCall = (endpoint: string, payload: any, taskName: string, 
     uiStore.logStore.addLog({ message: '已有任务在运行中，请稍后再试。', level: 'warning', timestamp: new Date().toLocaleTimeString() });
     return;
   }
+
   const requestId = `req-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
   const payloadWithId = { ...payload, request_id: requestId };
 
@@ -44,6 +47,7 @@ const fireAndForgetApiCall = (endpoint: string, payload: any, taskName: string, 
   apiClient.post(endpoint, payloadWithId)
     .then(response => {
       console.log('API call successful:', response.data.message);
+      // 后端已接收，日志由后端 _start_task 发送
     })
     .catch(error => {
       const errorMsg = error.response?.data?.detail || error.message;

@@ -1,4 +1,4 @@
-# backend/app/core/trading_service.py (最终日志增强版)
+# backend/app/core/trading_service.py (最终完整版)
 import asyncio
 from fastapi import HTTPException, BackgroundTasks
 from typing import Dict, Any, List, Tuple, Callable, Awaitable, Optional
@@ -11,7 +11,7 @@ from ..logic.exchange_logic_async import process_order_with_sl_tp_async, close_p
     InterruptedError, fetch_positions_with_pnl_async
 from ..logic.sl_tp_logic_async import set_tp_sl_for_position_async, cleanup_orphan_sltp_orders_async
 from ..models.schemas import ExecutionPlanRequest, TradePlanRequest, SyncSltpRequest
-from .websocket_manager import log_message, update_status, broadcast_progress_details, manager as ws_manager
+from .websocket_manager import log_message, update_status, broadcast_progress_details
 from .exchange_manager import get_exchange_for_task
 
 
@@ -27,11 +27,15 @@ class TradingService:
         self.CONCURRENT_CLOSE_TASKS = 10
         print("[INIT] TradingService instance created.")
 
+    # --- 核心修改在这里 ---
     def get_current_status(self) -> Dict[str, Any]:
         with self._lock:
             if self._is_running:
+                # 返回完整的进度对象
                 return {"is_running": True, "progress": self._task_progress}
             return {"is_running": False}
+
+    # --- 修改结束 ---
 
     async def _execute_and_log_task(self, task_name: str, task_coro: Awaitable):
         start_time = time.time()

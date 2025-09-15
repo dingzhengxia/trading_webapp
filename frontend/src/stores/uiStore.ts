@@ -66,17 +66,21 @@ export const useUiStore = defineStore('ui', () => {
     statusMessage.value = "正在停止...";
   }
 
+  // --- 核心修改在这里 ---
   async function checkInitialStatus(): Promise<boolean> {
     try {
       const response = await api.get('/api/status');
       const { is_running, progress: progressData } = response.data;
+
       if (is_running && progressData) {
+        console.log("检测到后台任务正在运行，正在恢复UI状态:", progressData);
+        const processed = (progressData.success_count || 0) + (progressData.failed_count || 0);
         setStatus(`正在执行: ${progressData.task_name}...`, true);
         updateProgress({
             success_count: progressData.success_count || 0,
             failed_count: progressData.failed_count || 0,
             total: progressData.total || 1,
-            task_name: progressData.task_name,
+            task_name: `${progressData.task_name}: ${processed}/${progressData.total}`,
             is_final: false
         });
         return true;
@@ -84,6 +88,7 @@ export const useUiStore = defineStore('ui', () => {
     } catch (error) { console.error("检查初始状态失败:", error); }
     return false;
   }
+  // --- 修改结束 ---
 
   function toggleLogDrawer() { showLogDrawer.value = !showLogDrawer.value; }
   function openCloseDialog(target: CloseTarget) {
