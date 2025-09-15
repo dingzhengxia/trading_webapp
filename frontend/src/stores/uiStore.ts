@@ -1,4 +1,4 @@
-// frontend/src/stores/uiStore.ts (最终完整版)
+// frontend/src/stores/uiStore.ts (最终修复版)
 import { defineStore } from 'pinia';
 import { computed, ref } from 'vue';
 import { useLogStore } from './logStore';
@@ -46,9 +46,16 @@ export const useUiStore = defineStore('ui', () => {
     progress.value.is_final = false;
   }
 
+  // --- 核心修改在这里 ---
   function setStatus(message: string, running?: boolean) {
-    statusMessage.value = message;
+    // 保护逻辑：如果只是一个普通的 "已断开" 消息，并且我们知道有任务正在运行，
+    // 那么我们只更新状态文字，但 **不能** 将 isRunning 设为 false。
+    if (message === '已断开' && isRunning.value && running === false) {
+      statusMessage.value = message; // 只更新文字
+      return; // 提前退出，不执行下面的危险逻辑
+    }
 
+    statusMessage.value = message;
     if (running !== undefined) {
       isRunning.value = running;
     }
@@ -63,6 +70,7 @@ export const useUiStore = defineStore('ui', () => {
       }
     }
   }
+  // --- 修改结束 ---
 
   function updateProgress(data: { success_count: number; failed_count: number; total: number; task_name: string; is_final: boolean }) {
     if (isStopping.value) return;
@@ -88,7 +96,6 @@ export const useUiStore = defineStore('ui', () => {
 
       if (is_running && progressData && typeof progressData.total !== 'undefined') {
         console.log("恢复UI状态:", progressData);
-        // 直接设置数据，不调用会产生副作用的函数
         isRunning.value = true;
         statusMessage.value = `正在执行: ${progressData.task_name}...`;
         progress.value = {
@@ -119,23 +126,10 @@ export const useUiStore = defineStore('ui', () => {
   }
 
   return {
-    statusMessage,
-    isRunning,
-    isStopping,
-    showLogDrawer,
-    showRebalanceDialog,
-    statusColor,
-    logStore,
-    rebalancePlan,
-    showCloseDialog,
-    closeTarget,
-    showWeightDialog,
-    progress,
-    setStatus,
-    toggleLogDrawer,
-    openCloseDialog,
-    updateProgress,
-    initiateStop,
-    checkInitialStatus
+    statusMessage, isRunning, isStopping, showLogDrawer, showRebalanceDialog,
+    statusColor, logStore, rebalancePlan, showCloseDialog, closeTarget,
+    showWeightDialog, progress,
+    setStatus, toggleLogDrawer, openCloseDialog,
+    updateProgress, initiateStop, checkInitialStatus
   };
 });
