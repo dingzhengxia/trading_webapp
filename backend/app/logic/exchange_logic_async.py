@@ -174,3 +174,24 @@ async def process_order_with_sl_tp_async(exchange: ccxt.binanceusdm, plan: dict,
     await set_tp_sl_for_position_async(exchange, final_pos, config, async_logger, stop_event)
     await async_logger(f"✅ {base_coin} 订单流程完全成功！", "success")
     return True
+
+
+# --- 核心修改：将缺失的函数添加回来 ---
+async def fetch_klines_async(exchange: ccxt.binanceusdm, symbol: str, timeframe: str = '1d', days_ago: int = 61) -> \
+Optional[List]:
+    """
+    Fetches OHLCV (k-line) data for a given symbol.
+    """
+    if not symbol: return None
+    try:
+        # ccxt aio 版本的 since 需要毫秒时间戳
+        since = exchange.parse8601(
+            (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=days_ago)).isoformat())
+        return await exchange.fetch_ohlcv(symbol, timeframe, since, limit=days_ago + 2)
+    except ccxt.BadSymbol:
+        print(f"Warning: Bad symbol '{symbol}' when fetching klines.")
+        return None
+    except Exception as e:
+        print(f"Error fetching klines for '{symbol}': {e}")
+        return None
+# --- 修改结束 ---
