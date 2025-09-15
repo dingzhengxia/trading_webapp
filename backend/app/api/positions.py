@@ -3,13 +3,14 @@ from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks
 import ccxt.async_support as ccxt
 from typing import List
 
+from ..core.security import verify_api_key
 from ..models.schemas import Position, ClosePositionRequest, CloseBySideRequest, CloseMultipleRequest
 from ..core.exchange_manager import get_exchange_dependency
 from ..logic.exchange_logic_async import fetch_positions_with_pnl_async
 from ..config.config import load_settings
 from ..core.trading_service import trading_service
 
-router = APIRouter(prefix="/api/positions", tags=["Positions"])
+router = APIRouter(prefix="/api/positions", tags=["Positions"], dependencies=[Depends(verify_api_key)])
 
 
 @router.get("", response_model=List[Position])

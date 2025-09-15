@@ -39,11 +39,16 @@
       </v-container>
     </v-main>
 
+    <!-- App-level Dialogs and Components -->
     <LogDrawer v-model="uiStore.showLogDrawer" temporary />
     <RebalanceDialog />
     <CloseDialog />
     <WeightConfigDialog v-model="uiStore.showWeightDialog" />
     <ProgressBar />
+
+    <!-- 新增：访问密钥输入对话框 -->
+    <AccessKeyDialog />
+
   </v-app>
 </template>
 
@@ -60,6 +65,7 @@ import RebalanceDialog from '@/components/RebalanceDialog.vue';
 import CloseDialog from '@/components/CloseDialog.vue';
 import WeightConfigDialog from '@/components/WeightConfigDialog.vue';
 import ProgressBar from '@/components/ProgressBar.vue';
+import AccessKeyDialog from '@/components/AccessKeyDialog.vue'; // 导入新组件
 
 const router = useRouter();
 const routes = router.getRoutes().filter(r => r.meta && r.meta.title && r.meta.icon);
@@ -72,28 +78,24 @@ const drawer = ref(mdAndUp.value);
 
 onMounted(async () => {
   try {
-    // 步骤 1: 获取应用的基础配置
+    // 严格的、同步的启动流程
     await settingsStore.fetchSettings();
-
-    // 步骤 2: 检查并恢复持久化的任务状态
     const isTaskRunningInitially = await uiStore.checkInitialStatus();
-
-    // 步骤 3: 在所有初始状态都已确定后，再连接WebSocket
     websocketService.connect();
-
-    // 步骤 4: 如果恢复时发现有任务在运行，主动获取一次最新的仓位数据
     if (isTaskRunningInitially) {
-      // 动态导入以避免循环依赖
       const { usePositionStore } = await import('@/stores/positionStore');
       usePositionStore().fetchPositions();
     }
   } catch (error) {
     console.error("应用初始化失败:", error);
-    uiStore.setStatus("应用初始化失败", false);
+    // 密钥错误会在api拦截器中处理，这里捕获其他可能的初始化错误
+    if (!String(error).includes('403')) {
+        uiStore.setStatus("应用初始化失败", false);
+    }
   }
 });
 </script>
 
 <style>
-/* 移除自定义的 main padding-bottom, 让 Vuetify 的 app 属性自动处理布局 */
+/* 保持样式为空，让 Vuetify 自动处理布局 */
 </style>

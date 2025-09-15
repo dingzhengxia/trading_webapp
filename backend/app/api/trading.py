@@ -1,9 +1,11 @@
 # backend/app/api/trading.py (最终完整版)
-from fastapi import APIRouter, BackgroundTasks
+from fastapi import APIRouter, BackgroundTasks,Depends
+
+from ..core.security import verify_api_key
 from ..core.trading_service import trading_service
 from ..models.schemas import TradePlanRequest, SyncSltpRequest
 
-router = APIRouter(prefix="/api/trading", tags=["Trading"])
+router = APIRouter(prefix="/api/trading", tags=["Trading"],dependencies=[Depends(verify_api_key)])
 
 @router.post("/start")
 def start_trading_task(plan: TradePlanRequest, background_tasks: BackgroundTasks):

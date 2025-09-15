@@ -4,6 +4,7 @@ from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks
 import ccxt.async_support as ccxt
 from typing import List, Dict, Any
 
+from ..core.security import verify_api_key
 from ..models.schemas import RebalanceCriteria, RebalancePlanResponse, ExecutionPlanRequest, Position
 from ..core.exchange_manager import get_exchange_dependency
 from ..logic import rebalance_logic
@@ -12,7 +13,7 @@ from ..config.config import AVAILABLE_SHORT_COINS, AVAILABLE_LONG_COINS, load_se
 from ..core.websocket_manager import log_message
 from ..core.trading_service import trading_service
 
-router = APIRouter(prefix="/api/rebalance", tags=["Rebalance"])
+router = APIRouter(prefix="/api/rebalance", tags=["Rebalance"], dependencies=[Depends(verify_api_key)])
 
 
 async def screen_coins_task(exchange: ccxt.binanceusdm, criteria: RebalanceCriteria) -> List[str]:
