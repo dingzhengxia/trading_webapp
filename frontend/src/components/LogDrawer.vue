@@ -1,61 +1,76 @@
-<!-- frontend/src/components/LogDrawer.vue -->
 <template>
-  <v-dialog
-    v-model="uiStore.showLogDrawer"
-    location="bottom"
-    fullscreen
-    transition="dialog-bottom-transition"
-    scrollable
+  <v-navigation-drawer
+    location="right"
+    permanent
+    width="400"
+    class="log-drawer"
   >
-    <v-card class="d-flex flex-column" style="height: 50vh; position: fixed; bottom: 0; left: 0; right: 0;">
-      <v-toolbar density="compact" color="blue-grey-darken-3">
-        <v-toolbar-title class="text-subtitle-1">执行日志</v-toolbar-title>
-        <v-spacer></v-spacer>
-        <v-btn variant="text" icon="mdi-delete-sweep" @click="uiStore.logStore.clearLogs"></v-btn>
-        <v-btn variant="text" icon="mdi-close" @click="uiStore.closeLogDrawer()"></v-btn>
-      </v-toolbar>
+    <v-toolbar density="compact">
+      <v-toolbar-title class="text-subtitle-1">执行日志</v-toolbar-title>
+      <v-spacer></v-spacer>
+      <!-- 点击时，通过 emit 通知父组件清空日志 -->
+      <v-btn icon="mdi-delete" size="small" @click="emit('clearLogs')" title="清空日志"></v-btn>
+    </v-toolbar>
 
-      <v-card-text class="flex-grow-1 pa-0">
-          <div ref="logContainer" class="log-container fill-height">
-            <p v-for="(log, index) in uiStore.logStore.logs" :key="index" :class="`log-${log.level}`" class="ma-0 pa-1">
-              <span class="log-timestamp">[{{ log.timestamp }}]</span> {{ log.message }}
-            </p>
+    <!-- 使用 v-virtual-scroll 提高大量日志渲染时的性能 -->
+    <v-virtual-scroll :items="props.logs" height="calc(100vh - 48px)">
+      <template v-slot:default="{ item: log, index }">
+        <v-list-item :key="index" class="py-1 px-2">
+          <div class="log-entry" :class="logLevelColor(log.level)">
+            <span class="log-timestamp text-grey">[{{ log.timestamp }}]</span>
+            <span class="log-message">{{ log.message }}</span>
           </div>
-      </v-card-text>
-    </v-card>
-  </v-dialog>
+        </v-list-item>
+      </template>
+    </v-virtual-scroll>
+  </v-navigation-drawer>
 </template>
 
 <script setup lang="ts">
-import { useUiStore } from '@/stores/uiStore';
-import { ref, watch, nextTick } from 'vue';
+import type { Log } from '@/types/ui';
 
-const uiStore = useUiStore();
-const logContainer = ref<HTMLDivElement | null>(null);
+// 步骤1: 定义从父组件接收的 logs prop 和要发出的 clearLogs emit
+const props = defineProps<{
+  logs: Log[];
+}>();
 
-watch(() => uiStore.logStore.logs, async () => {
-  await nextTick();
-  if (logContainer.value) {
-    logContainer.value.scrollTop = 0; // 滚动到顶部 (因为是 column-reverse)
+const emit = defineEmits<{
+  (e: 'clearLogs'): void;
+}>();
+
+// 步骤2: 样式函数保持不变，用于根据日志级别显示不同颜色
+const logLevelColor = (level: string) => {
+  switch (level) {
+    case 'success':
+      return 'text-success';
+    case 'error':
+      return 'text-error';
+    case 'warning':
+      return 'text-orange';
+    case 'info':
+        return 'text-info';
+    default:
+      return '';
   }
-}, { deep: true });
+};
 </script>
 
 <style scoped>
-.log-container {
-  background-color: #1E1E1E;
-  color: #D4D4D4;
-  font-family: 'Courier New', Courier, monospace;
-  font-size: 0.85rem;
-  overflow-y: auto;
-  white-space: pre-wrap;
-  display: flex;
-  flex-direction: column-reverse; /* 新日志在顶部 */
-  padding: 8px;
+.log-drawer {
+  font-family: 'Consolas', 'Monaco', monospace;
+  font-size: 0.8rem;
 }
-.log-timestamp { color: #888; }
-.log-info { color: #569CD6; }
-.log-success { color: #4EC9B0; }
-.log-warning { color: #CE9178; }
-.log-error { color: #F44747; font-weight: bold; }
+.log-entry {
+  display: flex;
+  align-items: flex-start;
+  line-height: 1.4;
+}
+.log-timestamp {
+  flex-shrink: 0;
+  margin-right: 8px;
+}
+.log-message {
+  word-break: break-all;
+  white-space: pre-wrap;
+}
 </style>
