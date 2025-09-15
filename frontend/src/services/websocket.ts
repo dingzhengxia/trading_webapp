@@ -1,4 +1,4 @@
-// frontend/src/services/websocket.ts (终极单例版)
+// frontend/src/services/websocket.ts (最终诊断版)
 import { useUiStore } from '@/stores/uiStore';
 import { usePositionStore } from '@/stores/positionStore';
 
@@ -13,6 +13,7 @@ class WebSocketService {
   private ws: WebSocket | null = null;
   private isConnecting: boolean = false;
   private reconnectTimeout: number | undefined;
+  private heartbeatInterval: number | undefined;
 
   private getWebSocketUrl(): string {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -20,36 +21,62 @@ class WebSocketService {
     return `${protocol}//${host}/ws`;
   }
 
+  private startHeartbeat() {
+    this.stopHeartbeat();
+    console.log('[WS] Starting heartbeat (ping every 5s)...');
+    this.heartbeatInterval = window.setInterval(() => {
+      if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+        console.log('[WS] >> PING');
+        this.ws.send('ping');
+      }
+    }, 5000);
+  }
+
+  private stopHeartbeat() {
+    if(this.heartbeatInterval) {
+        console.log('[WS] Stopping heartbeat.');
+        clearInterval(this.heartbeatInterval);
+        this.heartbeatInterval = undefined;
+    }
+  }
+
   public connect() {
-    // 如果实例已经存在并且正在连接或已连接，则不执行任何操作
     if (this.ws && (this.ws.readyState === WebSocket.CONNECTING || this.ws.readyState === WebSocket.OPEN)) {
-      console.log("WebSocket connect() called, but already connected or connecting.");
       return;
     }
-
-    // 防止在连接过程中重复调用
     if (this.isConnecting) {
-        console.log("WebSocket connect() called, but connection is already in progress.");
         return;
     }
 
     this.isConnecting = true;
 
-    const uiStore = useUiStore();
     const url = this.getWebSocketUrl();
-    console.log(`Attempting to connect to WebSocket at: ${url}`);
+    console.log(`[WS] Attempting to connect to: ${url}`);
 
     this.ws = new WebSocket(url);
 
     this.ws.onopen = () => {
-      console.log("WebSocket connection established.");
+      console.log("[WS] ✅ Connection established.");
       this.isConnecting = false;
-      uiStore.setStatus('已连接', false);
+      useUiStore().setStatus('已连接', false);
+      this.startHeartbeat();
     };
 
     this.ws.onmessage = (event) => {
+      // --- 核心修改：增加接收日志 ---
+      console.log('[WS] << RECV:', event.data);
+      // -----------------------------
+
       const data = JSON.parse(event.data);
+
+      // 确保每次都获取最新的 store 实例
+      const uiStore = useUiStore();
       const positionStore = usePositionStore();
+
+      if (data.type === 'pong') {
+        console.log('[WS] << PONG');
+        return;
+      }
 
       switch (data.type) {
         case 'log':
@@ -76,7 +103,9 @@ class WebSocketService {
     };
 
     this.ws.onclose = () => {
-      console.log("WebSocket connection closed.");
+      console.error("[WS] ❌ Connection closed. Reconnecting in 5s...");
+      this.stopHeartbeat();
+      const uiStore = useUiStore();
       uiStore.logStore.addLog({ message: '--- WebSocket 连接断开，5秒后重试... ---', level: 'error', timestamp: new Date().toLocaleTimeString() });
       uiStore.setStatus('已断开', false);
       this.ws = null;
@@ -86,19 +115,14 @@ class WebSocketService {
     };
 
     this.ws.onerror = (event) => {
-      console.error("WebSocket Error:", event);
+      console.error("[WS] ❌ WebSocket Error:", event);
       this.isConnecting = false;
-      // 在这里不需要记录日志，因为 onclose 很快也会被触发并记录日志
     };
   }
 }
 
-// 核心修改：强制单例逻辑
-// 如果全局实例不存在，则创建一个新的并挂载到 window
 if (!window.__WEBSOCKET_SERVICE__) {
-  console.log("Creating new WebSocketService singleton.");
   window.__WEBSOCKET_SERVICE__ = new WebSocketService();
 }
 
-// 始终导出全局的单例
 export default window.__WEBSOCKET_SERVICE__;
