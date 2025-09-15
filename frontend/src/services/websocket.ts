@@ -1,3 +1,4 @@
+// frontend/src/services/websocket.ts (完整代码)
 import { useUiStore } from '@/stores/uiStore';
 import { usePositionStore } from '@/stores/positionStore';
 
@@ -23,6 +24,8 @@ class WebSocketService {
 
     this.ws.onmessage = (event) => {
       const data = JSON.parse(event.data);
+      const positionStore = usePositionStore();
+
       switch (data.type) {
         case 'log':
           uiStore.logStore.addLog(data.payload);
@@ -33,8 +36,16 @@ class WebSocketService {
         case 'progress_update':
           uiStore.updateProgress(data.payload);
           break;
+        case 'position_closed':
+          const { full_symbol, ratio } = data.payload;
+          if (Math.abs(ratio - 1.0) < 1e-9) {
+            positionStore.removePositions([full_symbol]);
+          } else {
+            positionStore.updatePositionContracts(full_symbol, ratio);
+          }
+          break;
         case 'refresh_positions':
-          usePositionStore().fetchPositions();
+          positionStore.fetchPositions();
           break;
       }
     };

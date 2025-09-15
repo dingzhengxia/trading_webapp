@@ -1,4 +1,4 @@
-# backend/app/core/trading_service.py (不同并发数修复版)
+# backend/app/core/trading_service.py (完整代码)
 import asyncio
 from fastapi import HTTPException
 from typing import Dict, Any, List, Tuple
@@ -9,7 +9,7 @@ from ..logic.exchange_logic_async import process_order_with_sl_tp_async, close_p
     InterruptedError, fetch_positions_with_pnl_async
 from ..logic.sl_tp_logic_async import set_tp_sl_for_position_async, cleanup_orphan_sltp_orders_async
 from ..models.schemas import ExecutionPlanRequest, Position
-from .websocket_manager import log_message, update_status, broadcast_progress
+from .websocket_manager import log_message, update_status, broadcast_progress, manager as ws_manager
 from .exchange_manager import get_exchange_for_task
 
 
@@ -20,10 +20,8 @@ class TradingService:
         self._stop_event = asyncio.Event()
         self._worker_task: asyncio.Task = None
 
-        # --- 修改 1: 为不同任务定义并发数 ---
-        self.CONCURRENT_OPEN_TASKS = 5  # 开仓并发数
-        self.CONCURRENT_CLOSE_TASKS = 10  # 平仓并发数，可以设置得更高
-        # ------------------------------------
+        self.CONCURRENT_OPEN_TASKS = 5
+        self.CONCURRENT_CLOSE_TASKS = 10
 
     async def start_worker(self):
         if self._worker_task and not self._worker_task.done():
@@ -94,7 +92,6 @@ class TradingService:
         return {"message": "Trading task stopped."}
 
     async def _trading_loop_task(self, config: Dict[str, Any]):
-        """核心的交易执行循环 (使用开仓并发数)"""
         await update_status("交易任务初始化...", is_running=True)
 
         long_plan, short_plan = calculate_trade_plan(config, config.get('long_custom_weights', {}))
@@ -113,7 +110,7 @@ class TradingService:
         await log_message(f"交易计划生成完毕，共 {total_tasks} 个订单，将以 {self.CONCURRENT_OPEN_TASKS} 个并发执行。",
                           "info")
 
-        semaphore = asyncio.Semaphore(self.CONCURRENT_OPEN_TASKS)  # <-- 使用开仓并发数
+        semaphore = asyncio.Semaphore(self.CONCURRENT_OPEN_TASKS)
 
         processed_count = 0
 
@@ -157,9 +154,7 @@ class TradingService:
         )
         return {"message": f"任务 '{task_name}' 已开始执行。"}
 
-    # --- 修改 2: 平仓任务循环也改为并发 ---
     async def _generic_task_loop(self, tasks_data: List, task_type: str, config: Dict[str, Any]):
-        """处理通用任务，如批量平仓 (使用平仓并发数)"""
         total = len(tasks_data)
         if total == 0:
             await log_message("任务列表为空，无需执行。", "info")
@@ -167,12 +162,10 @@ class TradingService:
 
         await update_status("正在执行批量操作...", is_running=True)
 
-        # 为平仓任务设置并发
         if task_type == 'CLOSE_ORDER':
             concurrency_limit = self.CONCURRENT_CLOSE_TASKS
             await log_message(f"批量平仓任务启动，共 {total} 个仓位，将以 {concurrency_limit} 个并发执行。", "info")
         else:
-            # 其他通用任务可以默认串行或设置一个通用并发数
             concurrency_limit = 1
 
         semaphore = asyncio.Semaphore(concurrency_limit)
@@ -184,16 +177,24 @@ class TradingService:
                 if self._stop_event.is_set():
                     return
 
-                symbol, ratio = task_item
+                full_symbol, ratio = task_item
                 try:
                     async with get_exchange_for_task() as exchange:
                         if task_type == 'CLOSE_ORDER':
-                            await close_position_async(exchange, symbol, ratio, log_message)
+                            success = await close_position_async(exchange, full_symbol, ratio, log_message)
+                            if success:
+                                await ws_manager.broadcast({
+                                    "type": "position_closed",
+                                    "payload": {
+                                        "full_symbol": full_symbol,
+                                        "ratio": ratio
+                                    }
+                                })
                 except Exception as e:
-                    await log_message(f"处理 {symbol} 时出现错误: {e}", "error")
+                    await log_message(f"处理 {full_symbol} 时出现错误: {e}", "error")
                 finally:
                     processed_count += 1
-                    await broadcast_progress(processed_count, total, f"已平仓 {processed_count}/{total}")
+                    await broadcast_progress(processed_count, total, f"已处理 {processed_count}/{total}")
 
         tasks = [worker(item) for item in tasks_data]
         await asyncio.gather(*tasks)
@@ -266,7 +267,6 @@ class TradingService:
 
         await update_status("开始执行再平衡计划...", is_running=True)
 
-        # 1. 执行平仓 (使用平仓并发)
         if close_orders:
             await log_message(f"开始执行 {len(close_orders)} 个平仓任务，并发数: {self.CONCURRENT_CLOSE_TASKS}...",
                               "info")
@@ -280,14 +280,21 @@ class TradingService:
                     await broadcast_progress(current_step, total_steps, f"平仓: {order_item.symbol}")
                     try:
                         async with get_exchange_for_task() as exchange:
-                            await close_position_async(exchange, order_item.symbol, order_item.close_ratio, log_message)
+                           success = await close_position_async(exchange, order_item.symbol, order_item.close_ratio, log_message)
+                           if success:
+                                await ws_manager.broadcast({
+                                    "type": "position_closed",
+                                    "payload": {
+                                        "full_symbol": order_item.symbol,
+                                        "ratio": order_item.close_ratio
+                                    }
+                                })
                     except Exception as e:
                         await log_message(f"再平衡平仓 {order_item.symbol} 失败: {e}", "error")
 
             close_tasks = [close_worker(item) for item in close_orders]
             await asyncio.gather(*close_tasks)
 
-        # 2. 执行开仓 (使用开仓并发)
         if open_orders:
             await log_message(f"开始执行 {len(open_orders)} 个开仓任务，并发数: {self.CONCURRENT_OPEN_TASKS}...", "info")
             open_semaphore = asyncio.Semaphore(self.CONCURRENT_OPEN_TASKS)
