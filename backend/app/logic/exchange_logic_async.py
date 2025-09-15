@@ -126,6 +126,7 @@ async def _execute_maker_order_with_retry_async(exchange: ccxt.binanceusdm, symb
                 except Exception:
                     pass
             raise
+
         except (ccxt.RequestTimeout, ccxt.DDoSProtection, ccxt.ExchangeNotAvailable, ccxt.OrderImmediatelyFillable,
                 RetriableOrderError) as e:
             if order_id:
@@ -133,17 +134,36 @@ async def _execute_maker_order_with_retry_async(exchange: ccxt.binanceusdm, symb
                     await exchange.cancel_order(order_id, symbol)
                 except Exception:
                     pass
+            await async_logger(f"⚠️ 捕获到预设的可重试错误: {type(e).__name__} - {e}", "warning")
             if attempt < retries:
+                if stop_event.is_set(): raise InterruptedError()
                 await asyncio.sleep(3)
             else:
-                raise e
-        except Exception:
+                return False
+
+        # --- 核心修改：增加一个通用的异常捕获块来诊断问题 ---
+        except ccxt.ExchangeError as e:
+            # 捕获所有其他来自交易所的、我们未预料到的错误
+            print("==================== UNEXPECTED EXCHANGE ERROR ====================")
+            print(f"            ERROR TYPE: {type(e).__name__}")
+            print(f"            ERROR MESSAGE: {str(e)}")
+            print("===================================================================")
+            await async_logger(f"🚨 捕获到未分类的交易所错误: {type(e).__name__}", "error")
+
+            # 暂时将所有未分类的 ExchangeError 都视为不可重试，直接抛出
+            # 这样我们就能从日志中看到它的真实类型，然后再决定是否加入重试列表
+            raise e
+            # --- 修改结束 ---
+
+        except Exception as e:
             if order_id:
                 try:
                     await exchange.cancel_order(order_id, symbol)
                 except Exception:
                     pass
+            await async_logger(f"🚨 发生严重错误: {e}", "error")
             raise
+
     return False
 
 
