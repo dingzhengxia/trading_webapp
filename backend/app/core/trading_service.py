@@ -107,8 +107,10 @@ class TradingService:
             return
 
         total_tasks = len(order_plan)
+        task_name = "自动开仓"
         await log_message(f"交易计划生成完毕，共 {total_tasks} 个订单，将以 {self.CONCURRENT_OPEN_TASKS} 个并发执行。",
                           "info")
+        await broadcast_progress(0, total_tasks, task_name)
 
         semaphore = asyncio.Semaphore(self.CONCURRENT_OPEN_TASKS)
 
@@ -127,7 +129,8 @@ class TradingService:
                     await log_message(f"处理 {plan_item.get('coin')} 时出现顶层错误: {e}", "error")
                 finally:
                     processed_count += 1
-                    await broadcast_progress(processed_count, total_tasks, f"已完成 {processed_count}/{total_tasks}")
+                    await broadcast_progress(processed_count, total_tasks,
+                                             f"{task_name}: {processed_count}/{total_tasks}")
 
         tasks = [worker(plan_item) for plan_item in order_plan]
         await asyncio.gather(*tasks)
@@ -149,22 +152,24 @@ class TradingService:
         self._current_task = asyncio.create_task(
             self._execute_and_log_task(
                 task_name,
-                self._generic_task_loop(tasks_data, task_type, config)
+                self._generic_task_loop(tasks_data, task_type, config, task_name)
             )
         )
         return {"message": f"任务 '{task_name}' 已开始执行。"}
 
-    async def _generic_task_loop(self, tasks_data: List, task_type: str, config: Dict[str, Any]):
+    async def _generic_task_loop(self, tasks_data: List, task_type: str, config: Dict[str, Any],
+                                 task_name: str = "批量操作"):
         total = len(tasks_data)
         if total == 0:
             await log_message("任务列表为空，无需执行。", "info")
             return
 
-        await update_status("正在执行批量操作...", is_running=True)
+        await update_status(f"正在执行: {task_name}...", is_running=True)
+        await broadcast_progress(0, total, task_name)
 
         if task_type == 'CLOSE_ORDER':
             concurrency_limit = self.CONCURRENT_CLOSE_TASKS
-            await log_message(f"批量平仓任务启动，共 {total} 个仓位，将以 {concurrency_limit} 个并发执行。", "info")
+            await log_message(f"任务 '{task_name}' 启动，共 {total} 个仓位，将以 {concurrency_limit} 个并发执行。", "info")
         else:
             concurrency_limit = 1
 
@@ -194,7 +199,7 @@ class TradingService:
                     await log_message(f"处理 {full_symbol} 时出现错误: {e}", "error")
                 finally:
                     processed_count += 1
-                    await broadcast_progress(processed_count, total, f"已处理 {processed_count}/{total}")
+                    await broadcast_progress(processed_count, total, f"{task_name}: {processed_count}/{total}")
 
         tasks = [worker(item) for item in tasks_data]
         await asyncio.gather(*tasks)
@@ -202,7 +207,7 @@ class TradingService:
         if self._stop_event.is_set():
             raise InterruptedError("操作被用户停止。")
 
-        await broadcast_progress(total, total, "批量操作完成")
+        await broadcast_progress(total, total, f"{task_name} 完成")
 
     async def sync_all_sltp(self, settings: dict):
         if self._is_running:
@@ -221,6 +226,7 @@ class TradingService:
 
     async def _sync_sltp_task(self, settings: dict):
         await update_status("正在同步所有SL/TP...", is_running=True)
+        task_name = "同步SL/TP"
         async with get_exchange_for_task() as exchange:
             positions = await fetch_positions_with_pnl_async(exchange, settings.get('leverage', 1))
             if not positions:
@@ -228,12 +234,13 @@ class TradingService:
                 return
 
             total = len(positions)
+            await broadcast_progress(0, total, task_name)
             active_symbols = [p.full_symbol for p in positions]
 
             for i, pos in enumerate(positions):
                 if self._stop_event.is_set():
                     raise InterruptedError("SL/TP同步任务被取消。")
-                await broadcast_progress(i, total, f"同步 {pos.symbol}")
+                await broadcast_progress(i + 1, total, f"{task_name}: {pos.symbol}")
                 await log_message(f"--- 正在为 {pos.symbol} ({pos.side}) 校准 SL/TP ---")
                 await set_tp_sl_for_position_async(exchange, pos, settings, log_message)
 
@@ -258,6 +265,7 @@ class TradingService:
 
     async def _rebalance_execution_task(self, plan: ExecutionPlanRequest):
         config = load_settings()
+        task_name = "执行再平衡"
 
         close_orders = [o for o in plan.orders if o.action == 'CLOSE']
         open_orders = [o for o in plan.orders if o.action == 'OPEN']
@@ -265,7 +273,8 @@ class TradingService:
         total_steps = len(close_orders) + len(open_orders)
         current_step = 0
 
-        await update_status("开始执行再平衡计划...", is_running=True)
+        await update_status(f"正在执行: {task_name}...", is_running=True)
+        await broadcast_progress(current_step, total_steps, task_name)
 
         if close_orders:
             await log_message(f"开始执行 {len(close_orders)} 个平仓任务，并发数: {self.CONCURRENT_CLOSE_TASKS}...",
@@ -276,21 +285,20 @@ class TradingService:
                 nonlocal current_step
                 async with close_semaphore:
                     if self._stop_event.is_set(): return
-                    current_step += 1
-                    await broadcast_progress(current_step, total_steps, f"平仓: {order_item.symbol}")
                     try:
                         async with get_exchange_for_task() as exchange:
-                           success = await close_position_async(exchange, order_item.symbol, order_item.close_ratio, log_message)
-                           if success:
+                            success = await close_position_async(exchange, order_item.symbol, order_item.close_ratio,
+                                                                 log_message)
+                            if success:
                                 await ws_manager.broadcast({
                                     "type": "position_closed",
-                                    "payload": {
-                                        "full_symbol": order_item.symbol,
-                                        "ratio": order_item.close_ratio
-                                    }
+                                    "payload": {"full_symbol": order_item.symbol, "ratio": order_item.close_ratio}
                                 })
                     except Exception as e:
                         await log_message(f"再平衡平仓 {order_item.symbol} 失败: {e}", "error")
+                    finally:
+                        current_step += 1
+                        await broadcast_progress(current_step, total_steps, f"{task_name}: 平仓 {order_item.symbol}")
 
             close_tasks = [close_worker(item) for item in close_orders]
             await asyncio.gather(*close_tasks)
@@ -303,8 +311,6 @@ class TradingService:
                 nonlocal current_step
                 async with open_semaphore:
                     if self._stop_event.is_set(): return
-                    current_step += 1
-                    await broadcast_progress(current_step, total_steps, f"开仓: {order_item.symbol}")
                     order_plan_item = {
                         'coin': order_item.symbol.split('/')[0],
                         'value': order_item.value_to_trade,
@@ -316,6 +322,9 @@ class TradingService:
                                                                  self._stop_event)
                     except Exception as e:
                         await log_message(f"再平衡开仓 {order_item.symbol} 失败: {e}", "error")
+                    finally:
+                        current_step += 1
+                        await broadcast_progress(current_step, total_steps, f"{task_name}: 开仓 {order_item.symbol}")
 
             open_tasks = [open_worker(item) for item in open_orders]
             await asyncio.gather(*open_tasks)
@@ -323,7 +332,7 @@ class TradingService:
         if self._stop_event.is_set():
             raise InterruptedError("再平衡任务被取消")
 
-        await broadcast_progress(total_steps, total_steps, "再平衡计划执行完毕")
+        await broadcast_progress(total_steps, total_steps, f"{task_name} 执行完毕")
         await log_message("✅ 所有再平衡操作已成功执行完毕。", "success")
 
 
