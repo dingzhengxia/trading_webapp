@@ -164,6 +164,6 @@ async def generate_rebalance_plan(
 
 
 @router.post("/execute")
-def execute_rebalance_plan(plan: ExecutionPlanRequest, background_tasks: BackgroundTasks):
+async def execute_rebalance_plan(plan: ExecutionPlanRequest, background_tasks: BackgroundTasks):
     print("--- 📢 API HIT: /api/rebalance/execute ---")
-    return trading_service.execute_rebalance_plan(plan, background_tasks)
+    return await trading_service.execute_rebalance_plan(plan, background_tasks)
