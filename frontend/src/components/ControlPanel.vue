@@ -1,13 +1,15 @@
-<!-- frontend/src/components/ControlPanel.vue (最终完整版) -->
+<!-- frontend/src/components/ControlPanel.vue (最终修复版) -->
 <template>
   <v-card v-if="settingsStore.settings">
     <v-card-title class="text-h6">交易参数</v-card-title>
-    <v-tabs v-model="tab" bg-color="primary">
+    <!-- 核心修改：使用 v-model:model-value 将 tab 状态暴露出去 -->
+    <v-tabs :model-value="props.modelValue" @update:modelValue="emit('update:modelValue')" bg-color="primary">
       <v-tab value="general">通用开仓设置</v-tab>
       <v-tab value="rebalance">智能再平衡</v-tab>
     </v-tabs>
     <v-card-text>
-      <v-window v-model="tab">
+      <!-- 核心修改：这里的 v-model 也需要绑定到 props.modelValue -->
+      <v-window :model-value="props.modelValue">
         <!-- 通用开仓设置 -->
         <v-window-item value="general">
           <v-row>
@@ -50,70 +52,47 @@
           <p class="mb-4">根据市场指标动态筛选弱势币种，并生成调整空头仓位的交易计划。</p>
           <v-row>
             <v-col cols="12" md="6">
-              <v-select
-                v-model="settingsStore.settings.rebalance_method"
-                :items="rebalanceMethods"
-                item-title="text"
-                item-value="value"
-                label="筛选策略"
-              >
-              </v-select>
+              <v-select v-model="settingsStore.settings.rebalance_method" :items="rebalanceMethods" item-title="text" item-value="value" label="筛选策略"></v-select>
               <v-text-field v-model.number="settingsStore.settings.rebalance_top_n" label="目标币种数量 (Top N)" type="number"></v-text-field>
               <v-text-field v-model.number="settingsStore.settings.rebalance_min_volume_usd" label="最小24h交易额 (USD)" type="number"></v-text-field>
             </v-col>
             <v-col cols="12" md="6">
-              <div v-if="settingsStore.settings.rebalance_method === 'multi_factor_weakest'">
-                <v-text-field v-model.number="settingsStore.settings.rebalance_abs_momentum_days" label="绝对动量天数" type="number"></v-text-field>
-                <v-text-field v-model.number="settingsStore.settings.rebalance_rel_strength_days" label="相对强度天数 (vs BTC)" type="number"></v-text-field>
-              </div>
-              <div v-if="settingsStore.settings.rebalance_method === 'foam'">
-                <v-text-field v-model.number="settingsStore.settings.rebalance_foam_days" label="FOAM动量天数" type="number"></v-text-field>
-              </div>
+              <div v-if="settingsStore.settings.rebalance_method === 'multi_factor_weakest'"><v-text-field v-model.number="settingsStore.settings.rebalance_abs_momentum_days" label="绝对动量天数" type="number"></v-text-field><v-text-field v-model.number="settingsStore.settings.rebalance_rel_strength_days" label="相对强度天数 (vs BTC)" type="number"></v-text-field></div>
+              <div v-if="settingsStore.settings.rebalance_method === 'foam'"><v-text-field v-model.number="settingsStore.settings.rebalance_foam_days" label="FOAM动量天数" type="number"></v-text-field></div>
             </v-col>
           </v-row>
-           <!-- 智能再平衡的操作按钮放在这里 -->
-          <v-card-actions class="px-0 pt-4">
-            <v-spacer></v-spacer>
-            <v-btn color="primary" variant="tonal" @click="onGenerateRebalancePlan" :disabled="uiStore.isRunning">
-              生成再平衡计划
-            </v-btn>
-          </v-card-actions>
         </v-window-item>
       </v-window>
     </v-card-text>
   </v-card>
   <v-skeleton-loader v-else type="card, article"></v-skeleton-loader>
-  <WeightConfigDialog
-    v-if="settingsStore.settings"
-    v-model="uiStore.showWeightDialog"
-    :coins="settingsStore.settings.long_coin_list"
-    :weights="settingsStore.settings.long_custom_weights || {}"
-    @save="updateWeights"
-  />
+  <WeightConfigDialog v-if="settingsStore.settings" v-model="uiStore.showWeightDialog" :coins="settingsStore.settings.long_coin_list" :weights="settingsStore.settings.long_custom_weights || {}" @save="updateWeights" />
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue';
 import { useSettingsStore } from '@/stores/settingsStore';
 import { useUiStore } from '@/stores/uiStore';
 import WeightConfigDialog from './WeightConfigDialog.vue';
 import type { RebalanceCriteria } from '@/models/types';
 
-// 从父组件 TradingView.vue 接收事件处理器
+// 核心修改：接收 modelValue prop 并定义 update:modelValue emit
+const props = defineProps<{
+  modelValue: string;
+}>();
 const emit = defineEmits<{
+  (e: 'update:modelValue', value: string): void;
   (e: 'generateRebalancePlan', criteria: RebalanceCriteria): void;
 }>();
 
 const settingsStore = useSettingsStore();
 const uiStore = useUiStore();
-const tab = ref('general');
 
 const rebalanceMethods = [
   { value: 'multi_factor_weakest', text: '多因子弱势策略' },
   { value: 'foam', text: 'FOAM强势动量' }
 ];
 
-// “生成再平衡计划”按钮的点击事件处理器
+// 这个按钮被移除了，但它的事件处理器需要保留并通过 emit 调用
 const onGenerateRebalancePlan = () => {
   if (settingsStore.settings) {
     const criteria = {
@@ -128,7 +107,6 @@ const onGenerateRebalancePlan = () => {
   }
 };
 
-// 更新权重的函数保持不变
 const updateWeights = (newWeights: { [key: string]: number }) => {
   if (settingsStore.settings) {
     settingsStore.settings.long_custom_weights = newWeights;
