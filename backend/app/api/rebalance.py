@@ -2,17 +2,18 @@
 import asyncio
 from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks
 import ccxt.async_support as ccxt
-from typing import List
+from typing import List, Dict, Any
 
-from ..models.schemas import RebalanceCriteria, RebalancePlanResponse, ExecutionPlanRequest
+from ..models.schemas import RebalanceCriteria, RebalancePlanResponse, ExecutionPlanRequest, Position
 from ..core.exchange_manager import get_exchange_dependency
 from ..logic import rebalance_logic
 from ..logic import exchange_logic_async as ex_async
-from ..config.config import AVAILABLE_SHORT_COINS, load_settings, STABLECOIN_PREFERENCE
+from ..config.config import AVAILABLE_SHORT_COINS, AVAILABLE_LONG_COINS, load_settings, STABLECOIN_PREFERENCE
 from ..core.websocket_manager import log_message
 from ..core.trading_service import trading_service
 
 router = APIRouter(prefix="/api/rebalance", tags=["Rebalance"])
+
 
 async def screen_coins_task(exchange: ccxt.binanceusdm, criteria: RebalanceCriteria) -> List[str]:
     await log_message(f"开始筛选，策略: {criteria.method}, 目标数量: {criteria.top_n}", "info")
@@ -93,6 +94,7 @@ async def screen_coins_task(exchange: ccxt.binanceusdm, criteria: RebalanceCrite
         rebalance_logic.screen_coins_advanced,
         coin_data,
         criteria.model_dump(),
+        AVAILABLE_LONG_COINS
     )
 
     return target_coin_list
@@ -121,7 +123,7 @@ async def generate_rebalance_plan(
         if current_long_value <= 0:
             raise ValueError("多头仓位价值为零，无法再平衡。")
 
-        alt_season_index = 50
+        alt_season_index = 50 # 示例值, 实际应用中可能来自外部API
         target_ratio = rebalance_logic.calculate_target_ratio_by_alt_index(alt_season_index, config)
         target_short_value = current_long_value * target_ratio
 
@@ -133,14 +135,14 @@ async def generate_rebalance_plan(
             current_short_positions, target_coin_list, target_short_value
         )
 
-        close_plan_formatted = []
-        for p_info in close_plan_data:
-            close_plan_formatted.append({
+        close_plan_formatted = [
+            {
                 "symbol": p_info["symbol"],
                 "notional": p_info["notional"],
                 "close_value": p_info["notional"] * p_info["close_ratio"],
                 "close_ratio_perc": p_info["close_ratio"] * 100
-            })
+            } for p_info in close_plan_data
+        ]
 
         open_plan_formatted = []
         value_per_coin_ideal = target_short_value / len(target_coin_list) if target_coin_list else 0
@@ -164,6 +166,6 @@ async def generate_rebalance_plan(
 
 
 @router.post("/execute")
-async def execute_rebalance_plan(plan: ExecutionPlanRequest, background_tasks: BackgroundTasks):
+def execute_rebalance_plan(plan: ExecutionPlanRequest, background_tasks: BackgroundTasks):
     print("--- 📢 API HIT: /api/rebalance/execute ---")
-    return await trading_service.execute_rebalance_plan(plan, background_tasks)
+    return trading_service.execute_rebalance_plan(plan, background_tasks)
