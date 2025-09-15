@@ -55,10 +55,9 @@ import ProgressBar from '@/components/ProgressBar.vue';
 import Snackbar from '@/components/Snackbar.vue';
 import RebalanceDialog from '@/components/RebalanceDialog.vue';
 import { useSnackbarStore } from '@/stores/snackbar';
-import apiClient from '@/api/apiClient';
-import type { Position } from '@/types/position';
-import type { TradePlan, RebalanceCriteria, RebalancePlan } from '@/types/trading';
-import type { Log, Progress } from '@/types/ui';
+import apiClient from '@/services/api';
+import type { Position, TradePlan, RebalanceCriteria, RebalancePlan, Log, Progress } from '@/models/types';
+
 
 const snackbarStore = useSnackbarStore();
 
