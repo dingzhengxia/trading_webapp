@@ -4,12 +4,12 @@ import datetime
 import ccxt.async_support as ccxt
 from typing import List, Optional, Dict
 
-from .exceptions import InterruptedError, RetriableOrderError
 from .utils import resolve_full_symbol
 from ..models.schemas import Position
 from ..config.config import load_settings
 from ..config import i18n
-from .sl_tp_logic_async import _cancel_sl_tp_orders_async, set_tp_sl_for_position_async
+from .sl_tp_logic_async import _cancel_sl_tp_orders_async
+from .exceptions import RetriableOrderError, InterruptedError
 
 
 async def initialize_exchange_async(api_key: str, api_secret: str, use_testnet: bool, enable_proxy: bool,
@@ -83,7 +83,7 @@ async def close_position_async(exchange: ccxt.binanceusdm, full_symbol_to_close:
         )
         if order_result and abs(ratio - 1.0) < 1e-9:
             await _cancel_sl_tp_orders_async(exchange, full_symbol_to_close, async_logger)
-        return order_result is not None
+        return order_result
     except InterruptedError:
         await async_logger(f"平仓操作 {full_symbol_to_close} 被中断。", "warning")
         return False
@@ -128,33 +128,22 @@ async def _execute_maker_order_with_retry_async(exchange: ccxt.binanceusdm, symb
             raise
 
         except (ccxt.RequestTimeout, ccxt.DDoSProtection, ccxt.ExchangeNotAvailable, ccxt.OrderImmediatelyFillable,
-                RetriableOrderError) as e:
+                ccxt.OrderNotFillable, RetriableOrderError) as e:
             if order_id:
                 try:
                     await exchange.cancel_order(order_id, symbol)
                 except Exception:
                     pass
-            await async_logger(f"⚠️ 捕获到预设的可重试错误: {type(e).__name__} - {e}", "warning")
+
+            await async_logger(f"⚠️ 尝试失败 (第 {attempt + 1}/{retries + 1} 次)，可重试错误: {type(e).__name__}",
+                               "warning")
+
             if attempt < retries:
                 if stop_event.is_set(): raise InterruptedError()
                 await asyncio.sleep(3)
             else:
+                await async_logger(f"❌ 订单在 {retries + 1} 次尝试后仍然失败。", "error")
                 return False
-
-        # --- 核心修改：增加一个通用的异常捕获块来诊断问题 ---
-        except ccxt.ExchangeError as e:
-            # 捕获所有其他来自交易所的、我们未预料到的错误
-            print("==================== UNEXPECTED EXCHANGE ERROR ====================")
-            print(f"            ERROR TYPE: {type(e).__name__}")
-            print(f"            ERROR MESSAGE: {str(e)}")
-            print("===================================================================")
-            await async_logger(f"🚨 捕获到未分类的交易所错误: {type(e).__name__}", "error")
-
-            # 暂时将所有未分类的 ExchangeError 都视为不可重试，直接抛出
-            # 这样我们就能从日志中看到它的真实类型，然后再决定是否加入重试列表
-            raise e
-            # --- 修改结束 ---
-
         except Exception as e:
             if order_id:
                 try:
@@ -179,7 +168,10 @@ async def process_order_with_sl_tp_async(exchange: ccxt.binanceusdm, plan: dict,
         exchange, full_symbol, plan['side'], {}, config['open_order_fill_timeout_seconds'],
         config['open_maker_retries'], async_logger, stop_event, value_to_trade=plan['value']
     )
-    if not filled or stop_event.is_set(): return False
+    if not filled:
+        return False
+
+    if stop_event.is_set(): return False
 
     final_pos = None
     for _ in range(5):
@@ -196,22 +188,15 @@ async def process_order_with_sl_tp_async(exchange: ccxt.binanceusdm, plan: dict,
     return True
 
 
-# --- 核心修改：将缺失的函数添加回来 ---
 async def fetch_klines_async(exchange: ccxt.binanceusdm, symbol: str, timeframe: str = '1d', days_ago: int = 61) -> \
 Optional[List]:
-    """
-    Fetches OHLCV (k-line) data for a given symbol.
-    """
     if not symbol: return None
     try:
-        # ccxt aio 版本的 since 需要毫秒时间戳
         since = exchange.parse8601(
             (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=days_ago)).isoformat())
         return await exchange.fetch_ohlcv(symbol, timeframe, since, limit=days_ago + 2)
     except ccxt.BadSymbol:
-        print(f"Warning: Bad symbol '{symbol}' when fetching klines.")
         return None
     except Exception as e:
         print(f"Error fetching klines for '{symbol}': {e}")
         return None
-# --- 修改结束 ---
