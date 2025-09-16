@@ -110,12 +110,12 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue';
-import { useSettingsStore } from '@/stores/settingsStore';
-import { useUiStore } from '@/stores/uiStore';
+import {onMounted} from 'vue';
+import {useSettingsStore} from '@/stores/settingsStore';
+import {useUiStore} from '@/stores/uiStore';
 
 // --- debounce ---
-import { debounce } from 'lodash-es';
+import {debounce} from 'lodash-es';
 // --- debounce ---
 
 const settingsStore = useSettingsStore();

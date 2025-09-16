@@ -1,10 +1,9 @@
 // frontend/src/stores/settingsStore.ts
-import { defineStore } from 'pinia';
-import { ref, watch, computed } from 'vue';
-import type { UserSettings, CoinPools } from '@/models/types';
+import {defineStore} from 'pinia';
+import {ref, watch} from 'vue';
+import type {CoinPools, UserSettings} from '@/models/types';
 import api from '@/services/api';
-import { useUiStore } from './uiStore';
-import { debounce } from 'lodash-es'; // 引入 lodash 的 debounce
+import {useUiStore} from './uiStore';
 
 const defaultSettings: UserSettings = {
   api_key: '', api_secret: '', use_testnet: true, enable_proxy: false, proxy_url: 'http://127.0.0.1:7890',
