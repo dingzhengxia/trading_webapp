@@ -1,4 +1,4 @@
-<!-- frontend/src/views/TradingView.vue (最终修复版) -->
+<!-- frontend/src/views/TradingView.vue -->
 <template>
   <!-- 占位div，为悬浮的footer和手机底部导航留出空间 -->
   <div :style="{ paddingBottom: $vuetify.display.smAndDown ? '128px' : '80px' }">
@@ -22,12 +22,10 @@
     :style="footerStyle"
   >
     <v-card flat tile class="d-flex align-center px-4 w-100" height="64px">
-      <!-- 核心修改：将 v-spacer 放在最前面，将所有按钮推到右侧 -->
       <v-spacer></v-spacer>
 
       <!-- 当 tab 是 'general' 时显示 -->
       <template v-if="activeTab === 'general'">
-        <!-- 校准按钮已恢复，并添加了右边距 -->
         <v-btn color="info" variant="tonal" @click="handleSyncSlTp" :disabled="uiStore.isRunning" class="mr-3">
           校准 SL/TP
         </v-btn>
@@ -60,7 +58,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue';
+import { ref, computed, onMounted } from 'vue';
 import { useDisplay } from 'vuetify';
 import { useUiStore } from '@/stores/uiStore';
 import { usePositionStore } from '@/stores/positionStore';
@@ -73,7 +71,6 @@ const uiStore = useUiStore();
 const positionStore = usePositionStore();
 const settingsStore = useSettingsStore();
 
-// 修复 TypeError 的安全样式计算
 const vuetifyDisplay = useDisplay();
 const footerStyle = computed(() => {
   const styles: { bottom: string, left: string } = {
@@ -85,7 +82,6 @@ const footerStyle = computed(() => {
   }
   return styles;
 });
-
 
 const activeTab = ref('general');
 const isGeneratingPlan = ref(false);
@@ -112,7 +108,14 @@ const fireAndForgetApiCall = (endpoint: string, payload: any, taskName: string, 
 
 const handleStartTrading = () => {
   if (settingsStore.settings) {
-    const plan = settingsStore.settings;
+    // --- 核心修改：当开仓启用时，使用用户选择的列表 ---
+    const plan = {
+        ...settingsStore.settings,
+        long_coin_list: settingsStore.settings.enable_long_trades ? settingsStore.settings.user_selected_long_coins : [],
+        short_coin_list: settingsStore.settings.enable_short_trades ? settingsStore.settings.user_selected_short_coins : [],
+    };
+    // --- 核心修改结束 ---
+
     const total = (plan.enable_long_trades ? plan.long_coin_list.length : 0) +
                   (plan.enable_short_trades ? plan.short_coin_list.length : 0);
     fireAndForgetApiCall('/api/trading/start', plan, '自动开仓', total);
@@ -121,7 +124,8 @@ const handleStartTrading = () => {
 
 const handleSyncSlTp = () => {
   if (settingsStore.settings) {
-    // 修复：直接传递完整的 settings 对象，不再使用不存在的 SyncSltpRequest
+    // --- 核心修改：同步 SL/TP 时，也应该使用用户选择的列表 ---
+    // `sync_all_sltp` 任务会重新从后端加载配置，所以此处传递 `settingsStore.settings` 即可
     fireAndForgetApiCall('/api/trading/sync-sltp', settingsStore.settings, '同步SL/TP', positionStore.positions.length);
   }
 };
@@ -133,7 +137,7 @@ const onGenerateRebalancePlan = () => {
       top_n: settingsStore.settings.rebalance_top_n,
       min_volume_usd: settingsStore.settings.rebalance_min_volume_usd,
       abs_momentum_days: settingsStore.settings.rebalance_abs_momentum_days,
-      rel_strength_days: settingsStore.settings.rebalance_rel_strength_days,
+      rel_strength_days: settingsStore.settings.rel_strength_days, // 确保这里和后端命名一致
       foam_days: settingsStore.settings.rebalance_foam_days,
     };
     handleGenerateRebalancePlan(criteria);
@@ -162,6 +166,7 @@ const handleGenerateRebalancePlan = async (criteria: RebalanceCriteria) => {
 };
 
 onMounted(() => {
+  // 确保在组件挂载时也获取一次持仓，以防初始状态下没有数据
   if (positionStore.positions.length === 0) {
     positionStore.fetchPositions();
   }

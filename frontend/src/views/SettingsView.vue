@@ -25,8 +25,49 @@
 
             <v-divider class="my-6"></v-divider>
 
-            <!-- 交易高级参数 -->
-            <h3 class="settings-subtitle">通用交易参数</h3>
+            <!-- 币种选择 -->
+            <h3 class="settings-subtitle">币种选择</h3>
+            <v-row dense>
+              <v-col cols="12" md="6">
+                <!-- --- 新增：做多币种选择 --- -->
+                <v-select
+                  label="做多待选币种"
+                  v-model="settingsStore.settings.user_selected_long_coins"
+                  :items="settingsStore.availableCoins"
+                  multiple
+                  chips
+                  closable-chips
+                  variant="outlined"
+                  density="compact"
+                  clearable
+                  @update:model-value="debouncedSavePoolSelection"
+                  :disabled="!settingsStore.settings.enable_long_trades"
+                ></v-select>
+                <!-- --- 新增结束 --- -->
+              </v-col>
+              <v-col cols="12" md="6">
+                <!-- --- 新增：做空币种选择 --- -->
+                <v-select
+                  label="做空待选币种"
+                  v-model="settingsStore.settings.user_selected_short_coins"
+                  :items="settingsStore.availableCoins"
+                  multiple
+                  chips
+                  closable-chips
+                  variant="outlined"
+                  density="compact"
+                  clearable
+                  @update:model-value="debouncedSavePoolSelection"
+                  :disabled="!settingsStore.settings.enable_short_trades"
+                ></v-select>
+                <!-- --- 新增结束 --- -->
+              </v-col>
+            </v-row>
+
+            <v-divider class="my-6"></v-divider>
+
+            <!-- 通用开仓设置 -->
+            <h3 class="settings-subtitle">通用开仓设置</h3>
             <v-row dense>
               <v-col cols="12" sm="6"><v-text-field label="开仓重试次数" v-model.number="settingsStore.settings.open_maker_retries" type="number" variant="outlined" density="compact" /></v-col>
               <v-col cols="12" sm="6"><v-text-field label="开仓订单超时(s)" v-model.number="settingsStore.settings.open_order_fill_timeout_seconds" type="number" variant="outlined" density="compact" /></v-col>
@@ -57,9 +98,9 @@
           </v-card-text>
            <v-card-actions class="pa-4">
               <v-spacer></v-spacer>
-              <v-btn color="success" variant="tonal" @click="settingsStore.saveSettings()">
+              <v-btn color="success" variant="tonal" @click="saveAllSettings">
                 <v-icon left>mdi-content-save</v-icon>
-                手动保存
+                手动保存全部
               </v-btn>
             </v-card-actions>
         </v-card>
@@ -69,8 +110,42 @@
 </template>
 
 <script setup lang="ts">
+import { ref, computed, onMounted } from 'vue';
 import { useSettingsStore } from '@/stores/settingsStore';
+import { useUiStore } from '@/stores/uiStore';
+
+// --- debounce ---
+import { debounce } from 'lodash-es';
+// --- debounce ---
+
 const settingsStore = useSettingsStore();
+const uiStore = useUiStore();
+
+// --- 新增：币种选择的 debounce 函数 ---
+const debouncedSavePoolSelection = debounce(() => {
+  if (settingsStore.settings) {
+    settingsStore.updateCoinPoolSelection(
+      settingsStore.settings.user_selected_long_coins,
+      settingsStore.settings.user_selected_short_coins
+    );
+  }
+}, 500); // 500ms 延迟
+// --- 新增结束 ---
+
+// 手动保存所有设置
+const saveAllSettings = () => {
+  if (settingsStore.settings) {
+    settingsStore.saveSettings();
+  }
+};
+
+onMounted(() => {
+  // 确保在组件挂载时拉取最新的配置，包括用户选择的币种列表
+  if (!settingsStore.settings) {
+    settingsStore.fetchSettings();
+  }
+});
+
 </script>
 
 <style scoped>
