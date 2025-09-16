@@ -4,3 +4,4 @@ backend/app/config/__pycache__/
 backend/app/core/__pycache__/
 backend/app/logic/__pycache__/
 backend/app/models/__pycache__/
+*.zip
