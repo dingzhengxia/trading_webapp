@@ -8,9 +8,9 @@
       <v-card-text>
         <!-- 合并后的可用币种列表，用于用户选择 -->
         <v-autocomplete
-          v-model="selectedCoinsToAdd"
+          v-model="selectedCoins"
           :items="allAvailableCoins"
-          label="选择要添加到池的币种"
+          label="选择或输入币种"
           multiple
           chips
           closable-chips
@@ -22,7 +22,19 @@
           class="mb-4"
           :loading="isRefreshingCoins"
           hide-details
+          return-object
+          item-title="text"
+          item-value="value"
         >
+          <!-- 全选/反选功能 -->
+          <template v-slot:selection="{ item, index }">
+            <v-chip v-if="index < 2">
+              <span>{{ item.title }}</span>
+            </v-chip>
+            <span v-else-if="index === 2" class="text-grey text-caption align-self-center">
+              (+{{ selectedCoins.length - 2 }} 更多)
+            </span>
+          </template>
           <template v-slot:append-outer>
             <v-tooltip location="top">
               <template v-slot:activator="{ props }">
@@ -33,18 +45,19 @@
           </template>
         </v-autocomplete>
 
-        <v-row>
+        <v-tabs v-model="currentTab" fixed-tabs>
+          <v-tab value="long">做多池</v-tab>
+          <v-tab value="short">做空池</v-tab>
+        </v-tabs>
+
+        <v-tabs-items v-model="currentTab">
           <!-- 做多池 -->
-          <v-col cols="6">
-            <v-card variant="outlined" height="100%">
+          <v-tab-item value="long">
+            <v-card variant="outlined" class="mt-4">
               <v-card-title class="text-subtitle-1">
-                做多池
-                <v-chip size="small" label class="ml-2">{{ currentLongPool.length }}</v-chip>
+                做多币种列表 ({{ currentLongPool.length }})
               </v-card-title>
               <v-card-text>
-                <v-alert type="info" density="compact" class="mb-4">
-                  以下是您为做多选择的币种:
-                </v-alert>
                 <v-chip-group v-model="currentLongPool" column multiple filter>
                   <v-chip
                     v-for="coin in currentLongPool"
@@ -64,27 +77,16 @@
                   尚未选择做多币种。
                 </div>
               </v-card-text>
-              <v-card-actions>
-                <v-spacer></v-spacer>
-                <!-- 批量添加按钮 -->
-                <v-btn color="success" size="small" @click="addSelectedToPool('long')" :disabled="selectedCoinsToAdd.length === 0">
-                  添加选中的币种
-                </v-btn>
-              </v-card-actions>
             </v-card>
-          </v-col>
+          </v-tab-item>
 
           <!-- 做空池 -->
-          <v-col cols="6">
-            <v-card variant="outlined" height="100%">
+          <v-tab-item value="short">
+            <v-card variant="outlined" class="mt-4">
               <v-card-title class="text-subtitle-1">
-                做空池
-                 <v-chip size="small" label class="ml-2">{{ currentShortPool.length }}</v-chip>
+                做空币种列表 ({{ currentShortPool.length }})
               </v-card-title>
               <v-card-text>
-                <v-alert type="info" density="compact" class="mb-4">
-                  以下是您为做空选择的币种:
-                </v-alert>
                 <v-chip-group v-model="currentShortPool" column multiple filter>
                   <v-chip
                     v-for="coin in currentShortPool"
@@ -104,17 +106,9 @@
                   尚未选择做空币种。
                 </div>
               </v-card-text>
-              <v-card-actions>
-                <v-spacer></v-spacer>
-                <!-- 批量添加按钮 -->
-                <v-btn color="error" size="small" @click="addSelectedToPool('short')" :disabled="selectedCoinsToAdd.length === 0">
-                  添加选中的币种
-                </v-btn>
-              </v-card-actions>
             </v-card>
-          </v-col>
-        </v-row>
-
+          </v-tab-item>
+        </v-tabs-items>
       </v-card-text>
       <v-card-actions>
         <v-btn color="primary" variant="text" @click="resetPools">重置为默认</v-btn>
@@ -127,7 +121,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, onMounted } from 'vue';
+import { ref, computed, watch, onMounted, nextTick } from 'vue';
 import { useSettingsStore } from '@/stores/settingsStore';
 import { useUiStore } from '@/stores/uiStore';
 import apiClient from '@/services/api';
@@ -139,7 +133,7 @@ const settingsStore = useSettingsStore();
 const uiStore = useUiStore();
 
 const currentTab = ref('long'); // 默认显示做多池
-const selectedCoinsToAdd = ref<string[]>([]); // 用于 v-autocomplete 的选择
+const selectedCoinsToAdd = ref<string[]>([]); // 用于 v-autocomplete 选择的币种
 const currentLongPool = ref<string[]>([]); // 当前做多池的币种
 const currentShortPool = ref<string[]>([]); // 当前做空池的币种
 const isRefreshingCoins = ref(false);
@@ -151,10 +145,11 @@ const defaultCoinPools = ref({
 });
 
 // 合并的可用币种列表，用于 v-autocomplete 的 items
+// 包含 text 和 value 属性，以支持 v-autocomplete 的自定义显示
 const allAvailableCoins = computed(() => {
   const combined = [...settingsStore.availableLongCoins, ...settingsStore.availableShortCoins];
-  // 去重并排序
-  return [...new Set(combined)].sort();
+  const uniqueCoins = [...new Set(combined)].sort();
+  return uniqueCoins.map(coin => ({ text: coin, value: coin }));
 });
 
 // 同步 v-model
@@ -166,23 +161,22 @@ const show = computed({
 // 初始化临时池数据
 const initializeTempPools = () => {
   if (settingsStore.settings) {
-    // 使用 settingsStore 中已有的做多/做空列表进行初始化
     currentLongPool.value = settingsStore.settings.long_coin_list || [];
     currentShortPool.value = settingsStore.settings.short_coin_list || [];
-    selectedCoinsToAdd.value = []; // 清空多选框的选中项
   } else {
-    // 如果 settingsStore.settings 还没有加载，则先尝试加载，再初始化
     settingsStore.fetchSettings().then(() => {
       currentLongPool.value = settingsStore.settings?.long_coin_list || [];
       currentShortPool.value = settingsStore.settings?.short_coin_list || [];
-      selectedCoinsToAdd.value = [];
     });
   }
+  // 确保 selectedCoinsToAdd 在每次打开时清空
+  selectedCoinsToAdd.value = [];
+  // 确保 tab 默认是 long
+  currentTab.value = 'long';
 };
 
 // 重置为默认值
 const resetPools = () => {
-  // 使用从 API 加载的默认值
   currentLongPool.value = defaultCoinPools.value.long_coins_pool || [];
   currentShortPool.value = defaultCoinPools.value.short_coins_pool || [];
   selectedCoinsToAdd.value = [];
@@ -192,8 +186,7 @@ const resetPools = () => {
 const refreshAvailableCoins = async () => {
   isRefreshingCoins.value = true;
   try {
-    // 重新加载设置，这会更新 settingsStore.availableLongCoins 和 availableShortCoins
-    await settingsStore.fetchSettings();
+    await settingsStore.fetchSettings(); // 重新加载设置，会更新 availableCoins
     // 更新默认值
     defaultCoinPools.value.long_coins_pool = settingsStore.availableLongCoins || [];
     defaultCoinPools.value.short_coins_pool = settingsStore.availableShortCoins || [];
@@ -222,23 +215,23 @@ const removeChip = (poolType: 'long' | 'short', coinToRemove: string) => {
 // 将选中的币种添加到指定的池中
 const addSelectedToPool = (poolType: 'long' | 'short') => {
   if (!selectedCoinsToAdd.value || selectedCoinsToAdd.value.length === 0) {
-    uiStore.logStore.addLog({ message: '请先选择要添加的币种。', level: 'warning', timestamp: new Date().toLocaleTimeString() });
+    uiStore.logStore.addLog({ message: '请先在上方选择要添加的币种。', level: 'warning', timestamp: new Date().toLocaleTimeString() });
     return;
   }
 
   let updatedPool: string[];
   if (poolType === 'long') {
     // 合并新选择的币种，并去重，然后排序
-    updatedPool = [...new Set([...currentLongPool.value, ...selectedCoinsToAdd.value])].sort();
-    currentLongPool.value = updatedPool;
+    const newLongSet = new Set([...currentLongPool.value, ...selectedCoinsToAdd.value]);
+    currentLongPool.value = Array.from(newLongSet).sort();
   } else {
-    updatedPool = [...new Set([...currentShortPool.value, ...selectedCoinsToAdd.value])].sort();
-    currentShortPool.value = updatedPool;
+    const newShortSet = new Set([...currentShortPool.value, ...selectedCoinsToAdd.value]);
+    currentShortPool.value = Array.from(newShortSet).sort();
   }
 
   // 清空 selectedCoinsToAdd，以便下次添加
   selectedCoinsToAdd.value = [];
-  uiStore.logStore.addLog({ message: `已将 ${selectedCoinsToAdd.value.length} 个币种添加到 ${poolType} 池。`, level: 'success', timestamp: new Date().toLocaleTimeString() });
+  uiStore.logStore.addLog({ message: `已将选中的 ${selectedCoinsToAdd.value.length} 个币种添加到 ${poolType} 池。`, level: 'success', timestamp: new Date().toLocaleTimeString() });
 };
 
 const savePools = async () => {
@@ -260,7 +253,8 @@ const savePools = async () => {
 
     // 同时更新 user_settings.json 中的配置
     await settingsStore.saveSettings(updatedSettings);
-    settingsStore.settings = updatedSettings; // 更新 store 中的值
+    // 更新 settingsStore 中的值，以反映用户界面上的最新数据
+    settingsStore.settings = updatedSettings;
 
     uiStore.logStore.addLog({ message: '交易币种列表已更新并保存。', level: 'success', timestamp: new Date().toLocaleTimeString() });
     closeDialog();
@@ -282,17 +276,33 @@ watch(() => props.modelValue, (newValue) => {
     initializeTempPools();
   }
 });
+
+// --- 核心修改：添加 onMounted 钩子来初始化默认值 ---
+onMounted(async () => {
+  // 确保 settingsStore 已加载，以获取 available_long_coins 和 available_short_coins
+  if (!settingsStore.settings) {
+    await settingsStore.fetchSettings();
+  }
+  // 设置默认值
+  defaultCoinPools.value.long_coins_pool = settingsStore.availableLongCoins || [];
+  defaultCoinPools.value.short_coins_pool = settingsStore.availableShortCoins || [];
+});
+// --- 修改结束 ---
+
 </script>
 
 <style scoped>
-/* 可以根据需要添加样式 */
-.v-chip--filter {
-  background-color: rgba(255, 255, 255, 0.1); /* 使 filter chip 稍微软化 */
-}
+/* chip 之间的间距 */
 .v-chip {
-    margin: 4px; /* 稍微增加chip之间的间距 */
+  margin: 4px;
 }
+/* tab 内容的顶部间距 */
 .v-card-text > .v-tabs-items > .v-tab-item {
-    padding-top: 16px; /* 为tab内容添加顶部间距 */
+  padding-top: 16px;
+}
+/* 调整 v-autocomplete 的样式 */
+.v-autocomplete {
+  max-height: 150px; /* 限制高度，防止过长 */
+  overflow-y: auto; /* 启用滚动条 */
 }
 </style>
