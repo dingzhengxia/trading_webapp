@@ -12,7 +12,7 @@ export interface Position {
   mark_price: number;
 }
 
-export interface Log {
+export interface LogEntry {
   message: string;
   level: 'normal' | 'info' | 'success' | 'warning' | 'error';
   timestamp: string;
@@ -43,7 +43,11 @@ export interface UserSettings {
   leverage: number;
   total_long_position_value: number;
   total_short_position_value: number;
-  // --- 修改：改为用户选择的列表 ---
+  // --- 修改：保留原始列表，但它们将作为默认值，主要由 user_selected_* 控制 ---
+  long_coin_list: string[];
+  short_coin_list: string[];
+  // --- 修改结束 ---
+  // --- 修改：user_selected_* 字段是用户自定义的 ---
   user_selected_long_coins: string[];
   user_selected_short_coins: string[];
   // --- 修改结束 ---
@@ -70,11 +74,11 @@ export interface UserSettings {
   rebalance_short_ratio_min: number;
 }
 
-// --- 新增 CoinPools 接口 ---
+// --- CoinPools 接口保持不变 ---
 export interface CoinPools {
     all_available_coins: string[];
 }
-// --- 新增结束 ---
+// --- CoinPools 接口结束 ---
 
 export type TradePlan = UserSettings;
 
@@ -87,9 +91,7 @@ export interface RebalanceCriteria {
   foam_days: number;
 }
 
-// --- 新增 CloseTarget 的定义 ---
 export type CloseTarget =
   | { type: 'single'; position: Position }
   | { type: 'by_side'; side: 'long' | 'short' | 'all' }
   | { type: 'selected'; positions: Position[] };
-// --- 新增结束 ---

@@ -1,26 +1,23 @@
 # backend/app/logic/plan_calculator.py
-from typing import List, Dict, Any, Tuple, Set # 引入 Set
+from typing import List, Dict, Any, Tuple, Set
 
 # --- 修改导入 ---
-from ..config.config import ALL_AVAILABLE_COINS
+from ..config.config import ALL_AVAILABLE_COINS, AVAILABLE_LONG_COINS, AVAILABLE_SHORT_COINS
 # --- 修改结束 ---
 
 def calculate_trade_plan(config, custom_weights):
     long_plan, short_plan = {}, {}
 
-    # --- 诊断日志 4：打印传入 plan_calculator 的关键配置 ---
-    # print("\n--- [BACKEND DEBUG 4] Inside plan_calculator ---")
-    # print(f"    'enable_long_trades' received: {config.get('enable_long_trades')}")
-    # print(f"    'enable_short_trades' received: {config.get('enable_short_trades')}")
-    # print("------------------------------------------\n")
-    # ---------------------------------------------------------
+    # ... (之前的诊断日志) ...
 
     if config.get('enable_long_trades', True) and config.get('total_long_position_value', 0) > 0:
-        # --- 修改：使用用户选择的列表 ---
+        # --- 修改：优先使用用户选择的列表，如果用户选择为空，则回退到原始加载的列表 ---
         long_coin_list = config.get('user_selected_long_coins', [])
-        # 如果用户选择的列表为空，则使用全局可用列表作为默认
-        if not long_coin_list and ALL_AVAILABLE_COINS:
-            long_coin_list = ALL_AVAILABLE_COINS
+        if not long_coin_list and AVAILABLE_LONG_COINS: # 如果用户未选择，且原始列表不为空
+            long_coin_list = AVAILABLE_LONG_COINS
+        elif not long_coin_list and not ALL_AVAILABLE_COINS: # 如果用户未选择，且全局可用列表也为空
+             print("警告: 没有可用的多头币种！")
+             long_coin_list = []
         # --- 修改结束 ---
 
         if not long_coin_list:
@@ -73,11 +70,13 @@ def calculate_trade_plan(config, custom_weights):
 
 
     if config.get('enable_short_trades', True) and config.get('total_short_position_value', 0) > 0:
-        # --- 修改：使用用户选择的列表 ---
+        # --- 修改：优先使用用户选择的列表，如果用户选择为空，则回退到原始加载的列表 ---
         short_coin_list = config.get('user_selected_short_coins', [])
-        # 如果用户选择的列表为空，则使用全局可用列表作为默认
-        if not short_coin_list and ALL_AVAILABLE_COINS:
-            short_coin_list = ALL_AVAILABLE_COINS
+        if not short_coin_list and AVAILABLE_SHORT_COINS: # 如果用户未选择，且原始列表不为空
+            short_coin_list = AVAILABLE_SHORT_COINS
+        elif not short_coin_list and not ALL_AVAILABLE_COINS: # 如果用户未选择，且全局可用列表也为空
+            print("警告: 没有可用的空头币种！")
+            short_coin_list = []
         # --- 修改结束 ---
 
         if not short_coin_list:

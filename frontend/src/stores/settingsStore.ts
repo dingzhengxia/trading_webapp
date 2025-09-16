@@ -1,16 +1,21 @@
 // frontend/src/stores/settingsStore.ts
-import {defineStore} from 'pinia';
-import {ref, watch} from 'vue';
-import type {CoinPools, UserSettings} from '@/models/types';
+import { defineStore } from 'pinia';
+import { ref, watch, computed } from 'vue';
+import type { UserSettings, CoinPools } from '@/models/types';
 import api from '@/services/api';
-import {useUiStore} from './uiStore';
+import { useUiStore } from './uiStore';
+import { debounce } from 'lodash-es'; // 确保已安装 lodash-es
 
 const defaultSettings: UserSettings = {
   api_key: '', api_secret: '', use_testnet: true, enable_proxy: false, proxy_url: 'http://127.0.0.1:7890',
   leverage: 20,
   total_long_position_value: 1000.0,
   total_short_position_value: 500.0,
-  // --- 修改：默认值为空数组 ---
+  // --- 修改：保留原始列表，但它们将作为默认值，主要由 user_selected_* 控制 ---
+  long_coin_list: ["BTC", "ETH"],
+  short_coin_list: ["SOL", "AVAX"],
+  // --- 修改结束 ---
+  // --- 修改：user_selected_* 字段是用户自定义的 ---
   user_selected_long_coins: [],
   user_selected_short_coins: [],
   // --- 修改结束 ---
@@ -37,15 +42,15 @@ const defaultSettings: UserSettings = {
   rebalance_short_ratio_min: 0.35
 };
 
-// --- 新增 CoinPools 接口 ---
+// --- CoinPools 接口保持不变 ---
 interface CoinPools {
     all_available_coins: string[];
 }
-// --- 新增结束 ---
+// --- CoinPools 接口结束 ---
 
 export const useSettingsStore = defineStore('settings', () => {
   const settings = ref<UserSettings | null>(null);
-  // --- 修改：移除 availableLongCoins, availableShortCoins ---
+  // --- 修改：只暴露合并后的列表给前端选择框 ---
   const availableCoins = ref<string[]>([]); // 合并后的所有可用币种
   // --- 修改结束 ---
   const loading = ref(true);
@@ -54,7 +59,7 @@ export const useSettingsStore = defineStore('settings', () => {
   async function fetchSettings() {
     loading.value = true;
     try {
-      // 确保后端 API 返回的数据结构与此处类型定义一致
+      // 确保后端 API 返回的数据结构包含 user_settings 和 all_available_coins
       const response = await api.get<{ user_settings: UserSettings } & CoinPools>('/api/settings');
       settings.value = { ...defaultSettings, ...response.data.user_settings };
       // --- 修改：存储合并后的列表 ---
@@ -78,13 +83,13 @@ export const useSettingsStore = defineStore('settings', () => {
       uiStore.logStore.addLog({ message: "获取配置失败，请检查后端服务。", level: 'error', timestamp: new Date().toLocaleTimeString() });
       // 发生错误时，回退到默认值
       settings.value = { ...defaultSettings };
-      availableCoins.value = []; // 后端如果没返回，前端也显示为空
+      availableCoins.value = ALL_AVAILABLE_COINS; // 使用后端硬编码的默认值（如果API失败）
     } finally {
       loading.value = false;
     }
   }
 
-  // --- 新增：更新用户选择的币种列表 ---
+  // --- 更新用户选择的币种列表 ---
   async function updateCoinPoolSelection(longCoins: string[], shortCoins: string[]) {
       try {
           const response = await api.post('/api/settings/update-pools', {
@@ -93,9 +98,8 @@ export const useSettingsStore = defineStore('settings', () => {
           });
           // 更新本地状态
           if (settings.value) {
-              // 确保更新的是本地的响应式数据
-              settings.value.user_selected_long_coins = [...longCoins];
-              settings.value.user_selected_short_coins = [...shortCoins];
+              settings.value.user_selected_long_coins = [...longCoins]; // 浅拷贝
+              settings.value.user_selected_short_coins = [...shortCoins]; // 浅拷贝
           }
           uiStore.logStore.addLog({ message: response.data.message || "币种列表已更新。", level: 'success', timestamp: new Date().toLocaleTimeString() });
       } catch (error: any) {
@@ -104,7 +108,7 @@ export const useSettingsStore = defineStore('settings', () => {
           console.error("Failed to update coin pools:", error);
       }
   }
-  // --- 新增结束 ---
+  // --- 更新结束 ---
 
   async function saveSettings(newSettings: UserSettings | null) {
     if (!newSettings) return;

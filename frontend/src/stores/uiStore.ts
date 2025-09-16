@@ -2,13 +2,8 @@
 import { defineStore } from 'pinia';
 import { computed, ref } from 'vue';
 import { useLogStore } from './logStore';
-import type { RebalancePlan, Position } from '@/models/types';
+import type {RebalancePlan, Position, CloseTarget, Progress} from '@/models/types';
 import api from '@/services/api';
-
-export type CloseTarget =
-  | { type: 'single'; position: Position }
-  | { type: 'by_side'; side: 'long' | 'short' | 'all' }
-  | { type: 'selected'; positions: Position[] };
 
 export const useUiStore = defineStore('ui', () => {
   console.log('[uiStore] Store instance created/re-created.');
@@ -25,7 +20,8 @@ export const useUiStore = defineStore('ui', () => {
 
   let progressResetTimer: number;
 
-  const progress = ref({
+  // --- 修改：为 progress 对象添加明确的类型 ---
+  const progress = ref<Progress>({ // <-- 使用 Progress 接口
     success_count: 0,
     failed_count: 0,
     total: 0,
@@ -33,6 +29,7 @@ export const useUiStore = defineStore('ui', () => {
     show: false,
     is_final: false
   });
+  // --- 修改结束 ---
 
   const statusColor = computed(() => {
     if (isStopping.value) return 'error';

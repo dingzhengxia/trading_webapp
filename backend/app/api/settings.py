@@ -5,7 +5,7 @@ from fastapi import APIRouter, Body, Depends
 from pydantic import BaseModel
 
 # --- 修改导入 ---
-from ..config.config import load_settings, save_settings, ALL_AVAILABLE_COINS
+from ..config.config import load_settings, save_settings, ALL_AVAILABLE_COINS, AVAILABLE_LONG_COINS, AVAILABLE_SHORT_COINS
 # --- 修改结束 ---
 from ..core.security import verify_api_key
 
@@ -46,4 +46,4 @@ def update_coin_pools(
 # --- 新增 API 结束 ---
 
 # 移除了旧的 @router.post("") 接口，因为它与 /update-pools 功能重叠且未明确
-# 如果需要手动保存所有配置，前端可以通过调用 settingsStore.saveSettings() 实现。
+# 如果需要手动保存所有设置，前端可以通过调用 settingsStore.saveSettings() 实现。

@@ -110,16 +110,24 @@
 </template>
 
 <script setup lang="ts">
-import {onMounted} from 'vue';
-import {useSettingsStore} from '@/stores/settingsStore';
-import {useUiStore} from '@/stores/uiStore';
+import { ref, computed, onMounted } from 'vue';
+import { useSettingsStore } from '@/stores/settingsStore';
+import { useUiStore } from '@/stores/uiStore';
 
 // --- debounce ---
-import {debounce} from 'lodash-es';
+// 确保已安装 lodash-es: npm install lodash-es 或 yarn add lodash-es
+import { debounce } from 'lodash-es';
 // --- debounce ---
+
+const modelValue = defineModel<string>(); // 确保 modelValue 是 string 类型，对应 tab 的 value
 
 const settingsStore = useSettingsStore();
 const uiStore = useUiStore();
+
+const rebalanceMethods = [
+  { value: 'multi_factor_weakest', text: '多因子弱势策略' },
+  { value: 'foam', text: 'FOAM强势动量' }
+];
 
 // --- 新增：币种选择的 debounce 函数 ---
 const debouncedSavePoolSelection = debounce(() => {
