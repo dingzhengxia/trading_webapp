@@ -1,6 +1,5 @@
-// 文件路径: frontend/src/models/types.ts
+// frontend/src/models/types.ts
 
-// Position 接口保持不变，它是正确的
 export interface Position {
   symbol: string;
   full_symbol: string;
@@ -13,15 +12,14 @@ export interface Position {
   mark_price: number;
 }
 
-// --- 修改: 将 LogEntry 重命名为 Log ---
-// 这将匹配 TradingView.vue 中的导入和使用
-export interface Log {
+// --- 保持 Log 接口 ---
+export interface LogEntry {
   message: string;
   level: 'normal' | 'info' | 'success' | 'warning' | 'error';
   timestamp: string;
 }
+// --- 保持结束 ---
 
-// RebalancePlan 接口保持不变，它是正确的
 export interface RebalancePlan {
   target_ratio_perc: number;
   positions_to_close: { symbol: string; close_value: number; close_ratio_perc: number }[];
@@ -29,16 +27,17 @@ export interface RebalancePlan {
   error?: string;
 }
 
-// --- 添加: 缺失的 Progress 接口 ---
-// 这个类型用于驱动进度条组件
+// --- 确认 Progress 接口存在 ---
 export interface Progress {
-  visible: boolean;
-  current: number;
+  success_count: number;
+  failed_count: number;
   total: number;
   task_name: string;
+  show: boolean;
+  is_final: boolean;
 }
+// --- 确认结束 ---
 
-// UserSettings 接口保持不变，它是正确的
 export interface UserSettings {
   api_key: string;
   api_secret: string;
@@ -48,8 +47,10 @@ export interface UserSettings {
   leverage: number;
   total_long_position_value: number;
   total_short_position_value: number;
-  long_coin_list: string[];
-  short_coin_list: string[];
+  long_coin_list: string[]; // 保留原始列表，作为默认值
+  short_coin_list: string[]; // 保留原始列表，作为默认值
+  user_selected_long_coins: string[]; // 用户选择的做多列表
+  user_selected_short_coins: string[]; // 用户选择的做空列表
   long_custom_weights?: { [key: string]: number };
   enable_long_trades: boolean;
   enable_short_trades: boolean;
@@ -73,8 +74,10 @@ export interface UserSettings {
   rebalance_short_ratio_min: number;
 }
 
-// --- 添加: 缺失的 TradePlan 和 RebalanceCriteria 接口 ---
-// 尽管 UserSettings 包含了所有字段，但为 API 调用定义精确的类型是更好的做法
+export interface CoinPools {
+    all_available_coins: string[];
+}
+
 export type TradePlan = UserSettings;
 
 export interface RebalanceCriteria {
@@ -85,3 +88,8 @@ export interface RebalanceCriteria {
   rel_strength_days: number;
   foam_days: number;
 }
+
+export type CloseTarget =
+  | { type: 'single'; position: Position }
+  | { type: 'by_side'; side: 'long' | 'short' | 'all' }
+  | { type: 'selected'; positions: Position[] };

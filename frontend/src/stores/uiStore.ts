@@ -1,14 +1,11 @@
-// frontend/src/stores/uiStore.ts (终极日志诊断版)
+// frontend/src/stores/uiStore.ts
 import { defineStore } from 'pinia';
 import { computed, ref } from 'vue';
 import { useLogStore } from './logStore';
-import type { RebalancePlan, Position } from '@/models/types';
+// --- 修改：确保 LogEntry 被正确导入 ---
+import type { RebalancePlan, Position, CloseTarget, Progress, LogEntry } from '@/models/types';
+// --- 修改结束 ---
 import api from '@/services/api';
-
-export type CloseTarget =
-  | { type: 'single'; position: Position }
-  | { type: 'by_side'; side: 'long' | 'short' | 'all' }
-  | { type: 'selected'; positions: Position[] };
 
 export const useUiStore = defineStore('ui', () => {
   console.log('[uiStore] Store instance created/re-created.');
@@ -20,12 +17,14 @@ export const useUiStore = defineStore('ui', () => {
   const showRebalanceDialog = ref(false);
   const rebalancePlan = ref<RebalancePlan | null>(null);
   const showCloseDialog = ref(false);
+  // --- 修改：closeTarget 的类型现在来自 types.ts ---
   const closeTarget = ref<CloseTarget | null>(null);
+  // --- 修改结束 ---
   const showWeightDialog = ref(false);
 
   let progressResetTimer: number;
 
-  const progress = ref({
+  const progress = ref<Progress>({ // <-- 使用 Progress 接口
     success_count: 0,
     failed_count: 0,
     total: 0,
@@ -51,7 +50,6 @@ export const useUiStore = defineStore('ui', () => {
   function setStatus(message: string, running?: boolean) {
     console.log(`%c[uiStore] SET_STATUS called with: message="${message}", running=${running}`, 'color: lightblue;', 'Current isRunning:', isRunning.value);
 
-    // 保护逻辑
     if (message === '已断开' && isRunning.value && running === false) {
       console.log('%c[uiStore] SET_STATUS protection activated: Task is running, but WS disconnected. ONLY updating message.', 'color: violet;');
       statusMessage.value = message;
@@ -108,7 +106,7 @@ export const useUiStore = defineStore('ui', () => {
   async function checkInitialStatus(): Promise<boolean> {
     console.log('%c[uiStore] CHECK_INITIAL_STATUS starting...', 'color: cyan;');
     try {
-      const response = await api.get('/api/status');
+      const response = await api.get<{ is_running: boolean; progress?: Progress }>('/api/status');
       const { is_running, progress: progressData } = response.data;
       console.log('[uiStore] CHECK_INITIAL_STATUS API response received:', { is_running, progressData });
 
