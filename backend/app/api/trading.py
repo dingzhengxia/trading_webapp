@@ -1,5 +1,5 @@
 # backend/app/api/trading.py (最终完整版)
-from fastapi import APIRouter, BackgroundTasks,Depends
+from fastapi import APIRouter, BackgroundTasks, Depends
 
 from ..core.security import verify_api_key
 from ..core.trading_service import trading_service

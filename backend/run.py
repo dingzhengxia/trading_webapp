@@ -1,7 +1,8 @@
 # backend/run.py (完整更新版)
-import uvicorn
 import sys
 from pathlib import Path
+
+import uvicorn
 
 # --- 新增：路径设置 ---
 # 将 backend 目录添加到 Python 的模块搜索路径中

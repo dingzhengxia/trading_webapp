@@ -1,12 +1,12 @@
 # backend/app/logic/sl_tp_logic_async.py (最终修复版)
 import asyncio
-import math
+from typing import Set
+
 import ccxt.async_support as ccxt
-from typing import List, Set
+
+from .exceptions import InterruptedError
 from ..config import i18n
 from ..models.schemas import Position
-from .utils import resolve_full_symbol
-from .exceptions import InterruptedError
 
 
 async def _cancel_sl_tp_orders_async(exchange: ccxt.binanceusdm, symbol: str, async_logger):

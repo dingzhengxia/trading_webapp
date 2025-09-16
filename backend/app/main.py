@@ -1,13 +1,13 @@
 # backend/app/main.py (完整代码)
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
-from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
-from pathlib import Path
 import os
+from pathlib import Path
+
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from .api import positions, trading, rebalance, settings, status
 from .core.websocket_manager import manager
-from .core.trading_service import trading_service
 
 app = FastAPI(title="Trading API")
 

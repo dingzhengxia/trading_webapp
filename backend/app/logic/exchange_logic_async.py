@@ -1,15 +1,16 @@
 # backend/app/logic/exchange_logic_async.py (最终完整版)
 import asyncio
 import datetime
-import ccxt.async_support as ccxt
-from typing import List, Optional, Dict
+from typing import List, Optional
 
-from .utils import resolve_full_symbol
-from ..models.schemas import Position
-from ..config.config import load_settings
-from ..config import i18n
-from .sl_tp_logic_async import _cancel_sl_tp_orders_async, set_tp_sl_for_position_async
+import ccxt.async_support as ccxt
+
 from .exceptions import RetriableOrderError, InterruptedError
+from .sl_tp_logic_async import _cancel_sl_tp_orders_async, set_tp_sl_for_position_async
+from .utils import resolve_full_symbol
+from ..config import i18n
+from ..config.config import load_settings
+from ..models.schemas import Position
 
 
 async def initialize_exchange_async(api_key: str, api_secret: str, use_testnet: bool, enable_proxy: bool,

@@ -1,9 +1,10 @@
 # backend/app/core/exchange_manager.py (最终健壮版)
-import contextlib
 import asyncio
-import ccxt.async_support as ccxt
+import contextlib
+
 from ..config.config import load_settings
 from ..logic.exchange_logic_async import initialize_exchange_async
+
 
 # --- 核心修改在这里 ---
 async def get_exchange_with_timeout(timeout=20):

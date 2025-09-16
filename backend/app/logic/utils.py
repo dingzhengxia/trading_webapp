@@ -1,5 +1,7 @@
-import ccxt.async_support as ccxt
 from typing import Optional
+
+import ccxt.async_support as ccxt
+
 from ..config.config import STABLECOIN_PREFERENCE
 
 

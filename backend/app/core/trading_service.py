@@ -1,18 +1,19 @@
 # backend/app/core/trading_service.py (最终完整版)
 import asyncio
-from fastapi import HTTPException, BackgroundTasks
-from typing import Dict, Any, List, Tuple, Callable, Awaitable, Optional
 import threading
 import time
+from typing import Dict, Any, List, Tuple, Callable, Awaitable, Optional
 
+from fastapi import HTTPException, BackgroundTasks
+
+from .exchange_manager import get_exchange_for_task
+from .websocket_manager import log_message, update_status, broadcast_progress_details, manager as ws_manager
 from ..config.config import load_settings
-from ..logic.plan_calculator import calculate_trade_plan
 from ..logic.exchange_logic_async import process_order_with_sl_tp_async, close_position_async, \
     InterruptedError, fetch_positions_with_pnl_async
+from ..logic.plan_calculator import calculate_trade_plan
 from ..logic.sl_tp_logic_async import set_tp_sl_for_position_async, cleanup_orphan_sltp_orders_async
 from ..models.schemas import ExecutionPlanRequest, TradePlanRequest, SyncSltpRequest
-from .websocket_manager import log_message, update_status, broadcast_progress_details, manager as ws_manager
-from .exchange_manager import get_exchange_for_task
 
 
 class TradingService:

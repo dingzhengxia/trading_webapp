@@ -1,5 +1,5 @@
 # backend/app/api/status.py
-from fastapi import APIRouter,Depends
+from fastapi import APIRouter, Depends
 
 from ..core.security import verify_api_key
 from ..core.trading_service import trading_service
