@@ -109,7 +109,7 @@
                     variant="elevated"
                   >
                     {{ coin }}
-                  </v</v-chip>
+                  </v-chip>
                 </v-chip-group>
                 <div v-if="!currentShortPool || currentShortPool.length === 0" class="text-caption grey--text pa-2">
                   尚未选择做空币种。
