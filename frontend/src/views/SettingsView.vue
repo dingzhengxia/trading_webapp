@@ -36,7 +36,7 @@
 
             <v-divider class="my-6"></v-divider>
 
-            <!-- 代理设置 -->
+            <!-- 网络代理 -->
             <h3 class="settings-subtitle">网络代理</h3>
             <v-row dense>
                 <v-col cols="12">
@@ -54,6 +54,14 @@
                 </v-col>
             </v-row>
 
+            <!-- 新增：管理币种列表按钮 -->
+            <v-divider class="my-6"></v-divider>
+            <h3 class="settings-subtitle">交易币种列表</h3>
+            <v-btn color="secondary" @click="uiStore.showCoinPoolsDialog = true">
+              <v-icon left>mdi-cog-outline</v-icon>
+              管理币种池
+            </v-btn>
+
           </v-card-text>
            <v-card-actions class="pa-4">
               <v-spacer></v-spacer>
@@ -65,12 +73,18 @@
         </v-card>
       </v-col>
     </v-row>
+    <!-- CoinPoolsDialog 组件 -->
+    <CoinPoolsDialog v-model="uiStore.showCoinPoolsDialog" />
   </v-container>
 </template>
 
 <script setup lang="ts">
 import { useSettingsStore } from '@/stores/settingsStore';
+import { useUiStore } from '@/stores/uiStore';
+import CoinPoolsDialog from '@/components/CoinPoolsDialog.vue'; // 导入新组件
+
 const settingsStore = useSettingsStore();
+const uiStore = useUiStore(); // 确保 uiStore 被导入
 </script>
 
 <style scoped>
