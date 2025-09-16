@@ -1,29 +1,25 @@
 # backend/app/logic/plan_calculator.py
-from typing import List, Dict, Any, Tuple, Set
-
-# --- 修改导入 ---
-from ..config.config import ALL_AVAILABLE_COINS, AVAILABLE_LONG_COINS, AVAILABLE_SHORT_COINS
-# --- 修改结束 ---
 
 def calculate_trade_plan(config, custom_weights):
     long_plan, short_plan = {}, {}
 
-    if config.get('enable_long_trades', True) and config.get('total_long_position_value', 0) > 0:
-        # --- 修改：优先使用用户选择的列表，如果用户选择为空，则回退到原始加载的列表 ---
-        long_coin_list = config.get('user_selected_long_coins', [])
-        if not long_coin_list and AVAILABLE_LONG_COINS: # 如果用户未选择，且原始列表不为空
-            long_coin_list = AVAILABLE_LONG_COINS
-        elif not long_coin_list and not ALL_AVAILABLE_COINS: # 如果用户未选择，且全局可用列表也为空
-             print("警告: 没有可用的多头币种！")
-             long_coin_list = []
-        # --- 修改结束 ---
+    # --- 诊断日志 4：打印传入 plan_calculator 的关键配置 ---
+    print("\n--- [BACKEND DEBUG 4] Inside plan_calculator ---")
+    print(f"    'enable_long_trades' received: {config.get('enable_long_trades')}")
+    print(f"    'enable_short_trades' received: {config.get('enable_short_trades')}")
+    print("------------------------------------------\n")
+    # ---------------------------------------------------------
 
-        if not long_coin_list: return {}, {}
+    if config.get('enable_long_trades', True) and config.get('total_long_position_value', 0) > 0:
+        long_coin_list = config.get('long_coin_list', [])
+        if not long_coin_list:
+            return {}, {}
 
         total_long_value = config['total_long_position_value']
         long_coin_list = [c.strip().upper() for c in long_coin_list if isinstance(c, str) and c.strip()]
 
-        if not long_coin_list: return {}, {}
+        if not long_coin_list:
+            return {}, {}
 
         if custom_weights:
             assigned_coins = {c: w for c, w in custom_weights.items() if c in long_coin_list and w > 0}
@@ -62,17 +58,8 @@ def calculate_trade_plan(config, custom_weights):
                 value_per_coin = total_long_value / len(long_coin_list)
                 for coin in long_coin_list: long_plan[coin] = value_per_coin
 
-
     if config.get('enable_short_trades', True) and config.get('total_short_position_value', 0) > 0:
-        # --- 修改：优先使用用户选择的列表，如果用户选择为空，则回退到原始加载的列表 ---
-        short_coin_list = config.get('user_selected_short_coins', [])
-        if not short_coin_list and AVAILABLE_SHORT_COINS:
-            short_coin_list = AVAILABLE_SHORT_COINS
-        elif not short_coin_list and not ALL_AVAILABLE_COINS:
-            print("警告: 没有可用的空头币种！")
-            short_coin_list = []
-        # --- 修改结束 ---
-
+        short_coin_list = config.get('short_coin_list', [])
         if not short_coin_list:
             return long_plan, {}
 
