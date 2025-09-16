@@ -1,13 +1,17 @@
 # backend/app/api/settings.py
 from typing import Dict, Any, List
 
-from fastapi import APIRouter, Body, Depends
+from fastapi import Body, APIRouter, Depends
 from pydantic import BaseModel
 
 # --- 修改导入 ---
-from ..config.config import load_settings, save_settings, ALL_AVAILABLE_COINS, AVAILABLE_LONG_COINS, AVAILABLE_SHORT_COINS
-# --- 修改结束 ---
+from ..config.config import load_settings, save_settings, ALL_AVAILABLE_COINS
 from ..core.security import verify_api_key
+
+router = APIRouter(prefix="/api/settings", tags=["Settings"],dependencies=[Depends(verify_api_key)])
+
+
+# --- 修改结束 ---
 
 class SettingsResponse(BaseModel):
     user_settings: Dict[str, Any]
