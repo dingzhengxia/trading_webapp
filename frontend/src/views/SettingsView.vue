@@ -34,7 +34,7 @@
                 <v-select
                   label="选择做多币种"
                   v-model="settingsStore.settings.user_selected_long_coins"
-                  :items="availableCoins" <!-- 使用合并后的总列表 -->
+                  :items="availableCoins"
                   multiple
                   chips
                   closable-chips
@@ -75,7 +75,7 @@
                 <v-select
                   label="选择做空币种"
                   v-model="settingsStore.settings.user_selected_short_coins"
-                  :items="availableCoinsFilteredForShort" <!-- 使用过滤后的做空可用币种 -->
+                  :items="availableCoinsFilteredForShort"
                   multiple
                   chips
                   closable-chips
