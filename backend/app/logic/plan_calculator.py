@@ -1,25 +1,29 @@
 # backend/app/logic/plan_calculator.py
+from typing import List, Dict, Any, Tuple, Set
+
+# --- 修改导入 ---
+from ..config.config import ALL_AVAILABLE_COINS # 仅导入 ALL_AVAILABLE_COINS
+# --- 修改结束 ---
 
 def calculate_trade_plan(config, custom_weights):
     long_plan, short_plan = {}, {}
 
-    # --- 诊断日志 4：打印传入 plan_calculator 的关键配置 ---
-    print("\n--- [BACKEND DEBUG 4] Inside plan_calculator ---")
-    print(f"    'enable_long_trades' received: {config.get('enable_long_trades')}")
-    print(f"    'enable_short_trades' received: {config.get('enable_short_trades')}")
-    print("------------------------------------------\n")
-    # ---------------------------------------------------------
-
     if config.get('enable_long_trades', True) and config.get('total_long_position_value', 0) > 0:
-        long_coin_list = config.get('long_coin_list', [])
-        if not long_coin_list:
-            return {}, {}
+        # --- 修改：优先使用用户选择的做多列表，如果用户选择为空，则回退到全局可用列表 ---
+        long_coin_list = config.get('user_selected_long_coins', [])
+        if not long_coin_list and ALL_AVAILABLE_COINS: # 如果用户未选择，则使用全局列表
+            long_coin_list = ALL_AVAILABLE_COINS
+        elif not long_coin_list: # 如果用户未选择且全局列表也为空
+             print("警告: 没有可用的多头币种！")
+             long_coin_list = []
+        # --- 修改结束 ---
+
+        if not long_coin_list: return {}, {}
 
         total_long_value = config['total_long_position_value']
         long_coin_list = [c.strip().upper() for c in long_coin_list if isinstance(c, str) and c.strip()]
 
-        if not long_coin_list:
-            return {}, {}
+        if not long_coin_list: return {}, {}
 
         if custom_weights:
             assigned_coins = {c: w for c, w in custom_weights.items() if c in long_coin_list and w > 0}
@@ -48,8 +52,8 @@ def calculate_trade_plan(config, custom_weights):
                 remaining_value = float(total_long_value)
                 if btc_in_list: long_plan['BTC'] = total_long_value * 0.40; remaining_value -= long_plan['BTC']
                 if eth_in_list: long_plan['ETH'] = total_long_value * 0.30; remaining_value -= long_plan['ETH']
-                if satellite_coins:
-                    value_per_satellite = max(0, remaining_value) / len(satellite_coins)
+                if satellite_coins and remaining_value > 0:
+                    value_per_satellite = remaining_value / len(satellite_coins)
                     for coin in satellite_coins: long_plan[coin] = value_per_satellite
             elif btc_in_list and eth_in_list and not satellite_coins:
                 long_plan['BTC'] = total_long_value * 0.60
@@ -58,14 +62,24 @@ def calculate_trade_plan(config, custom_weights):
                 value_per_coin = total_long_value / len(long_coin_list)
                 for coin in long_coin_list: long_plan[coin] = value_per_coin
 
+
     if config.get('enable_short_trades', True) and config.get('total_short_position_value', 0) > 0:
-        short_coin_list = config.get('short_coin_list', [])
+        # --- 修改：优先使用用户选择的列表，如果用户选择为空，则回退到全局可用列表 ---
+        short_coin_list = config.get('user_selected_short_coins', [])
+        if not short_coin_list and ALL_AVAILABLE_COINS:
+            short_coin_list = ALL_AVAILABLE_COINS
+        elif not short_coin_list:
+            print("警告: 没有可用的空头币种！")
+            short_coin_list = []
+        # --- 修改结束 ---
+
         if not short_coin_list:
             return long_plan, {}
 
         short_coin_list = [c.strip().upper() for c in short_coin_list if isinstance(c, str) and c.strip()]
         if short_coin_list:
             value_per_short = config['total_short_position_value'] / len(short_coin_list)
-            for coin in short_coin_list: short_plan[coin] = value_per_short
+            for coin in short_coin_list:
+                short_plan[coin] = value_per_short
 
     return long_plan, short_plan
