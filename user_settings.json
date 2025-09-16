@@ -13,14 +13,12 @@
     "enable_short_sl_tp": true,
     "short_stop_loss_percentage": 200,
     "short_take_profit_percentage": 300,
-    "long_coin_list": [
+    "coin_list": [
         "BTC",
         "DOGE",
         "BNB",
         "ETH",
-        "SOL"
-    ],
-    "short_coin_list": [
+        "SOL",
         "FORM",
         "ZORA",
         "SYRUP",
@@ -92,6 +90,8 @@
         "OM",
         "ATOM"
     ],
+    "long_coin_list": [],
+    "short_coin_list": [],
     "long_custom_weights": {
         "BTC": 30,
         "DOGE": 15,
