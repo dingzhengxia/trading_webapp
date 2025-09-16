@@ -105,7 +105,7 @@ import { useUiStore } from '@/stores/uiStore';
 import apiClient from '@/services/api';
 
 const props = defineProps<{ modelValue: boolean }>();
-const emit = defineEmits(['update:modelValue']);
+const emit = emits(['update:modelValue']);
 
 const settingsStore = useSettingsStore();
 const uiStore = useUiStore();
@@ -215,7 +215,6 @@ onMounted(async () => {
 /* chip 之间的间距 */
 .v-chip {
   margin: 4px;
-  
 }
 /* tab 内容的顶部间距 */
 .v-card-text > .v-tabs-items > .v-tab-item {
