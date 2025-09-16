@@ -105,7 +105,7 @@ import { useUiStore } from '@/stores/uiStore';
 import apiClient from '@/services/api';
 
 const props = defineProps<{ modelValue: boolean }>();
-const emit = emits(['update:modelValue']);
+const emit = defineEmits(['update:modelValue']);
 
 const settingsStore = useSettingsStore();
 const uiStore = useUiStore();
