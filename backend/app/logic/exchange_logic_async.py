@@ -8,7 +8,7 @@ from .utils import resolve_full_symbol
 from ..models.schemas import Position
 from ..config.config import load_settings
 from ..config import i18n
-from .sl_tp_logic_async import _cancel_sl_tp_orders_async
+from .sl_tp_logic_async import _cancel_sl_tp_orders_async, set_tp_sl_for_position_async
 from .exceptions import RetriableOrderError, InterruptedError
 
 
