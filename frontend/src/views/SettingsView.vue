@@ -30,11 +30,11 @@
             <v-row dense align="center">
               <!-- 做多列表 -->
               <v-col cols="12" md="5">
-                <v-label class="mb-2">做多待选列表</v-label>
+                <v-label class="mb-2">做多币种列表</v-label>
                 <v-select
                   label="选择做多币种"
-                  v-model="settingsStore.settings.user_selected_long_coins"
-                  :items="availableCoins"
+                  v-model="settingsStore.settings.long_coin_list" <!-- 直接绑定到 long_coin_list -->
+                  :items="availableCoins" <!-- 使用合并后的总列表 -->
                   multiple
                   chips
                   closable-chips
@@ -71,11 +71,11 @@
 
               <!-- 做空列表 -->
               <v-col cols="12" md="5">
-                <v-label class="mb-2">做空待选列表</v-label>
+                <v-label class="mb-2">做空币种列表</v-label>
                 <v-select
                   label="选择做空币种"
-                  v-model="settingsStore.settings.user_selected_short_coins"
-                  :items="availableCoinsFilteredForShort"
+                  v-model="settingsStore.settings.short_coin_list" <!-- 直接绑定到 short_coin_list -->
+                  :items="availableCoinsFilteredForShort" <!-- 使用过滤后的做空可用币种 -->
                   multiple
                   chips
                   closable-chips
@@ -155,8 +155,8 @@ const rebalanceMethods = [
 const debouncedSavePoolSelection = debounce(() => {
   if (settingsStore.settings) {
     settingsStore.updateCoinPoolSelection(
-      settingsStore.settings.user_selected_long_coins,
-      settingsStore.settings.user_selected_short_coins
+      settingsStore.settings.long_coin_list, // 直接传递 long_coin_list
+      settingsStore.settings.short_coin_list // 直接传递 short_coin_list
     );
   }
 }, 500);
@@ -179,32 +179,34 @@ onMounted(() => {
 const selectedLong = ref<string[]>([]);
 const selectedShort = ref<string[]>([]);
 
-// 计算过滤后的可用币种列表，以确保一个币种只显示在一个列表中
+// 计算过滤后的可用币种列表，确保一个币种不会同时出现在两个列表的选项中
 const availableCoinsFilteredForLong = computed(() => {
   if (!settingsStore.settings) return [];
+  // 做多列表的选项：全局列表减去已在做空列表中的
   return settingsStore.availableCoins.filter(coin =>
-    !settingsStore.settings!.user_selected_short_coins.includes(coin)
+    !settingsStore.settings!.short_coin_list.includes(coin)
   );
 });
 
 const availableCoinsFilteredForShort = computed(() => {
   if (!settingsStore.settings) return [];
+  // 做空列表的选项：全局列表减去已在做多列表中的
   return settingsStore.availableCoins.filter(coin =>
-    !settingsStore.settings!.user_selected_long_coins.includes(coin)
+    !settingsStore.settings!.long_coin_list.includes(coin)
   );
 });
 
 // 当用户直接在 v-select 中增删币种时的处理
 const onLongCoinsChanged = (newVal: string[]) => {
     if (settingsStore.settings) {
-        settingsStore.settings.user_selected_long_coins = newVal;
+        settingsStore.settings.long_coin_list = newVal; // 直接更新 long_coin_list
         debouncedSavePoolSelection();
     }
 };
 
 const onShortCoinsChanged = (newVal: string[]) => {
     if (settingsStore.settings) {
-        settingsStore.settings.user_selected_short_coins = newVal;
+        settingsStore.settings.short_coin_list = newVal; // 直接更新 short_coin_list
         debouncedSavePoolSelection();
     }
 };
@@ -213,20 +215,19 @@ const onShortCoinsChanged = (newVal: string[]) => {
 const moveSelectedToLong = () => {
     if (!settingsStore.settings) return;
 
-    // 1. 将选中的做空币种添加到做多列表中
-    //    使用 Set 来确保去重，然后转换为数组
-    settingsStore.settings.user_selected_long_coins = Array.from(new Set([
-        ...settingsStore.settings.user_selected_long_coins,
+    // 1. 将选中的做空币种添加到做多列表中 (去重)
+    settingsStore.settings.long_coin_list = Array.from(new Set([
+        ...settingsStore.settings.long_coin_list,
         ...selectedShort.value
     ]));
     // 2. 从做空列表中移除这些币种
-    settingsStore.settings.user_selected_short_coins = settingsStore.settings.user_selected_short_coins.filter(
+    settingsStore.settings.short_coin_list = settingsStore.settings.short_coin_list.filter(
         coin => !selectedShort.value.includes(coin)
     );
 
     // 3. 清空选择
     selectedShort.value = [];
-    selectedLong.value = []; // 同时清空做多选择
+    selectedLong.value = [];
 
     // 4. 保存更改
     debouncedSavePoolSelection();
@@ -237,12 +238,12 @@ const moveSelectedToShort = () => {
     if (!settingsStore.settings) return;
 
     // 1. 将选中的做多币种添加到做空列表中
-    settingsStore.settings.user_selected_short_coins = [
-        ...settingsStore.settings.user_selected_short_coins,
+    settingsStore.settings.short_coin_list = [
+        ...settingsStore.settings.short_coin_list,
         ...selectedLong.value
     ];
     // 2. 从做多列表中移除这些币种
-    settingsStore.settings.user_selected_long_coins = settingsStore.settings.user_selected_long_coins.filter(
+    settingsStore.settings.long_coin_list = settingsStore.settings.long_coin_list.filter(
         coin => !selectedLong.value.includes(coin)
     );
 

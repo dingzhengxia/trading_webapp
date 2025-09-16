@@ -2,20 +2,18 @@
 from typing import List, Dict, Any, Tuple, Set
 
 # --- 修改导入 ---
-from ..config.config import ALL_AVAILABLE_COINS # 仅导入 ALL_AVAILABLE_COINS
+from ..config.config import ALL_AVAILABLE_COINS, AVAILABLE_LONG_COINS, AVAILABLE_SHORT_COINS
 # --- 修改结束 ---
 
 def calculate_trade_plan(config, custom_weights):
     long_plan, short_plan = {}, {}
 
     if config.get('enable_long_trades', True) and config.get('total_long_position_value', 0) > 0:
-        # --- 修改：优先使用用户选择的做多列表，如果用户选择为空，则回退到全局可用列表 ---
-        long_coin_list = config.get('user_selected_long_coins', [])
-        if not long_coin_list and ALL_AVAILABLE_COINS: # 如果用户未选择，则使用全局列表
-            long_coin_list = ALL_AVAILABLE_COINS
-        elif not long_coin_list: # 如果用户未选择且全局列表也为空
-             print("警告: 没有可用的多头币种！")
-             long_coin_list = []
+        # --- 修改：直接使用 config 中的 long_coin_list，不再回退 ---
+        long_coin_list = config.get('long_coin_list', [])
+        if not long_coin_list:
+             print("警告: 多头币种列表为空！")
+             # 如果用户清空了列表，那么这个列表就应该为空，不进行交易
         # --- 修改结束 ---
 
         if not long_coin_list: return {}, {}
@@ -64,13 +62,11 @@ def calculate_trade_plan(config, custom_weights):
 
 
     if config.get('enable_short_trades', True) and config.get('total_short_position_value', 0) > 0:
-        # --- 修改：优先使用用户选择的列表，如果用户选择为空，则回退到全局可用列表 ---
-        short_coin_list = config.get('user_selected_short_coins', [])
-        if not short_coin_list and ALL_AVAILABLE_COINS:
-            short_coin_list = ALL_AVAILABLE_COINS
-        elif not short_coin_list:
-            print("警告: 没有可用的空头币种！")
-            short_coin_list = []
+        # --- 修改：直接使用 config 中的 short_coin_list，不再回退 ---
+        short_coin_list = config.get('short_coin_list', [])
+        if not short_coin_list:
+            print("用户未选择任何做空币种。")
+            # short_coin_list = [] # 保持为空
         # --- 修改结束 ---
 
         if not short_coin_list:

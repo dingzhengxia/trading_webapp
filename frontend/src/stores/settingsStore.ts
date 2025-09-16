@@ -11,13 +11,11 @@ const defaultSettings: UserSettings = {
   leverage: 20,
   total_long_position_value: 1000.0,
   total_short_position_value: 500.0,
-  // --- 保留原始列表，作为默认值 ---
+  // --- 直接使用 long_coin_list 和 short_coin_list 作为用户选择的列表 ---
   long_coin_list: ["BTC", "ETH"],
   short_coin_list: ["SOL", "AVAX"],
-  // --- 修改：user_selected_* 字段是用户自定义的 ---
-  user_selected_long_coins: [],
-  user_selected_short_coins: [],
-  // --- 修改结束 ---
+  // --- 移除了 user_selected_* 字段 ---
+  // --- 结束 ---
   long_custom_weights: {},
   enable_long_trades: true,
   enable_short_trades: true,
@@ -55,44 +53,48 @@ export const useSettingsStore = defineStore('settings', () => {
     loading.value = true;
     try {
       const response = await api.get<{ user_settings: UserSettings } & CoinPools>('/api/settings');
-      settings.value = { ...defaultSettings, ...response.data.user_settings };
+      // --- 重要：合并时，如果用户设置中没有 long_coin_list/short_coin_list，则使用默认值 ---
+      settings.value = {
+        ...defaultSettings,
+        ...response.data.user_settings,
+        // 确保在加载时，如果用户配置中这两个列表为空，则使用全局的 ALL_AVAILABLE_COINS
+        // 这样即使配置文件被清空，用户也能看到所有币种
+        long_coin_list: response.data.user_settings.long_coin_list?.length > 0 ? response.data.user_settings.long_coin_list : DEFAULT_CONFIG.long_coin_list,
+        short_coin_list: response.data.user_settings.short_coin_list?.length > 0 ? response.data.user_settings.short_coin_list : DEFAULT_CONFIG.short_coin_list,
+      };
       availableCoins.value = response.data.all_available_coins;
 
-      // --- 核心逻辑：如果用户选择的列表是空的，则用全局可用列表填充 ---
-      // 这确保了首次运行时或用户清空列表后，应用仍能正常工作
-      if (!settings.value.user_selected_long_coins || settings.value.user_selected_long_coins.length === 0) {
-          console.log('[SettingsStore] user_selected_long_coins is empty, defaulting to availableCoins.');
-          settings.value.user_selected_long_coins = [...availableCoins.value]; // 浅拷贝
-      }
-      if (!settings.value.user_selected_short_coins || settings.value.user_selected_short_coins.length === 0) {
-          console.log('[SettingsStore] user_selected_short_coins is empty, defaulting to availableCoins.');
-          settings.value.user_selected_short_coins = [...availableCoins.value]; // 浅拷贝
-      }
-      // --- 核心逻辑结束 ---
+      // --- 移除之前不必要的空列表回退逻辑 ---
+      // if (!settings.value.user_selected_long_coins || settings.value.user_selected_long_coins.length === 0) {
+      //     settings.value.user_selected_long_coins = [...availableCoins.value];
+      // }
+      // if (!settings.value.user_selected_short_coins || settings.value.user_selected_short_coins.length === 0) {
+      //     settings.value.user_selected_short_coins = [...availableCoins.value];
+      // }
+      // --- 结束 ---
 
     } catch (error) {
       console.error("Failed to fetch settings:", error);
       uiStore.logStore.addLog({ message: "获取配置失败，请检查后端服务。", level: 'error', timestamp: new Date().toLocaleTimeString() });
-      settings.value = { ...defaultSettings };
+      settings.value = { ...defaultSettings }; // 回退到默认配置
       availableCoins.value = ALL_AVAILABLE_COINS || []; // 后端加载失败时，回退到硬编码的全局列表
-      // 错误时，用户选择的列表也应回退到可用列表
-      settings.value.user_selected_long_coins = [...availableCoins.value];
-      settings.value.user_selected_short_coins = [...availableCoins.value];
     } finally {
       loading.value = false;
     }
   }
 
-  // --- 更新用户选择的币种列表 ---
+  // --- 更新用户选择的币种列表，并直接保存 ---
   async function updateCoinPoolSelection(longCoins: string[], shortCoins: string[]) {
       try {
+          // 假设 update-pools 接口只更新用户选择的部分
           const response = await api.post('/api/settings/update-pools', {
               selected_long_coins: longCoins,
               selected_short_coins: shortCoins
           });
+          // 但是，我们需要将更改直接应用到 settings.value
           if (settings.value) {
-              settings.value.user_selected_long_coins = [...longCoins]; // 浅拷贝
-              settings.value.user_selected_short_coins = [...shortCoins]; // 浅拷贝
+              settings.value.long_coin_list = [...longCoins]; // 直接更新 long_coin_list
+              settings.value.short_coin_list = [...shortCoins]; // 直接更新 short_coin_list
           }
           uiStore.logStore.addLog({ message: response.data.message || "币种列表已更新。", level: 'success', timestamp: new Date().toLocaleTimeString() });
       } catch (error: any) {
@@ -106,6 +108,7 @@ export const useSettingsStore = defineStore('settings', () => {
   async function saveSettings(newSettings: UserSettings | null) {
     if (!newSettings) return;
     try {
+      // 使用 POST /api/settings 接口保存所有设置
       await api.post('/api/settings', newSettings);
       uiStore.logStore.addLog({ message: "配置已自动保存。", level: 'info', timestamp: new Date().toLocaleTimeString() });
     } catch (error) {
@@ -130,7 +133,7 @@ export const useSettingsStore = defineStore('settings', () => {
 
   return {
     settings,
-    availableCoins, // 暴露合并后的列表
+    availableCoins,
     loading,
     fetchSettings,
     saveSettings,
