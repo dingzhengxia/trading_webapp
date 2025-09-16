@@ -5,45 +5,6 @@
         <span class="text-h5">管理交易币种列表</span>
       </v-card-title>
       <v-card-text>
-        <v-autocomplete
-          v-model="selectedCoins"
-          :items="allAvailableCoins"
-          label="选择或输入币种"
-          multiple
-          chips
-          closable-chips
-          clearable
-          variant="outlined"
-          auto-grow
-          rows="3"
-          row-height="30"
-          class="mb-4"
-          :loading="isRefreshingCoins"
-          hide-details
-          item-title="text"
-          item-value="value"
-          :menu-props="{ maxHeight: '300px' }"
-          ref="autocompleteRef"
-        >
-          <template v-slot:selection="{ item, index }">
-            <v-chip v-if="index < 2">
-              <span>{{ item.title }}</span>
-            </v-chip>
-            <span v-else-if="index === 2" class="text-grey text-caption align-self-center">
-              (+{{ selectedCoins.length - 2 }} 更多)
-            </span>
-          </template>
-
-          <template v-slot:append-outer>
-            <v-tooltip location="top">
-              <template v-slot:activator="{ props }">
-                <v-btn icon="mdi-refresh" variant="text" v-bind="props" @click="refreshAvailableCoins" :loading="isRefreshingCoins"></v-btn>
-              </template>
-              <span>刷新可用币种列表</span>
-            </v-tooltip>
-          </template>
-        </v-autocomplete>
-
         <v-tabs v-model="currentTab" fixed-tabs>
           <v-tab value="long">做多池</v-tab>
           <v-tab value="short">做空池</v-tab>
@@ -51,42 +12,78 @@
 
         <v-tabs-items v-model="currentTab">
           <v-tab-item value="long">
-            <v-card variant="outlined" class="mt-4 pa-4">
-              <div v-if="!currentLongPool || currentLongPool.length === 0" class="text-caption grey--text">
-                尚未选择做多币种。
-              </div>
-              <v-chip
-                v-for="coin in currentLongPool"
-                :key="coin"
-                closable
-                @click:close="removeChip('long', coin)"
-                color="success"
-                label
-                size="small"
-                variant="elevated"
-              >
-                {{ coin }}
-              </v-chip>
+            <v-card variant="outlined" class="mt-4">
+              <v-card-title class="text-subtitle-1">
+                做多币种列表 ({{ currentLongPool.length }})
+              </v-card-title>
+              <v-card-text>
+                <v-autocomplete
+                  v-model="currentLongPool"
+                  :items="allAvailableCoins"
+                  label="选择或输入做多币种"
+                  multiple
+                  chips
+                  closable-chips
+                  clearable
+                  variant="outlined"
+                  auto-grow
+                  rows="3"
+                  row-height="30"
+                  class="mb-4"
+                  :loading="isRefreshingCoins"
+                  hide-details
+                  item-title="text"
+                  item-value="value"
+                  :menu-props="{ maxHeight: '300px' }"
+                >
+                  <template v-slot:append-outer>
+                    <v-tooltip location="top">
+                      <template v-slot:activator="{ props }">
+                        <v-btn icon="mdi-refresh" variant="text" v-bind="props" @click="refreshAvailableCoins" :loading="isRefreshingCoins"></v-btn>
+                      </template>
+                      <span>刷新可用币种列表</span>
+                    </v-tooltip>
+                  </template>
+                </v-autocomplete>
+              </v-card-text>
             </v-card>
           </v-tab-item>
 
           <v-tab-item value="short">
-            <v-card variant="outlined" class="mt-4 pa-4">
-              <div v-if="!currentShortPool || currentShortPool.length === 0" class="text-caption grey--text">
-                尚未选择做空币种。
-              </div>
-              <v-chip
-                v-for="coin in currentShortPool"
-                :key="coin"
-                closable
-                @click:close="removeChip('short', coin)"
-                color="error"
-                label
-                size="small"
-                variant="elevated"
-              >
-                {{ coin }}
-              </v-chip>
+            <v-card variant="outlined" class="mt-4">
+              <v-card-title class="text-subtitle-1">
+                做空币种列表 ({{ currentShortPool.length }})
+              </v-card-title>
+              <v-card-text>
+                <v-autocomplete
+                  v-model="currentShortPool"
+                  :items="allAvailableCoins"
+                  label="选择或输入做空币种"
+                  multiple
+                  chips
+                  closable-chips
+                  clearable
+                  variant="outlined"
+                  auto-grow
+                  rows="3"
+                  row-height="30"
+                  class="mb-4"
+                  :loading="isRefreshingCoins"
+                  hide-details
+                  item-title="text"
+                  item-value="value"
+                  :menu-props="{ maxHeight: '300px' }"
+                >
+                  <template v-slot:append-outer>
+                    <v-tooltip location="top">
+                      <template v-slot:activator="{ props }">
+                        <v-btn icon="mdi-refresh" variant="text" v-bind="props" @click="refreshAvailableCoins" :loading="isRefreshingCoins"></v-btn>
+                      </template>
+                      <span>刷新可用币种列表</span>
+                    </v-tooltip>
+                  </template>
+                </v-autocomplete>
+              </v-card-text>
             </v-card>
           </v-tab-item>
         </v-tabs-items>
@@ -114,7 +111,6 @@ const settingsStore = useSettingsStore();
 const uiStore = useUiStore();
 
 const currentTab = ref('long');
-const selectedCoins = ref<string[]>([]);
 const currentLongPool = ref<string[]>([]);
 const currentShortPool = ref<string[]>([]);
 const isRefreshingCoins = ref(false);
@@ -145,14 +141,11 @@ const initializeTempPools = () => {
       currentShortPool.value = settingsStore.settings?.short_coin_list || [];
     });
   }
-  // 确保 v-autocomplete 的选中项与当前 tab 匹配
-  selectedCoins.value = currentTab.value === 'long' ? currentLongPool.value : currentShortPool.value;
 };
 
 const resetPools = () => {
   currentLongPool.value = defaultCoinPools.value.long_coins_pool || [];
   currentShortPool.value = defaultCoinPools.value.short_coins_pool || [];
-  selectedCoins.value = currentTab.value === 'long' ? currentLongPool.value : currentShortPool.value;
 };
 
 const refreshAvailableCoins = async () => {
@@ -168,18 +161,6 @@ const refreshAvailableCoins = async () => {
     uiStore.logStore.addLog({ message: `刷新可用币种列表失败: ${errorMsg}`, level: 'error', timestamp: new Date().toLocaleTimeString() });
   } finally {
     isRefreshingCoins.value = false;
-  }
-};
-
-const removeChip = (poolType: 'long' | 'short', coinToRemove: string) => {
-  if (poolType === 'long') {
-    currentLongPool.value = currentLongPool.value.filter(coin => coin !== coinToRemove);
-  } else {
-    currentShortPool.value = currentShortPool.value.filter(coin => coin !== coinToRemove);
-  }
-  // 如果当前 tab 匹配，同时从 selectedCoins 中移除，以保持同步
-  if (currentTab.value === poolType) {
-    selectedCoins.value = selectedCoins.value.filter(coin => coin !== coinToRemove);
   }
 };
 
@@ -214,25 +195,10 @@ const closeDialog = () => {
   currentTab.value = 'long';
 };
 
-// 监听 dialog 打开事件，初始化临时数据
 watch(() => props.modelValue, (newValue) => {
   if (newValue) {
     initializeTempPools();
   }
-});
-
-// 监听 selectedCoins 的变化，更新当前活动的池
-watch(selectedCoins, (newValue) => {
-  if (currentTab.value === 'long') {
-    currentLongPool.value = newValue;
-  } else {
-    currentShortPool.value = newValue;
-  }
-});
-
-// 监听标签页切换，同步 v-autocomplete 的选中项
-watch(currentTab, (newValue) => {
-  selectedCoins.value = newValue === 'long' ? currentLongPool.value : currentShortPool.value;
 });
 
 onMounted(async () => {
