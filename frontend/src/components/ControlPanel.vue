@@ -17,7 +17,7 @@
                   <v-text-field v-model.number="settingsStore.settings.total_long_position_value" label="多头总价值 (USD)" type="number" :disabled="!settingsStore.settings.enable_long_trades"></v-text-field>
 
                   <v-autocomplete
-                    v-model="selectedLongCoins"
+                    v-model="settingsStore.settings.long_coin_list"
                     :items="settingsStore.availableLongCoins"
                     label="从备选池中选择做多币种"
                     multiple
@@ -44,7 +44,7 @@
                   <v-text-field v-model.number="settingsStore.settings.total_short_position_value" label="空头总价值 (USD)" type="number" :disabled="!settingsStore.settings.enable_short_trades"></v-text-field>
 
                   <v-autocomplete
-                    v-model="selectedShortCoins"
+                    v-model="settingsStore.settings.short_coin_list"
                     :items="settingsStore.availableShortCoins"
                     label="从备选池中选择空头币种"
                     multiple
@@ -87,20 +87,16 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch, onMounted } from 'vue';
 import { useSettingsStore } from '@/stores/settingsStore';
 import { useUiStore } from '@/stores/uiStore';
 import WeightConfigDialog from './WeightConfigDialog.vue';
-import { debounce } from 'lodash';
+import { watch } from 'vue';
+import { debounce } from 'lodash-es'; // 核心修改：将 'lodash' 改为 'lodash-es'
 
 const modelValue = defineModel<string>();
 
 const settingsStore = useSettingsStore();
 const uiStore = useUiStore();
-
-// 新增本地状态来管理交易终端的币种列表
-const selectedLongCoins = ref<string[]>([]);
-const selectedShortCoins = ref<string[]>([]);
 
 const rebalanceMethods = [
   { value: 'multi_factor_weakest', text: '多因子弱势策略' },
@@ -114,23 +110,25 @@ const updateWeights = (newWeights: { [key: string]: number }) => {
 };
 
 const saveSelectedListsDebounced = debounce(() => {
-  settingsStore.saveSelectedCoinLists(selectedLongCoins.value, selectedShortCoins.value);
+  if (settingsStore.settings) {
+    settingsStore.saveSelectedCoinLists(settingsStore.settings.long_coin_list, settingsStore.settings.short_coin_list);
+  }
 }, 2000); // 2秒防抖
 
 // 监视币种列表的变化并自动保存
-watch(selectedLongCoins, () => {
-  saveSelectedListsDebounced();
-}, { deep: true });
+watch(
+  () => settingsStore.settings?.long_coin_list,
+  () => {
+    saveSelectedListsDebounced();
+  },
+  { deep: true }
+);
 
-watch(selectedShortCoins, () => {
-  saveSelectedListsDebounced();
-}, { deep: true });
-
-// 组件挂载时，初始化本地状态
-onMounted(() => {
-  if (settingsStore.settings) {
-    selectedLongCoins.value = settingsStore.settings.long_coin_list;
-    selectedShortCoins.value = settingsStore.settings.short_coin_list;
-  }
-});
+watch(
+  () => settingsStore.settings?.short_coin_list,
+  () => {
+    saveSelectedListsDebounced();
+  },
+  { deep: true }
+);
 </script>
