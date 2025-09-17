@@ -25,15 +25,14 @@ const defaultSettings: UserSettings = {
   open_order_fill_timeout_seconds: 60,
   close_maker_retries: 3,
   close_order_fill_timeout_seconds: 12,
-  rebalance_method: 'multi_factor_weakness',
-  rebalance_top_n: 10,
-  rebalance_min_volume_usd: 5000000,
-  rebalance_abs_momentum_days: 21,
-  rebalance_rel_strength_days: 21,
-  rebalance_foam_days: 21,
-  // 新增字段
-  long_coins_selected_pool: [],
-  short_coins_selected_pool: []
+  rebalance_method: 'multi_factor_weakest',
+  rebalance_top_n: 50,
+  rebalance_min_volume_usd: 20000000,
+  rebalance_abs_momentum_days: 30,
+  rebalance_rel_strength_days: 60,
+  rebalance_foam_days: 1,
+  rebalance_short_ratio_max: 0.7,
+  rebalance_short_ratio_min: 0.35,
 };
 
 
@@ -57,8 +56,8 @@ export const useSettingsStore = defineStore('settings', () => {
       availableLongCoins.value = response.data.available_long_coins;
       availableShortCoins.value = response.data.available_short_coins;
       // 从后端加载新字段到 ref 中
-      selectedLongCoins.value = settings.value.long_coins_selected_pool;
-      selectedShortCoins.value = settings.value.short_coins_selected_pool;
+      selectedLongCoins.value = settings.value.long_coin_list;
+      selectedShortCoins.value = settings.value.short_coin_list;
     } catch (error) {
       console.error("Failed to fetch settings:", error);
       uiStore.logStore.addLog({ message: "获取配置失败，请检查后端服务。", level: 'error', timestamp: new Date().toLocaleTimeString() });
@@ -83,8 +82,8 @@ export const useSettingsStore = defineStore('settings', () => {
     if (!settings.value) return;
     try {
       await api.post('/api/settings', {
-        long_coins_selected_pool: selectedLongCoins.value,
-        short_coins_selected_pool: selectedShortCoins.value
+        long_coin_list: selectedLongCoins.value,
+        short_coin_list: selectedShortCoins.value
       });
       uiStore.logStore.addLog({ message: "交易终端币种选择已成功保存。", level: 'success', timestamp: new Date().toLocaleTimeString() });
     } catch (error) {
