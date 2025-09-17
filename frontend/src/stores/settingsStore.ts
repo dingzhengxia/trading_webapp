@@ -85,6 +85,5 @@ export const useSettingsStore = defineStore('settings', () => {
     { deep: true }
   );
 
-  // 确保返回新的可用币种列表
   return { settings, availableCoins, availableLongCoins, availableShortCoins, loading, fetchSettings, saveSettings, defaultSettings };
 });

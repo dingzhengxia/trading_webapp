@@ -4,9 +4,10 @@ from typing import Dict, Any, List
 
 from fastapi import APIRouter, Body, Depends, HTTPException
 from pydantic import BaseModel
-import json  # 导入 json 模块
-import os  # 导入 os 模块
+import json
+import os
 
+# 从 config.py 中导入所有全局变量
 from ..config.config import load_settings, save_settings, COIN_LISTS_FILE, AVAILABLE_COINS, AVAILABLE_LONG_COINS, \
     AVAILABLE_SHORT_COINS
 from ..core.security import verify_api_key
@@ -26,8 +27,6 @@ class SettingsResponse(BaseModel):
 class CoinPoolsUpdate(BaseModel):
     long_coins_pool: List[str]
     short_coins_pool: List[str]
-    # 新增字段，如果需要前端更新总列表
-    coins_pool: List[str] = None
 
 
 @router.get("", response_model=SettingsResponse)

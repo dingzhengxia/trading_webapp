@@ -44,18 +44,6 @@
                       <span>刷新可用币种列表</span>
                     </v-tooltip>
                   </template>
-                  <template v-slot:prepend-inner>
-                    <v-btn
-                      v-if="currentTab === 'long'"
-                      icon
-                      variant="text"
-                      @click="selectAllCoins"
-                      :disabled="isAllSelected"
-                    >
-                      <v-icon :color="isAllSelected ? 'green' : ''">{{ isAllSelected ? 'mdi-check-all' : 'mdi-select-all' }}</v-icon>
-                      <v-tooltip activator="parent" location="top">全选</v-tooltip>
-                    </v-btn>
-                  </template>
                 </v-autocomplete>
               </v-card-text>
             </v-card>
@@ -93,18 +81,6 @@
                       </template>
                       <span>刷新可用币种列表</span>
                     </v-tooltip>
-                  </template>
-                  <template v-slot:prepend-inner>
-                    <v-btn
-                      v-if="currentTab === 'short'"
-                      icon
-                      variant="text"
-                      @click="selectAllCoins"
-                      :disabled="isAllSelected"
-                    >
-                      <v-icon :color="isAllSelected ? 'green' : ''">{{ isAllSelected ? 'mdi-check-all' : 'mdi-select-all' }}</v-icon>
-                      <v-tooltip activator="parent" location="top">全选</v-tooltip>
-                    </v-btn>
                   </template>
                 </v-autocomplete>
               </v-card-text>
@@ -164,20 +140,6 @@ const allAvailableCoins = computed(() => {
   return filteredCoins.map(coin => ({ text: coin, value: coin }));
 });
 
-// 全选按钮的逻辑也需要基于当前过滤后的列表
-const isAllSelected = computed(() => {
-  const currentPool = currentTab.value === 'long' ? currentLongPool.value : currentShortPool.value;
-  return currentPool.length === allAvailableCoins.value.length;
-});
-
-const selectAllCoins = () => {
-  if (currentTab.value === 'long') {
-    currentLongPool.value = allAvailableCoins.value.map(item => item.value);
-  } else {
-    currentShortPool.value = allAvailableCoins.value.map(item => item.value);
-  }
-};
-
 const show = computed({
   get: () => props.modelValue,
   set: (value) => emit('update:modelValue', value)
@@ -204,7 +166,6 @@ const refreshAvailableCoins = async () => {
   isRefreshingCoins.value = true;
   try {
     await settingsStore.fetchSettings();
-    // 刷新后，更新默认列表
     defaultCoinPools.value.long_coins_pool = settingsStore.availableLongCoins || [];
     defaultCoinPools.value.short_coins_pool = settingsStore.availableShortCoins || [];
     resetPools();
@@ -227,13 +188,13 @@ const savePools = async () => {
   };
 
   try {
-    // 调用更新币种列表的 API 端点
+    // 核心修改：只调用更新币种列表的 API
     await apiClient.post('/api/settings/update-coin-pools', {
       long_coins_pool: updatedSettings.long_coin_list,
       short_coins_pool: updatedSettings.short_coin_list
     });
 
-    // 成功保存到 coin_lists.json 后，再次从后端同步最新配置
+    // 成功后，重新获取所有配置，确保前端状态与后端同步
     await settingsStore.fetchSettings();
 
     uiStore.logStore.addLog({ message: '交易币种列表已更新并保存。', level: 'success', timestamp: new Date().toLocaleTimeString() });

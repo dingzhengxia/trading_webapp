@@ -129,7 +129,7 @@ def save_settings(current_config):
     try:
         config_to_save = current_config.copy()
 
-        # 保存时不再同步币种列表到 user_settings.json，因为它们现在由 coin_lists.json 管理
+        # 核心修改：移除同步币种列表到 user_settings.json 的逻辑
         print(f"--- [INFO] User settings successfully saved to '{USER_SETTINGS_FILE}'. ---")
 
         settings_data_to_write = {key: config_to_save[key] for key in DEFAULT_CONFIG if key in config_to_save}
