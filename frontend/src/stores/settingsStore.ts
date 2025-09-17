@@ -25,21 +25,26 @@ const defaultSettings: UserSettings = {
   open_order_fill_timeout_seconds: 60,
   close_maker_retries: 3,
   close_order_fill_timeout_seconds: 12,
-  rebalance_method: 'multi_factor_weakest',
-  rebalance_top_n: 50,
-  rebalance_min_volume_usd: 20000000,
-  rebalance_abs_momentum_days: 30,
-  rebalance_rel_strength_days: 60,
-  rebalance_foam_days: 1,
-  rebalance_short_ratio_max: 0.7,
-  rebalance_short_ratio_min: 0.35,
+  rebalance_method: 'multi_factor_weakness',
+  rebalance_top_n: 10,
+  rebalance_min_volume_usd: 5000000,
+  rebalance_abs_momentum_days: 21,
+  rebalance_rel_strength_days: 21,
+  rebalance_foam_days: 21,
+  // 新增字段
+  long_coins_selected_pool: [],
+  short_coins_selected_pool: []
 };
+
 
 export const useSettingsStore = defineStore('settings', () => {
   const settings = ref<UserSettings | null>(null);
   const availableCoins = ref<string[]>([]);
   const availableLongCoins = ref<string[]>([]);
   const availableShortCoins = ref<string[]>([]);
+  // 新增 ref 来保存交易终端选中的币种
+  const selectedLongCoins = ref<string[]>([]);
+  const selectedShortCoins = ref<string[]>([]);
   const loading = ref(true);
   const uiStore = useUiStore();
 
@@ -51,6 +56,9 @@ export const useSettingsStore = defineStore('settings', () => {
       availableCoins.value = response.data.available_coins;
       availableLongCoins.value = response.data.available_long_coins;
       availableShortCoins.value = response.data.available_short_coins;
+      // 从后端加载新字段到 ref 中
+      selectedLongCoins.value = settings.value.long_coins_selected_pool;
+      selectedShortCoins.value = settings.value.short_coins_selected_pool;
     } catch (error) {
       console.error("Failed to fetch settings:", error);
       uiStore.logStore.addLog({ message: "获取配置失败，请检查后端服务。", level: 'error', timestamp: new Date().toLocaleTimeString() });
@@ -70,5 +78,21 @@ export const useSettingsStore = defineStore('settings', () => {
     }
   }
 
-  return { settings, availableCoins, availableLongCoins, availableShortCoins, loading, fetchSettings, saveGeneralSettings };
+  // 新增一个 action 来专门保存交易终端的选中池
+  async function saveSelectedCoinPools() {
+    if (!settings.value) return;
+    try {
+      // 仅发送需要更新的字段
+      await api.post('/api/settings', {
+        long_coins_selected_pool: selectedLongCoins.value,
+        short_coins_selected_pool: selectedShortCoins.value
+      });
+      uiStore.logStore.addLog({ message: "交易终端币种选择已成功保存。", level: 'success', timestamp: new Date().toLocaleTimeString() });
+    } catch (error) {
+      console.error("Failed to save selected coin pools:", error);
+      uiStore.logStore.addLog({ message: "保存交易终端币种选择失败！", level: 'error', timestamp: new Date().toLocaleTimeString() });
+    }
+  }
+
+  return { settings, loading, availableCoins, availableLongCoins, availableShortCoins, fetchSettings, saveGeneralSettings, selectedLongCoins, selectedShortCoins, saveSelectedCoinPools };
 });

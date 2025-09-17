@@ -43,7 +43,7 @@ def get_settings():
 
 @router.post("")
 def update_settings(settings: Dict[str, Any] = Body(...)):
-    """更新并保存用户配置"""
+    """保存用户配置到 user_settings.json 文件。"""
     try:
         current_settings = load_settings()
         current_settings.update(settings)
@@ -75,8 +75,8 @@ def update_coin_pools(pools: CoinPoolsUpdate):
         AVAILABLE_SHORT_COINS = data_to_save["short_coins_pool"]
 
         print(
-            f"--- [INFO] Coin pools updated successfully. New long pool: {AVAILABLE_LONG_COINS[:5]}..., New short pool: {AVAILABLE_SHORT_COINS[:5]}... ---")
-        return {"message": "Coin pools updated successfully"}
+            f"--- [INFO] Coin pools saved successfully. Long: {len(AVAILABLE_LONG_COINS)}, Short: {len(AVAILABLE_SHORT_COINS)} ---")
+
     except Exception as e:
-        print(f"--- [ERROR] Failed to update coin pools: {e} ---")
-        raise HTTPException(status_code=500, detail=f"Failed to update coin pools: {e}")
+        print(f"--- [ERROR] Failed to save coin pools: {e} ---")
+        raise HTTPException(status_code=500, detail=f"Failed to save coin pools: {e}")

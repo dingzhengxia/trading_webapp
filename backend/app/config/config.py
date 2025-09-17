@@ -1,5 +1,3 @@
-# backend/app/config/config.py
-
 import json
 import os
 from pathlib import Path
@@ -31,77 +29,68 @@ DEFAULT_CONFIG = {
     'enable_short_sl_tp': True,
     'short_stop_loss_percentage': 80.0,
     'short_take_profit_percentage': 150.0,
-    'long_coin_list': ["BTC", "ETH"],
-    'short_coin_list': ["SOL", "AVAX"],
-    'long_custom_weights': {},
-    'open_order_fill_timeout_seconds': 120,
     'open_maker_retries': 5,
-    'close_order_fill_timeout_seconds': 12,
+    'open_order_fill_timeout_seconds': 60,
     'close_maker_retries': 3,
+    'close_order_fill_timeout_seconds': 12,
+    'rebalance_method': 'multi_factor_weakness',
+    'rebalance_top_n': 10,
+    'rebalance_min_volume_usd': 5000000.0,
+    'rebalance_abs_momentum_days': 21,
+    'rebalance_rel_strength_days': 21,
+    'rebalance_foam_days': 21,
     'enable_proxy': False,
     'proxy_url': 'http://127.0.0.1:7890',
-    'rebalance_method': 'multi_factor_weakest',
-    'rebalance_top_n': 50,
-    'rebalance_min_volume_usd': 20000000.0,
-    'rebalance_abs_momentum_days': 30,
-    'rebalance_rel_strength_days': 60,
-    'rebalance_foam_days': 1,
-    'rebalance_short_ratio_max': 0.70,
-    'rebalance_short_ratio_min': 0.35
+    # 新增默认字段
+    'long_coin_list': [],
+    'short_coin_list': [],
+    'long_coins_selected_pool': [],
+    'short_coins_selected_pool': []
 }
 
+# 内存中全局变量，用于缓存币种列表
+AVAILABLE_COINS: List[str] = []
+AVAILABLE_LONG_COINS: List[str] = []
+AVAILABLE_SHORT_COINS: List[str] = []
 
-def load_coin_pools():
-    """
-    从 coin_lists.json 加载币种池。
-    """
-    all_coins = []
-    long_coins = []
-    short_coins = []
+
+def load_coin_lists() -> None:
+    """加载 coin_lists.json 文件到内存中的全局变量。"""
+    global AVAILABLE_COINS, AVAILABLE_LONG_COINS, AVAILABLE_SHORT_COINS
     try:
-        if not COIN_LISTS_FILE.exists():
-            print(f"--- [WARN] Core coin list file '{COIN_LISTS_FILE}' not found! Using empty pools. ---")
-            return [], [], []
         with open(COIN_LISTS_FILE, 'r', encoding='utf-8') as f:
-            pools = json.load(f)
-            # 核心修改：读取 coins_pool 字段，并确保列表唯一且已排序
-            all_coins = sorted(list(set(pools.get("coins_pool", []))))
-            long_coins = sorted(list(set(pools.get("long_coins_pool", []))))
-            short_coins = sorted(list(set(pools.get("short_coins_pool", []))))
-            print(
-                f"--- [INFO] Loaded coin pools from '{COIN_LISTS_FILE}'. All coins size: {len(all_coins)}, Long pool size: {len(long_coins)}, Short pool size: {len(short_coins)} ---")
-            return all_coins, long_coins, short_coins
-    except (FileNotFoundError, json.JSONDecodeError) as e:
-        print(f"--- [ERROR] Failed to load or parse coin list file '{COIN_LISTS_FILE}': {e}! Using empty pools. ---")
-        return [], [], []
+            data = json.load(f)
+            AVAILABLE_COINS = data.get('coins_pool', [])
+            AVAILABLE_LONG_COINS = data.get('long_coins_pool', [])
+            AVAILABLE_SHORT_COINS = data.get('short_coins_pool', [])
+        print(
+            f"--- [INFO] Loaded coin lists from '{COIN_LISTS_FILE}'. Total: {len(AVAILABLE_COINS)}, Long: {len(AVAILABLE_LONG_COINS)}, Short: {len(AVAILABLE_SHORT_COINS)} ---")
+    except FileNotFoundError:
+        print(f"--- [ERROR] {COIN_LISTS_FILE} not found. Please create it. ---")
+    except json.JSONDecodeError as e:
+        print(f"--- [ERROR] Failed to decode JSON from {COIN_LISTS_FILE}: {e} ---")
 
 
-# --- 核心逻辑：在启动时加载一次，并存储在全局变量中 ---
-AVAILABLE_COINS, AVAILABLE_LONG_COINS, AVAILABLE_SHORT_COINS = load_coin_pools()
-print(
-    f"--- [INFO] Initial AVAILABLE_COINS: {AVAILABLE_COINS[:5]}..., AVAILABLE_LONG_COINS: {AVAILABLE_LONG_COINS[:5]}..., AVAILABLE_SHORT_COINS: {AVAILABLE_SHORT_COINS[:5]}... ---")
-
-
-# --- 逻辑结束 ---
-
-
-def load_settings():
-    """
-    加载用户设置。
-    """
+def load_settings() -> Dict[str, Any]:
+    """加载用户配置，如果不存在则使用默认值。"""
     config = DEFAULT_CONFIG.copy()
 
+    # 加载 user_settings.json
     if USER_SETTINGS_FILE.exists():
-        try:
-            with open(USER_SETTINGS_FILE, 'r', encoding='utf-8') as f:
+        with open(USER_SETTINGS_FILE, 'r', encoding='utf-8') as f:
+            try:
                 user_settings = json.load(f)
-                config.update({k: user_settings[k] for k in config if k in user_settings})
-                print(f"--- [INFO] Loaded user settings from '{USER_SETTINGS_FILE}'. ---")
-        except (FileNotFoundError, json.JSONDecodeError, Exception) as e:
-            print(f"--- [WARN] Could not load or parse '{USER_SETTINGS_FILE}' ({e}). Using default settings. ---")
-    else:
-        print(f"--- [INFO] User settings file '{USER_SETTINGS_FILE}' not found. Using default settings. ---")
+                config.update(user_settings)
+            except json.JSONDecodeError as e:
+                print(f"--- [ERROR] Failed to load {USER_SETTINGS_FILE}: {e}. Using default settings. ---")
 
+    # 确保新增的选中池字段存在，如果不存在则初始化为空列表
+    if 'long_coins_selected_pool' not in config:
+        config['long_coins_selected_pool'] = []
+    if 'short_coins_selected_pool' not in config:
+        config['short_coins_selected_pool'] = []
+
+    # 如果用户没有配置 long/short_coin_list，则使用备选池作为默认值
     if not config.get('long_coin_list') and AVAILABLE_LONG_COINS:
         print(
             f"--- [INFO] User settings missing 'long_coin_list', using default pool ({len(AVAILABLE_LONG_COINS)} items). ---")
@@ -132,10 +121,26 @@ def save_settings(current_config):
         # 核心修改：移除同步币种列表到 user_settings.json 的逻辑
         print(f"--- [INFO] User settings successfully saved to '{USER_SETTINGS_FILE}'. ---")
 
-        settings_data_to_write = {key: config_to_save[key] for key in DEFAULT_CONFIG if key in config_to_save}
+        settings_data_to_write = {key: value for key, value in config_to_save.items() if key in DEFAULT_CONFIG}
 
         with open(USER_SETTINGS_FILE, 'w', encoding='utf-8') as f:
             json.dump(settings_data_to_write, f, indent=4, ensure_ascii=False)
+
+        print(f"--- [INFO] User settings successfully saved to '{USER_SETTINGS_FILE}'. ---")
+
     except Exception as e:
-        print(f"--- [ERROR] Failed to save settings to '{USER_SETTINGS_FILE}': {e} ---")
-        raise
+        print(f"--- [ERROR] Failed to save user settings: {e} ---")
+        return False
+
+    return True
+
+
+def get_all_coins() -> List[str]:
+    """获取所有可用币种。"""
+    if not AVAILABLE_COINS:
+        load_coin_lists()
+    return AVAILABLE_COINS
+
+
+# 首次加载
+load_coin_lists()
