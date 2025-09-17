@@ -1,5 +1,5 @@
 <template>
-  <v-dialog v-model="show" persistent max-width="600px">
+  <v-dialog v-model="show" persistent max-width="800px">
     <v-card>
       <v-card-title>
         <span class="text-h5">管理交易币种列表</span>
@@ -19,7 +19,7 @@
               </v-card-title>
               <v-autocomplete
                 v-model="currentLongPool"
-                :items="autocompleteItems"
+                :items="longPoolAvailableCoins"
                 label="选择或输入做多币种"
                 multiple
                 chips
@@ -59,7 +59,7 @@
               </v-card-title>
               <v-autocomplete
                 v-model="currentShortPool"
-                :items="autocompleteItems"
+                :items="shortPoolAvailableCoins"
                 label="选择或输入做空币种"
                 multiple
                 chips
@@ -121,21 +121,29 @@ const show = computed({
   set: (value) => emit('update:modelValue', value)
 });
 
-// 计算属性，用于生成下拉列表项，不进行过滤
-const autocompleteItems = computed(() => {
-  return settingsStore.availableCoins.map(coin => ({ text: coin, value: coin }));
+// 核心修改：做多列表可用币种，排除做空列表已选的币种
+const longPoolAvailableCoins = computed(() => {
+  const shortPoolSet = new Set(currentShortPool.value);
+  // 使用 availableCoins，因为它在 store 中已经去重
+  return settingsStore.availableCoins
+    .filter(coin => !shortPoolSet.has(coin))
+    .map(coin => ({ text: coin, value: coin }));
+});
+
+// 核心修改：做空列表可用币种，排除做多列表已选的币种
+const shortPoolAvailableCoins = computed(() => {
+  const longPoolSet = new Set(currentLongPool.value);
+  return settingsStore.availableCoins
+    .filter(coin => !longPoolSet.has(coin))
+    .map(coin => ({ text: coin, value: coin }));
 });
 
 // 新增功能：全选按钮逻辑
 const selectAllCoins = (poolType: 'long' | 'short') => {
   if (poolType === 'long') {
-    // 强制互斥：选择做多，则清空做空
-    currentShortPool.value = [];
-    currentLongPool.value = autocompleteItems.value.map(item => item.value);
+    currentLongPool.value = longPoolAvailableCoins.value.map(item => item.value);
   } else if (poolType === 'short') {
-    // 强制互斥：选择做空，则清空做多
-    currentLongPool.value = [];
-    currentShortPool.value = autocompleteItems.value.map(item => item.value);
+    currentShortPool.value = shortPoolAvailableCoins.value.map(item => item.value);
   }
 };
 
