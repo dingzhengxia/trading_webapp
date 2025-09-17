@@ -109,49 +109,32 @@ const updateWeights = (newWeights: { [key: string]: number }) => {
   }
 };
 
+// 统一的防抖保存函数
 const saveGeneralSettingsDebounced = debounce(() => {
   if (settingsStore.settings) {
     settingsStore.saveGeneralSettings(settingsStore.settings);
   }
 }, 2000);
 
+// 专门为币种列表设置的防抖保存函数
 const saveSelectedListsDebounced = debounce(() => {
   if (settingsStore.settings) {
     settingsStore.saveSelectedCoinLists(settingsStore.settings.long_coin_list, settingsStore.settings.short_coin_list);
   }
 }, 2000);
 
-// 监听除币种列表外的所有通用设置变化
+// 深度监听settings对象，所有通用配置的变化都会触发此监听器
 watch(
   () => settingsStore.settings,
-  (newSettings, oldSettings) => {
-    // 检查是否有实质性变化，但排除币种列表的变化
-    if (newSettings && oldSettings) {
-      const hasGeneralChanges = Object.keys(newSettings).some(key => {
-        if (key === 'long_coin_list' || key === 'short_coin_list') {
-          return false;
-        }
-        return JSON.stringify(newSettings[key]) !== JSON.stringify(oldSettings[key]);
-      });
-      if (hasGeneralChanges) {
-        saveGeneralSettingsDebounced();
-      }
-    }
+  () => {
+    saveGeneralSettingsDebounced();
   },
-  { deep: true }
+  { deep: true, immediate: true }
 );
 
 // 专门监听币种列表的变化
 watch(
-  () => settingsStore.settings?.long_coin_list,
-  () => {
-    saveSelectedListsDebounced();
-  },
-  { deep: true }
-);
-
-watch(
-  () => settingsStore.settings?.short_coin_list,
+  () => [settingsStore.settings?.long_coin_list, settingsStore.settings?.short_coin_list],
   () => {
     saveSelectedListsDebounced();
   },
