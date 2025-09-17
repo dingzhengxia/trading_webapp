@@ -30,7 +30,7 @@
                 item-title="text"
                 item-value="value"
                 :menu-props="{ maxHeight: '300px' }"
-              >
+                >
                 <template v-slot:item="{ item, props }">
                   <v-list-item v-bind="props">
                     <template v-slot:prepend>
@@ -70,7 +70,7 @@
                 item-title="text"
                 item-value="value"
                 :menu-props="{ maxHeight: '300px' }"
-              >
+                >
                 <template v-slot:item="{ item, props }">
                   <v-list-item v-bind="props">
                     <template v-slot:prepend>
