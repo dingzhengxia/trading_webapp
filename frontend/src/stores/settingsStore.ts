@@ -35,15 +35,11 @@ const defaultSettings: UserSettings = {
   rebalance_short_ratio_min: 0.35,
 };
 
-
 export const useSettingsStore = defineStore('settings', () => {
   const settings = ref<UserSettings | null>(null);
   const availableCoins = ref<string[]>([]);
   const availableLongCoins = ref<string[]>([]);
   const availableShortCoins = ref<string[]>([]);
-  // 新增 ref 来保存交易终端选中的币种
-  const selectedLongCoins = ref<string[]>([]);
-  const selectedShortCoins = ref<string[]>([]);
   const loading = ref(true);
   const uiStore = useUiStore();
 
@@ -55,9 +51,6 @@ export const useSettingsStore = defineStore('settings', () => {
       availableCoins.value = response.data.available_coins;
       availableLongCoins.value = response.data.available_long_coins;
       availableShortCoins.value = response.data.available_short_coins;
-      // 从后端加载新字段到 ref 中
-      selectedLongCoins.value = settings.value.long_coin_list;
-      selectedShortCoins.value = settings.value.short_coin_list;
     } catch (error) {
       console.error("Failed to fetch settings:", error);
       uiStore.logStore.addLog({ message: "获取配置失败，请检查后端服务。", level: 'error', timestamp: new Date().toLocaleTimeString() });
@@ -77,20 +70,5 @@ export const useSettingsStore = defineStore('settings', () => {
     }
   }
 
-  // 新增一个 action 来专门保存交易终端的选中池
-  async function saveSelectedCoinPools() {
-    if (!settings.value) return;
-    try {
-      await api.post('/api/settings', {
-        long_coin_list: selectedLongCoins.value,
-        short_coin_list: selectedShortCoins.value
-      });
-      uiStore.logStore.addLog({ message: "交易终端币种选择已成功保存。", level: 'success', timestamp: new Date().toLocaleTimeString() });
-    } catch (error) {
-      console.error("Failed to save selected coin pools:", error);
-      uiStore.logStore.addLog({ message: "保存交易终端币种选择失败！", level: 'error', timestamp: new Date().toLocaleTimeString() });
-    }
-  }
-
-  return { settings, loading, availableCoins, availableLongCoins, availableShortCoins, fetchSettings, saveGeneralSettings, selectedLongCoins, selectedShortCoins, saveSelectedCoinPools };
+  return { settings, availableCoins, availableLongCoins, availableShortCoins, loading, fetchSettings, saveGeneralSettings };
 });

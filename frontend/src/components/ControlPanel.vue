@@ -17,12 +17,12 @@
                   <v-text-field v-model.number="settingsStore.settings.total_long_position_value" label="多头总价值 (USD)" type="number" :disabled="!settingsStore.settings.enable_long_trades"></v-text-field>
 
                   <v-autocomplete
-                    v-model="settingsStore.selectedLongCoins"
+                    v-model="settingsStore.settings.long_coin_list"
                     :items="settingsStore.availableLongCoins"
-                    label="交易终端 - 实时做多币种"
-                    multiple chips closable-chips clearable
-                    variant="outlined" hide-details
-                    :menu-props="{ maxHeight: '300px' }"
+                    label="从备选池中选择做多币种"
+                    multiple
+                    chips
+                    closable-chips
                     :disabled="!settingsStore.settings.enable_long_trades"
                   ></v-autocomplete>
 
@@ -44,12 +44,12 @@
                   <v-text-field v-model.number="settingsStore.settings.total_short_position_value" label="空头总价值 (USD)" type="number" :disabled="!settingsStore.settings.enable_short_trades"></v-text-field>
 
                   <v-autocomplete
-                    v-model="settingsStore.selectedShortCoins"
+                    v-model="settingsStore.settings.short_coin_list"
                     :items="settingsStore.availableShortCoins"
-                    label="交易终端 - 实时做空币种"
-                    multiple chips closable-chips clearable
-                    variant="outlined" hide-details
-                    :menu-props="{ maxHeight: '300px' }"
+                    label="从备选池中选择空头币种"
+                    multiple
+                    chips
+                    closable-chips
                     :disabled="!settingsStore.settings.enable_short_trades"
                   ></v-autocomplete>
 

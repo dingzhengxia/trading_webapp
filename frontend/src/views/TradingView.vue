@@ -21,112 +21,105 @@
       <v-spacer></v-spacer>
 
       <template v-if="activeTab === 'general'">
-        <v-btn
-          color="warning"
-          variant="flat"
-          @click="startStopTrading"
-          :disabled="uiStore.isRunning"
-          :loading="uiStore.isRunning"
-        >
-          <v-icon left>mdi-play</v-icon>
-          开启交易
-        </v-btn>
-        <v-btn
-          color="error"
-          variant="flat"
-          @click="startStopTrading"
-          :disabled="!uiStore.isRunning"
-          class="ml-2"
-        >
-          <v-icon left>mdi-stop</v-icon>
-          停止交易
+        <v-btn color="info" variant="tonal" @click="handleSyncSlTp" :disabled="uiStore.isRunning" class="mr-3">
+          校准 SL/TP
         </v-btn>
         <v-btn
           color="success"
-          variant="flat"
-          @click="settingsStore.saveSelectedCoinPools()"
-          class="ml-2"
+          variant="tonal"
+          prepend-icon="mdi-play"
+          @click="handleStartTrading"
+          :loading="uiStore.isRunning"
+          :disabled="uiStore.isRunning"
         >
-          <v-icon left>mdi-content-save</v-icon>
-          保存实时币种
+          开始开仓
         </v-btn>
       </template>
 
       <template v-if="activeTab === 'rebalance'">
         <v-btn
           color="primary"
-          variant="flat"
-          @click="triggerGenerateRebalancePlan"
-          :disabled="isGeneratingPlan"
+          variant="tonal"
+          @click="onGenerateRebalancePlan"
           :loading="isGeneratingPlan"
+          :disabled="uiStore.isRunning || isGeneratingPlan"
         >
-          <v-icon left>mdi-chart-line</v-icon>
           生成再平衡计划
         </v-btn>
       </template>
-
-      <v-btn
-        color="info"
-        variant="tonal"
-        @click="uiStore.showTerminalLog = !uiStore.showTerminalLog"
-        class="ml-2"
-      >
-        <v-icon left>mdi-text-box-outline</v-icon>
-        日志
-      </v-btn>
     </v-card>
   </v-footer>
-
-  <RebalancePlanDialog v-if="uiStore.rebalancePlan" v-model="uiStore.showRebalanceDialog" :plan="uiStore.rebalancePlan" @execute-plan="handleExecuteRebalancePlan" />
-
-  </template>
+</template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue';
-import { useSettingsStore } from '@/stores/settingsStore';
+import { ref, onMounted, computed } from 'vue';
+import { useDisplay } from 'vuetify';
 import { useUiStore } from '@/stores/uiStore';
+import { usePositionStore } from '@/stores/positionStore';
+import { useSettingsStore } from '@/stores/settingsStore';
 import ControlPanel from '@/components/ControlPanel.vue';
-// 确保只导入你拥有的组件
-// import TerminalLog from '@/components/TerminalLog.vue';
 import apiClient from '@/services/api';
-import type { RebalanceCriteria, RebalancePlan } from '@/models/types';
+import type { UserSettings, RebalanceCriteria } from '@/models/types';
 
-const settingsStore = useSettingsStore();
 const uiStore = useUiStore();
+const positionStore = usePositionStore();
+const settingsStore = useSettingsStore();
+
+// 修复 TypeError 的安全样式计算
+const vuetifyDisplay = useDisplay();
+const footerStyle = computed(() => {
+  const styles: { bottom: string, left: string } = {
+    bottom: vuetifyDisplay.smAndDown.value ? '56px' : '0px',
+    left: '0px'
+  };
+  if (vuetifyDisplay.mdAndUp.value && vuetifyDisplay.application) {
+    styles.left = `${vuetifyDisplay.application.left}px`;
+  }
+  return styles;
+});
+
 const activeTab = ref('general');
 const isGeneratingPlan = ref(false);
 
-const footerStyle = computed(() => {
-  const isMobile = uiStore.isMobile;
-  return {
-    width: `calc(100% - ${isMobile ? '0px' : '260px'})`, // 260px 是左侧导航栏的宽度
-    left: isMobile ? '0' : '260px'
-  };
-});
+// 统一的、健壮的API调用函数
+const fireAndForgetApiCall = (endpoint: string, payload: any, taskName: string, totalTasks: number = 1) => {
+  if (uiStore.isRunning) {
+    uiStore.logStore.addLog({ message: '已有任务在运行中，请稍后再试。', level: 'warning', timestamp: new Date().toLocaleTimeString() });
+    return;
+  }
+  const requestId = `req-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
+  const payloadWithId = { ...payload, request_id: requestId };
+  uiStore.setStatus(`正在提交: ${taskName}...`, true);
+  uiStore.updateProgress({ success_count: 0, failed_count: 0, total: totalTasks, task_name: taskName, is_final: false });
+  uiStore.logStore.addLog({ message: `[前端] 已发送 '${taskName}' 启动指令 (ID: ${requestId})。`, level: 'info', timestamp: new Date().toLocaleTimeString() });
+  apiClient.post(endpoint, payloadWithId)
+    .then(response => { console.log('API call successful:', response.data.message); })
+    .catch(error => {
+      const errorMsg = error.response?.data?.detail || error.message;
+      uiStore.logStore.addLog({ message: `[前端] 任务提交失败: ${errorMsg}`, level: 'error', timestamp: new Date().toLocaleTimeString() });
+      uiStore.setStatus("任务提交失败", false);
+    });
+};
 
-const startStopTrading = async () => {
-  const action = uiStore.isRunning ? 'stop' : 'start';
-  try {
-    const response = await apiClient.post(`/api/bot/${action}`);
-    uiStore.isRunning = response.data.status === 'running';
-    uiStore.logStore.addLog({
-      message: `交易机器人已${uiStore.isRunning ? '启动' : '停止'}。`,
-      level: 'info',
-      timestamp: new Date().toLocaleTimeString()
-    });
-  } catch (error: any) {
-    const errorMsg = error.response?.data?.detail || error.message;
-    uiStore.logStore.addLog({
-      message: `控制交易机器人失败: ${errorMsg}`,
-      level: 'error',
-      timestamp: new Date().toLocaleTimeString()
-    });
+const handleStartTrading = () => {
+  if (settingsStore.settings) {
+    const plan = settingsStore.settings;
+    const total = (plan.enable_long_trades ? plan.long_coin_list.length : 0) +
+                  (plan.enable_short_trades ? plan.short_coin_list.length : 0);
+    fireAndForgetApiCall('/api/trading/start', plan, '自动开仓', total);
   }
 };
 
-const triggerGenerateRebalancePlan = () => {
+const handleSyncSlTp = () => {
   if (settingsStore.settings) {
-    const criteria: RebalanceCriteria = {
+    // 修复：直接传递完整的 settings 对象，不再使用不存在的 SyncSltpRequest
+    fireAndForgetApiCall('/api/trading/sync-sltp', settingsStore.settings, '同步SL/TP', positionStore.positions.length);
+  }
+};
+
+const onGenerateRebalancePlan = () => {
+  if (settingsStore.settings) {
+    const criteria = {
       method: settingsStore.settings.rebalance_method,
       top_n: settingsStore.settings.rebalance_top_n,
       min_volume_usd: settingsStore.settings.rebalance_min_volume_usd,
@@ -159,20 +152,11 @@ const handleGenerateRebalancePlan = async (criteria: RebalanceCriteria) => {
   }
 };
 
-const handleExecuteRebalancePlan = async (plan: RebalancePlan) => {
-  uiStore.logStore.addLog({ message: '[前端] 正在执行再平衡计划...', level: 'info', timestamp: new Date().toLocaleTimeString() });
-  try {
-    const response = await apiClient.post('/api/rebalance/execute', plan);
-    if (response.data.error) {
-      uiStore.logStore.addLog({ message: `执行计划逻辑错误: ${response.data.error}`, level: 'error', timestamp: new Date().toLocaleTimeString() });
-    } else {
-      uiStore.logStore.addLog({ message: '再平衡计划已成功执行。', level: 'success', timestamp: new Date().toLocaleTimeString() });
-    }
-  } catch (error: any) {
-    const errorMsg = error.response?.data?.detail || error.message;
-    uiStore.logStore.addLog({ message: `[后端] ❌ 执行计划请求失败: ${errorMsg}`, level: 'error', timestamp: new Date().toLocaleTimeString() });
+onMounted(() => {
+  if (positionStore.positions.length === 0) {
+    positionStore.fetchPositions();
   }
-};
+});
 </script>
 
 <style scoped>
