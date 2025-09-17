@@ -64,7 +64,8 @@ def load_coin_pools():
             return [], [], []
         with open(COIN_LISTS_FILE, 'r', encoding='utf-8') as f:
             pools = json.load(f)
-            all_coins = sorted(list(set(pools.get("coins_pool", []))))  # 新增：读取 coins_pool 字段
+            # 核心修改：读取 coins_pool 字段，并确保列表唯一且已排序
+            all_coins = sorted(list(set(pools.get("coins_pool", []))))
             long_coins = sorted(list(set(pools.get("long_coins_pool", []))))
             short_coins = sorted(list(set(pools.get("short_coins_pool", []))))
             print(
