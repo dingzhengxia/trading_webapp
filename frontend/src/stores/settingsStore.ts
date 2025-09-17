@@ -38,6 +38,7 @@ const defaultSettings: UserSettings = {
 
 export const useSettingsStore = defineStore('settings', () => {
   const settings = ref<UserSettings | null>(null);
+  const availableCoins = ref<string[]>([]); // 新增：总可用币种列表
   const availableLongCoins = ref<string[]>([]);
   const availableShortCoins = ref<string[]>([]);
   const loading = ref(true);
@@ -48,6 +49,7 @@ export const useSettingsStore = defineStore('settings', () => {
     try {
       const response = await api.get('/api/settings');
       settings.value = { ...defaultSettings, ...response.data.user_settings };
+      availableCoins.value = response.data.available_coins; // 更改：从后端获取新的总列表
       availableLongCoins.value = response.data.available_long_coins;
       availableShortCoins.value = response.data.available_short_coins;
     } catch (error) {
@@ -83,5 +85,6 @@ export const useSettingsStore = defineStore('settings', () => {
     { deep: true }
   );
 
-  return { settings, availableLongCoins, availableShortCoins, loading, fetchSettings, saveSettings, defaultSettings };
+  // 确保返回新的可用币种列表
+  return { settings, availableCoins, availableLongCoins, availableShortCoins, loading, fetchSettings, saveSettings, defaultSettings };
 });

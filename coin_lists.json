@@ -1,13 +1,11 @@
 {
-  "long_coins_pool": [
+  "coins_pool": [
     "BTC",
     "ETH",
     "BNB",
     "SOL",
     "XRP",
-    "DOGE"
-  ],
-  "short_coins_pool": [
+    "DOGE",
     "ETH",
     "XRP",
     "BNB",
@@ -196,5 +194,7 @@
     "ORCA",
     "GMT",
     "LRC"
-  ]
+  ],
+  "long_coins_pool": [],
+  "short_coins_pool": []
 }

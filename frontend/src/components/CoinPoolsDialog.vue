@@ -120,10 +120,9 @@ const defaultCoinPools = ref({
   short_coins_pool: [] as string[]
 });
 
+// 修改：直接使用 settingsStore 中新获取的总列表
 const allAvailableCoins = computed(() => {
-  const combined = [...settingsStore.availableLongCoins, ...settingsStore.availableShortCoins];
-  const uniqueCoins = [...new Set(combined)].sort();
-  return uniqueCoins.map(coin => ({ text: coin, value: coin }));
+  return settingsStore.availableCoins.map(coin => ({ text: coin, value: coin }));
 });
 
 const show = computed({
@@ -152,6 +151,7 @@ const refreshAvailableCoins = async () => {
   isRefreshingCoins.value = true;
   try {
     await settingsStore.fetchSettings();
+    // 刷新后，更新默认列表
     defaultCoinPools.value.long_coins_pool = settingsStore.availableLongCoins || [];
     defaultCoinPools.value.short_coins_pool = settingsStore.availableShortCoins || [];
     resetPools();
@@ -174,13 +174,14 @@ const savePools = async () => {
   };
 
   try {
+    // 调用更新币种列表的 API 端点
     await apiClient.post('/api/settings/update-coin-pools', {
       long_coins_pool: updatedSettings.long_coin_list,
       short_coins_pool: updatedSettings.short_coin_list
     });
 
-    await settingsStore.saveSettings(updatedSettings);
-    settingsStore.settings = updatedSettings;
+    // 成功保存到 coin_lists.json 后，再次从后端同步最新配置
+    await settingsStore.fetchSettings();
 
     uiStore.logStore.addLog({ message: '交易币种列表已更新并保存。', level: 'success', timestamp: new Date().toLocaleTimeString() });
     closeDialog();
