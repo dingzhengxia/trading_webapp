@@ -63,14 +63,13 @@ export const useSettingsStore = defineStore('settings', () => {
     if (!newSettings) return;
     try {
       await api.post('/api/settings', newSettings);
-      uiStore.logStore.addLog({ message: "通用配置已成功保存。", level: 'success', timestamp: new Date().toLocaleTimeString() });
+      uiStore.logStore.addLog({ message: "通用配置已自动保存。", level: 'success', timestamp: new Date().toLocaleTimeString() });
     } catch (error) {
       console.error("Failed to save settings:", error);
-      uiStore.logStore.addLog({ message: "保存通用配置失败！", level: 'error', timestamp: new Date().toLocaleTimeString() });
+      uiStore.logStore.addLog({ message: "自动保存配置失败！", level: 'error', timestamp: new Date().toLocaleTimeString() });
     }
   }
 
-  // 新增一个方法，专门用来保存交易终端的币种列表
   async function saveSelectedCoinLists(longList: string[], shortList: string[]) {
     try {
       await api.post('/api/settings', {

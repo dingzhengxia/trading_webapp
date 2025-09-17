@@ -87,11 +87,11 @@
 </template>
 
 <script setup lang="ts">
+import { ref, watch } from 'vue';
 import { useSettingsStore } from '@/stores/settingsStore';
 import { useUiStore } from '@/stores/uiStore';
 import WeightConfigDialog from './WeightConfigDialog.vue';
-import { watch } from 'vue';
-import { debounce } from 'lodash-es'; // 核心修改：将 'lodash' 改为 'lodash-es'
+import { debounce } from 'lodash-es';
 
 const modelValue = defineModel<string>();
 
@@ -109,13 +109,39 @@ const updateWeights = (newWeights: { [key: string]: number }) => {
   }
 };
 
+const saveGeneralSettingsDebounced = debounce(() => {
+  if (settingsStore.settings) {
+    settingsStore.saveGeneralSettings(settingsStore.settings);
+  }
+}, 2000);
+
 const saveSelectedListsDebounced = debounce(() => {
   if (settingsStore.settings) {
     settingsStore.saveSelectedCoinLists(settingsStore.settings.long_coin_list, settingsStore.settings.short_coin_list);
   }
-}, 2000); // 2秒防抖
+}, 2000);
 
-// 监视币种列表的变化并自动保存
+// 监听除币种列表外的所有通用设置变化
+watch(
+  () => settingsStore.settings,
+  (newSettings, oldSettings) => {
+    // 检查是否有实质性变化，但排除币种列表的变化
+    if (newSettings && oldSettings) {
+      const hasGeneralChanges = Object.keys(newSettings).some(key => {
+        if (key === 'long_coin_list' || key === 'short_coin_list') {
+          return false;
+        }
+        return JSON.stringify(newSettings[key]) !== JSON.stringify(oldSettings[key]);
+      });
+      if (hasGeneralChanges) {
+        saveGeneralSettingsDebounced();
+      }
+    }
+  },
+  { deep: true }
+);
+
+// 专门监听币种列表的变化
 watch(
   () => settingsStore.settings?.long_coin_list,
   () => {
