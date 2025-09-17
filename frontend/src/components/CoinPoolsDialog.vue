@@ -1,5 +1,6 @@
+<!-- frontend/src/components/CoinPoolsDialog.vue -->
 <template>
-  <v-dialog v-model="show" persistent max-width="800px">
+  <div>
     <v-card>
       <v-card-title>
         <span class="text-h5">管理交易币种列表</span>
@@ -17,7 +18,7 @@
                   <span>全选做多币种</span>
                 </v-tooltip>
               </v-card-title>
-              <v-autocomplete
+              <v-select
                 v-model="currentLongPool"
                 :items="longPoolAvailableCoins"
                 label="选择或输入做多币种"
@@ -30,7 +31,7 @@
                 item-title="text"
                 item-value="value"
                 :menu-props="{ maxHeight: '300px' }"
-                >
+              >
                 <template v-slot:item="{ item, props }">
                   <v-list-item v-bind="props">
                     <template v-slot:prepend>
@@ -42,7 +43,7 @@
                     <v-list-item-title>{{ item.title }}</v-list-item-title>
                   </v-list-item>
                 </template>
-              </v-autocomplete>
+              </v-select>
             </v-card>
           </v-col>
 
@@ -57,7 +58,7 @@
                   <span>全选做空币种</span>
                 </v-tooltip>
               </v-card-title>
-              <v-autocomplete
+              <v-select
                 v-model="currentShortPool"
                 :items="shortPoolAvailableCoins"
                 label="选择或输入做空币种"
@@ -70,7 +71,7 @@
                 item-title="text"
                 item-value="value"
                 :menu-props="{ maxHeight: '300px' }"
-                >
+              >
                 <template v-slot:item="{ item, props }">
                   <v-list-item v-bind="props">
                     <template v-slot:prepend>
@@ -82,7 +83,7 @@
                     <v-list-item-title>{{ item.title }}</v-list-item-title>
                   </v-list-item>
                 </template>
-              </v-autocomplete>
+              </v-select>
             </v-card>
           </v-col>
         </v-row>
@@ -90,11 +91,10 @@
       <v-card-actions>
         <v-btn color="primary" variant="text" @click="resetPools">重置为默认</v-btn>
         <v-spacer></v-spacer>
-        <v-btn color="blue-darken-1" variant="text" @click="closeDialog">取消</v-btn>
         <v-btn color="green-darken-1" variant="tonal" @click="savePools">保存</v-btn>
       </v-card-actions>
     </v-card>
-  </v-dialog>
+  </div>
 </template>
 
 <script setup lang="ts">
@@ -102,9 +102,6 @@ import { ref, computed, watch, onMounted } from 'vue';
 import { useSettingsStore } from '@/stores/settingsStore';
 import { useUiStore } from '@/stores/uiStore';
 import apiClient from '@/services/api';
-
-const props = defineProps<{ modelValue: boolean }>();
-const emit = defineEmits(['update:modelValue']);
 
 const settingsStore = useSettingsStore();
 const uiStore = useUiStore();
@@ -116,18 +113,10 @@ const defaultCoinPools = ref({
   short_coins_pool: [] as string[]
 });
 
-const show = computed({
-  get: () => props.modelValue,
-  set: (value) => emit('update:modelValue', value)
-});
-
-// 修正：数据源应为 settingsStore.availableCoins，它代表 `coins_pool`
 const allAvailableCoins = computed(() => {
-  // 这个列表源自 coin_lists.json 的 "coins_pool"，后端已做去重和排序
-  return settingsStore.availableCoins;
+    return settingsStore.availableCoins;
 });
 
-// 做多列表的可用币种，基于总列表，排除已选的做空币种
 const longPoolAvailableCoins = computed(() => {
   const shortPoolSet = new Set(currentShortPool.value);
   return allAvailableCoins.value
@@ -135,7 +124,6 @@ const longPoolAvailableCoins = computed(() => {
     .map(coin => ({ text: coin, value: coin }));
 });
 
-// 做空列表的可用币种，基于总列表，排除已选的多头币种
 const shortPoolAvailableCoins = computed(() => {
   const longPoolSet = new Set(currentLongPool.value);
   return allAvailableCoins.value
@@ -143,7 +131,6 @@ const shortPoolAvailableCoins = computed(() => {
     .map(coin => ({ text: coin, value: coin }));
 });
 
-// 新增功能：全选按钮逻辑
 const selectAllCoins = (poolType: 'long' | 'short') => {
   if (poolType === 'long') {
     currentLongPool.value = longPoolAvailableCoins.value.map(item => item.value);
@@ -189,18 +176,12 @@ const savePools = async () => {
     await settingsStore.fetchSettings();
 
     uiStore.logStore.addLog({ message: '交易币种列表已更新并保存。', level: 'success', timestamp: new Date().toLocaleTimeString() });
-    closeDialog();
   } catch (error: any) {
     const errorMsg = error.response?.data?.detail || error.message;
     uiStore.logStore.addLog({ message: `保存币种列表失败: ${errorMsg}`, level: 'error', timestamp: new Date().toLocaleTimeString() });
   }
 };
 
-const closeDialog = () => {
-  show.value = false;
-};
-
-// 核心监听器：当任何一个列表变化时，强制互斥
 watch(currentLongPool, (newLongPool, oldLongPool) => {
   const newlyAdded = newLongPool.filter(coin => !oldLongPool.includes(coin));
   if (newlyAdded.length > 0) {
@@ -214,12 +195,6 @@ watch(currentShortPool, (newShortPool, oldShortPool) => {
     currentLongPool.value = currentLongPool.value.filter(coin => !newlyAdded.includes(coin));
   }
 }, { deep: true });
-
-watch(() => props.modelValue, (newValue) => {
-  if (newValue) {
-    initializeTempPools();
-  }
-});
 
 onMounted(async () => {
   if (!settingsStore.settings) {
