@@ -144,24 +144,27 @@ const defaultCoinPools = ref({
   short_coins_pool: [] as string[]
 });
 
-// 核心修改：根据当前标签页过滤掉另一个列表中的币种
+// 核心修改：根据当前标签页和另一个列表的内容来动态过滤可用币种
 const allAvailableCoins = computed(() => {
   const allCoins = settingsStore.availableCoins;
   let filteredCoins = allCoins;
 
+  // 使用 Set 来提高查找效率
+  const longPoolSet = new Set(currentLongPool.value);
+  const shortPoolSet = new Set(currentShortPool.value);
+
   if (currentTab.value === 'long') {
     // 如果在做多列表，排除做空列表已有的币种
-    const shortCoins = new Set(currentShortPool.value);
-    filteredCoins = allCoins.filter(coin => !shortCoins.has(coin));
+    filteredCoins = allCoins.filter(coin => !shortPoolSet.has(coin));
   } else {
     // 如果在做空列表，排除做多列表已有的币种
-    const longCoins = new Set(currentLongPool.value);
-    filteredCoins = allCoins.filter(coin => !longCoins.has(coin));
+    filteredCoins = allCoins.filter(coin => !longPoolSet.has(coin));
   }
 
   return filteredCoins.map(coin => ({ text: coin, value: coin }));
 });
 
+// 全选按钮的逻辑也需要基于当前过滤后的列表
 const isAllSelected = computed(() => {
   const currentPool = currentTab.value === 'long' ? currentLongPool.value : currentShortPool.value;
   return currentPool.length === allAvailableCoins.value.length;

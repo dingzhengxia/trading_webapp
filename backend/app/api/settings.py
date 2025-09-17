@@ -63,7 +63,8 @@ def update_coin_pools(pools: CoinPoolsUpdate):
     try:
         with open(COIN_LISTS_FILE, 'w', encoding='utf-8') as f:
             data_to_save = {
-                "coins_pool": sorted(list(set(pools.long_coins_pool + pools.short_coins_pool))),  # 新增：合并做多做空池来生成总列表
+                # 核心修改：保持 coins_pool 不变
+                "coins_pool": AVAILABLE_COINS,
                 "long_coins_pool": sorted(pools.long_coins_pool),
                 "short_coins_pool": sorted(pools.short_coins_pool)
             }
@@ -71,7 +72,6 @@ def update_coin_pools(pools: CoinPoolsUpdate):
 
         # 刷新内存中的变量
         global AVAILABLE_COINS, AVAILABLE_LONG_COINS, AVAILABLE_SHORT_COINS
-        AVAILABLE_COINS = data_to_save["coins_pool"]
         AVAILABLE_LONG_COINS = data_to_save["long_coins_pool"]
         AVAILABLE_SHORT_COINS = data_to_save["short_coins_pool"]
 
