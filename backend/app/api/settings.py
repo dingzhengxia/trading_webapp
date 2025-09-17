@@ -1,4 +1,4 @@
-# backend/app/api/settings.py (修改版，新增 /update-coin-pools)
+# backend/app/api/settings.py
 
 from typing import Dict, Any, List
 
@@ -35,7 +35,7 @@ def get_settings():
     # 确保返回的是内存中的最新列表
     return {
         "user_settings": load_settings(),
-        "available_coins": AVAILABLE_COINS,  # 返回新的总列表
+        "available_coins": AVAILABLE_COINS,  # 现在这个变量被正确导入了
         "available_long_coins": AVAILABLE_LONG_COINS,
         "available_short_coins": AVAILABLE_SHORT_COINS,
     }
@@ -62,15 +62,15 @@ def update_coin_pools(pools: CoinPoolsUpdate):
     try:
         with open(COIN_LISTS_FILE, 'w', encoding='utf-8') as f:
             data_to_save = {
-                # 核心修改：保持 coins_pool 不变
+                # 保持 coins_pool 不变
                 "coins_pool": AVAILABLE_COINS,
                 "long_coins_pool": sorted(pools.long_coins_pool),
                 "short_coins_pool": sorted(pools.short_coins_pool)
             }
             json.dump(data_to_save, f, indent=4, ensure_ascii=False)
 
-        # 刷新内存中的变量
-        global AVAILABLE_COINS, AVAILABLE_LONG_COINS, AVAILABLE_SHORT_COINS
+        # 刷新内存中的变量，只对需要修改的变量使用 global
+        global AVAILABLE_LONG_COINS, AVAILABLE_SHORT_COINS
         AVAILABLE_LONG_COINS = data_to_save["long_coins_pool"]
         AVAILABLE_SHORT_COINS = data_to_save["short_coins_pool"]
 
