@@ -1,11 +1,11 @@
 <!-- frontend/src/components/CoinPoolsManager.vue -->
 <template>
-  <div v-if="settingsStore.settings">
+  <div>
     <v-row>
       <v-col cols="12" md="6">
         <v-card variant="tonal" class="pa-4">
           <div class="d-flex align-center mb-2">
-            <span class="text-subtitle-1 font-weight-medium">做多币种列表 ({{ settingsStore.settings.long_coin_list.length }})</span>
+            <span class="text-subtitle-1 font-weight-medium">做多币种备选池 ({{ longPool.length }})</span>
             <v-tooltip location="top">
               <template v-slot:activator="{ props }">
                 <v-btn icon="mdi-select-all" variant="text" size="small" v-bind="props" @click="selectAllCoins('long')"></v-btn>
@@ -14,23 +14,16 @@
             </v-tooltip>
           </div>
           <v-autocomplete
-            v-model="settingsStore.settings.long_coin_list"
-            :items="longPoolAvailableCoins"
-            label="选择或输入做多币种"
-            multiple
-            chips
-            closable-chips
-            clearable
-            variant="outlined"
-            hide-details
-            item-title="title"
-            item-value="value"
-            :menu-props="{ maxHeight: '300px' }"
+            v-model="longPool"
+            :items="mapToSelectItems(allAvailableCoins)"
+            label="从总池中选择做多备选币种"
+            multiple chips closable-chips clearable variant="outlined" hide-details
+            item-title="title" item-value="value" :menu-props="{ maxHeight: '300px' }"
           >
             <template v-slot:item="{ item, props }">
               <v-list-item v-bind="props" class="pl-0">
                 <template v-slot:prepend>
-                  <v-checkbox-btn :model-value="settingsStore.settings!.long_coin_list.includes(item.value)" readonly class="mr-2"></v-checkbox-btn>
+                  <v-checkbox-btn :model-value="longPool.includes(item.value)" readonly class="mr-2"></v-checkbox-btn>
                 </template>
               </v-list-item>
             </template>
@@ -40,8 +33,8 @@
 
       <v-col cols="12" md="6">
         <v-card variant="tonal" class="pa-4">
-          <div class="d-flex align-center mb-2">
-            <span class="text-subtitle-1 font-weight-medium">做空币种列表 ({{ settingsStore.settings.short_coin_list.length }})</span>
+           <div class="d-flex align-center mb-2">
+            <span class="text-subtitle-1 font-weight-medium">做空币种备选池 ({{ shortPool.length }})</span>
             <v-tooltip location="top">
               <template v-slot:activator="{ props }">
                 <v-btn icon="mdi-select-all" variant="text" size="small" v-bind="props" @click="selectAllCoins('short')"></v-btn>
@@ -50,23 +43,16 @@
             </v-tooltip>
           </div>
           <v-autocomplete
-            v-model="settingsStore.settings.short_coin_list"
-            :items="shortPoolAvailableCoins"
-            label="选择或输入做空币种"
-            multiple
-            chips
-            closable-chips
-            clearable
-            variant="outlined"
-            hide-details
-            item-title="title"
-            item-value="value"
-            :menu-props="{ maxHeight: '300px' }"
+            v-model="shortPool"
+            :items="mapToSelectItems(allAvailableCoins)"
+            label="从总池中选择做空备选币种"
+            multiple chips closable-chips clearable variant="outlined" hide-details
+            item-title="title" item-value="value" :menu-props="{ maxHeight: '300px' }"
           >
-            <template v-slot:item="{ item, props }">
+             <template v-slot:item="{ item, props }">
               <v-list-item v-bind="props" class="pl-0">
                 <template v-slot:prepend>
-                  <v-checkbox-btn :model-value="settingsStore.settings!.short_coin_list.includes(item.value)" readonly class="mr-2"></v-checkbox-btn>
+                  <v-checkbox-btn :model-value="shortPool.includes(item.value)" readonly class="mr-2"></v-checkbox-btn>
                 </template>
               </v-list-item>
             </template>
@@ -74,64 +60,47 @@
         </v-card>
       </v-col>
     </v-row>
-    <v-btn color="primary" variant="text" @click="resetPools" class="mt-4">重置为默认</v-btn>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, watch } from 'vue';
+import { ref, computed, onMounted } from 'vue';
 import { useSettingsStore } from '@/stores/settingsStore';
+import { useUiStore } from '@/stores/uiStore';
+import apiClient from '@/services/api';
 
 const settingsStore = useSettingsStore();
+const uiStore = useUiStore();
+
+const longPool = ref<string[]>([]);
+const shortPool = ref<string[]>([]);
 
 const allAvailableCoins = computed(() => [...new Set(settingsStore.availableCoins)].sort());
-
 const mapToSelectItems = (coins: string[]) => coins.map(coin => ({ title: coin, value: coin }));
 
-const longPoolAvailableCoins = computed(() => {
-  if (!settingsStore.settings) return [];
-  const shortPoolSet = new Set(settingsStore.settings.short_coin_list);
-  const available = allAvailableCoins.value.filter(coin => !shortPoolSet.has(coin));
-  return mapToSelectItems(available);
-});
-
-const shortPoolAvailableCoins = computed(() => {
-  if (!settingsStore.settings) return [];
-  const longPoolSet = new Set(settingsStore.settings.long_coin_list);
-  const available = allAvailableCoins.value.filter(coin => !longPoolSet.has(coin));
-  return mapToSelectItems(available);
-});
-
 const selectAllCoins = (poolType: 'long' | 'short') => {
-  if (!settingsStore.settings) return;
-  if (poolType === 'long') {
-    settingsStore.settings.long_coin_list = longPoolAvailableCoins.value.map(item => item.value);
-  } else if (poolType === 'short') {
-    settingsStore.settings.short_coin_list = shortPoolAvailableCoins.value.map(item => item.value);
+  if (poolType === 'long') longPool.value = [...allAvailableCoins.value];
+  else if (poolType === 'short') shortPool.value = [...allAvailableCoins.value];
+};
+
+const savePools = async () => {
+  try {
+    await apiClient.post('/api/settings/update-coin-pools', {
+      long_coins_pool: longPool.value,
+      short_coins_pool: shortPool.value
+    });
+    await settingsStore.fetchSettings();
+    uiStore.logStore.addLog({ message: '币种备选池已成功保存。', level: 'success', timestamp: new Date().toLocaleTimeString() });
+  } catch (error: any) {
+    const errorMsg = error.response?.data?.detail || error.message;
+    uiStore.logStore.addLog({ message: `保存币种备选池失败: ${errorMsg}`, level: 'error', timestamp: new Date().toLocaleTimeString() });
   }
 };
 
-const resetPools = () => {
-  if (!settingsStore.settings) return;
-  settingsStore.settings.long_coin_list = [...settingsStore.availableLongCoins];
-  settingsStore.settings.short_coin_list = [...settingsStore.availableShortCoins];
-};
+defineExpose({ savePools });
 
-// 监听器确保两个列表互斥
-watch(() => settingsStore.settings?.long_coin_list, (newLongPool, oldLongPool) => {
-  if (!newLongPool || !oldLongPool || !settingsStore.settings) return;
-  const addedToLong = newLongPool.filter(coin => !oldLongPool.includes(coin));
-  if (addedToLong.length > 0) {
-    settingsStore.settings.short_coin_list = settingsStore.settings.short_coin_list.filter(coin => !addedToLong.includes(coin));
-  }
-}, { deep: true });
-
-watch(() => settingsStore.settings?.short_coin_list, (newShortPool, oldShortPool) => {
-  if (!newShortPool || !oldShortPool || !settingsStore.settings) return;
-  const addedToShort = newShortPool.filter(coin => !oldShortPool.includes(coin));
-  if (addedToShort.length > 0) {
-    settingsStore.settings.long_coin_list = settingsStore.settings.long_coin_list.filter(coin => !addedToShort.includes(coin));
-  }
-}, { deep: true });
-
+onMounted(() => {
+  longPool.value = [...settingsStore.availableLongCoins];
+  shortPool.value = [...settingsStore.availableShortCoins];
+});
 </script>

@@ -1,15 +1,13 @@
-<!-- frontend/src/components/ControlPanel.vue (最终完整版) -->
+<!-- frontend/src/components/ControlPanel.vue -->
 <template>
   <v-card v-if="settingsStore.settings">
     <v-card-title class="text-h6">交易参数</v-card-title>
-    <!-- 使用 :model-value 和 @update:modelValue 实现 v-model -->
     <v-tabs :model-value="modelValue" @update:modelValue="$emit('update:modelValue', $event)" bg-color="primary">
       <v-tab value="general">通用开仓设置</v-tab>
       <v-tab value="rebalance">智能再平衡</v-tab>
     </v-tabs>
     <v-card-text>
       <v-window :model-value="modelValue">
-        <!-- 通用开仓设置 -->
         <v-window-item value="general">
           <v-row>
             <v-col cols="12" md="6">
@@ -18,7 +16,17 @@
                 <v-card-text class="flex-grow-1">
                   <v-switch v-model="settingsStore.settings.enable_long_trades" label="开启多头交易" color="success" inset></v-switch>
                   <v-text-field v-model.number="settingsStore.settings.total_long_position_value" label="多头总价值 (USD)" type="number" :disabled="!settingsStore.settings.enable_long_trades"></v-text-field>
-                  <v-autocomplete v-model="settingsStore.settings.long_coin_list" :items="settingsStore.availableLongCoins" label="多头币种列表" multiple chips closable-chips :disabled="!settingsStore.settings.enable_long_trades"></v-autocomplete>
+
+                  <v-autocomplete
+                    v-model="settingsStore.settings.long_coin_list"
+                    :items="settingsStore.availableLongCoins"
+                    label="从备选池中选择多头币种"
+                    multiple
+                    chips
+                    closable-chips
+                    :disabled="!settingsStore.settings.enable_long_trades"
+                  ></v-autocomplete>
+
                   <v-btn size="small" @click="uiStore.showWeightDialog = true" :disabled="!settingsStore.settings.enable_long_trades">配置权重</v-btn>
                   <v-divider class="my-4"></v-divider>
                   <v-switch v-model="settingsStore.settings.enable_long_sl_tp" label="开启多头 SL/TP" color="info" inset :disabled="!settingsStore.settings.enable_long_trades"></v-switch>
@@ -35,7 +43,17 @@
                 <v-card-text class="flex-grow-1">
                   <v-switch v-model="settingsStore.settings.enable_short_trades" label="开启空头交易" color="error" inset></v-switch>
                   <v-text-field v-model.number="settingsStore.settings.total_short_position_value" label="空头总价值 (USD)" type="number" :disabled="!settingsStore.settings.enable_short_trades"></v-text-field>
-                  <v-autocomplete v-model="settingsStore.settings.short_coin_list" :items="settingsStore.availableShortCoins" label="空头币种列表" multiple chips closable-chips :disabled="!settingsStore.settings.enable_short_trades"></v-autocomplete>
+
+                  <v-autocomplete
+                    v-model="settingsStore.settings.short_coin_list"
+                    :items="settingsStore.availableShortCoins"
+                    label="从备选池中选择空头币种"
+                    multiple
+                    chips
+                    closable-chips
+                    :disabled="!settingsStore.settings.enable_short_trades"
+                  ></v-autocomplete>
+
                   <v-divider class="my-4"></v-divider>
                    <v-switch v-model="settingsStore.settings.enable_short_sl_tp" label="开启空头 SL/TP" color="info" inset :disabled="!settingsStore.settings.enable_short_trades"></v-switch>
                   <v-row dense>
@@ -47,6 +65,7 @@
             </v-col>
           </v-row>
         </v-window-item>
+
         <v-window-item value="rebalance">
           <p class="mb-4">根据市场指标动态筛选弱势币种，并生成调整空头仓位的交易计划。</p>
           <v-row>
@@ -73,10 +92,8 @@ import { useSettingsStore } from '@/stores/settingsStore';
 import { useUiStore } from '@/stores/uiStore';
 import WeightConfigDialog from './WeightConfigDialog.vue';
 
-// 使用 defineModel 来实现 v-model 的双向绑定
 const modelValue = defineModel<string>();
 
-// generateRebalancePlan 事件现在由父组件处理，所以不再需要 emit
 const settingsStore = useSettingsStore();
 const uiStore = useUiStore();
 

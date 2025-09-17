@@ -1,6 +1,6 @@
 // frontend/src/stores/settingsStore.ts
 import { defineStore } from 'pinia';
-import { ref } from 'vue'; // 不再需要导入 'watch'
+import { ref } from 'vue';
 import type { UserSettings } from '@/models/types';
 import api from '@/services/api';
 import { useUiStore } from './uiStore';
@@ -59,7 +59,7 @@ export const useSettingsStore = defineStore('settings', () => {
     }
   }
 
-  async function saveSettings(newSettings: UserSettings | null) {
+  async function saveGeneralSettings(newSettings: UserSettings | null) {
     if (!newSettings) return;
     try {
       await api.post('/api/settings', newSettings);
@@ -70,7 +70,5 @@ export const useSettingsStore = defineStore('settings', () => {
     }
   }
 
-  // --- 核心修复：删除了导致无限循环的自动保存 watch 侦听器 ---
-
-  return { settings, availableCoins, availableLongCoins, availableShortCoins, loading, fetchSettings, saveSettings };
+  return { settings, availableCoins, availableLongCoins, availableShortCoins, loading, fetchSettings, saveGeneralSettings };
 });
