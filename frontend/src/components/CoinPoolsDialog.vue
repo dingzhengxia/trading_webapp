@@ -121,21 +121,25 @@ const show = computed({
   set: (value) => emit('update:modelValue', value)
 });
 
-// 核心修改：做多列表可用币种，排除做空列表已选的币种
+// 核心修改1：创建一个唯一的总币种列表作为数据源
+const allAvailableCoins = computed(() => {
+  const combined = [...settingsStore.availableLongCoins, ...settingsStore.availableShortCoins];
+  const uniqueCoins = [...new Set(combined)].sort();
+  return uniqueCoins;
+});
+
+// 核心修改2：做多列表的可用币种，基于总列表，排除已选的做空币种
 const longPoolAvailableCoins = computed(() => {
   const shortPoolSet = new Set(currentShortPool.value);
-  // 使用 settingsStore.availableCoins，因为它在 store 中已经去重
-  const available = [...settingsStore.availableCoins];
-  return available
+  return allAvailableCoins.value
     .filter(coin => !shortPoolSet.has(coin))
     .map(coin => ({ text: coin, value: coin }));
 });
 
-// 核心修改：做空列表可用币种，排除做多列表已选的币种
+// 核心修改3：做空列表的可用币种，基于总列表，排除已选的做多币种
 const shortPoolAvailableCoins = computed(() => {
   const longPoolSet = new Set(currentLongPool.value);
-  const available = [...settingsStore.availableCoins];
-  return available
+  return allAvailableCoins.value
     .filter(coin => !longPoolSet.has(coin))
     .map(coin => ({ text: coin, value: coin }));
 });
