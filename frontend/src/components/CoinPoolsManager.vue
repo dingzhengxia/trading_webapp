@@ -63,7 +63,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue';
+import { ref, computed, watch } from 'vue';
 import { useSettingsStore } from '@/stores/settingsStore';
 import { useUiStore } from '@/stores/uiStore';
 import apiClient from '@/services/api';
@@ -71,8 +71,9 @@ import apiClient from '@/services/api';
 const settingsStore = useSettingsStore();
 const uiStore = useUiStore();
 
-const longPool = ref<string[]>([]);
-const shortPool = ref<string[]>([]);
+// longPool 和 shortPool 直接初始化为 store 中的数据
+const longPool = ref([...settingsStore.availableLongCoins]);
+const shortPool = ref([...settingsStore.availableShortCoins]);
 
 const allAvailableCoins = computed(() => [...new Set(settingsStore.availableCoins)].sort());
 const mapToSelectItems = (coins: string[]) => coins.map(coin => ({ title: coin, value: coin }));
@@ -100,6 +101,7 @@ const savePools = async () => {
       long_coins_pool: longPool.value,
       short_coins_pool: shortPool.value
     });
+    // 成功保存后，刷新 store 以确保数据一致性
     await settingsStore.fetchSettings();
     uiStore.logStore.addLog({ message: '币种备选池已成功保存。', level: 'success', timestamp: new Date().toLocaleTimeString() });
   } catch (error: any) {
@@ -108,12 +110,22 @@ const savePools = async () => {
   }
 };
 
-// 在组件加载时，从 store 加载数据
-onMounted(async () => {
-  await settingsStore.fetchSettings();
-  longPool.value = settingsStore.availableLongCoins;
-  shortPool.value = settingsStore.availableShortCoins;
-});
+// 监听 store 的变化，确保本地引用始终是最新值
+watch(
+  () => settingsStore.availableLongCoins,
+  (newVal) => {
+    longPool.value = [...newVal];
+  },
+  { deep: true }
+);
+
+watch(
+  () => settingsStore.availableShortCoins,
+  (newVal) => {
+    shortPool.value = [...newVal];
+  },
+  { deep: true }
+);
 
 defineExpose({
   savePools
