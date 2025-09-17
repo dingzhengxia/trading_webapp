@@ -23,16 +23,17 @@
             clearable
             variant="outlined"
             hide-details
-            item-title="value"
+            item-title="title"
             item-value="value"
             :menu-props="{ maxHeight: '300px' }"
           >
             <template v-slot:item="{ item, props }">
               <v-list-item v-bind="props" class="pl-0">
                 <template v-slot:prepend>
-                  <v-checkbox-btn :model-value="currentLongPool.includes(item.value as string)" readonly class="mr-2"></v-checkbox-btn>
+                  <!-- 复选框现在直接绑定 item 的 value -->
+                  <v-checkbox-btn :model-value="currentLongPool.includes(item.value)" readonly class="mr-2"></v-checkbox-btn>
                 </template>
-                <v-list-item-title>{{ item.title }}</v-list-item-title>
+                <!-- **核心修复**: 不再手动渲染 v-list-item-title。v-bind="props" 会自动处理。 -->
               </v-list-item>
             </template>
           </v-autocomplete>
@@ -60,16 +61,16 @@
             clearable
             variant="outlined"
             hide-details
-            item-title="value"
+            item-title="title"
             item-value="value"
             :menu-props="{ maxHeight: '300px' }"
           >
             <template v-slot:item="{ item, props }">
               <v-list-item v-bind="props" class="pl-0">
                 <template v-slot:prepend>
-                  <v-checkbox-btn :model-value="currentShortPool.includes(item.value as string)" readonly class="mr-2"></v-checkbox-btn>
+                  <v-checkbox-btn :model-value="currentShortPool.includes(item.value)" readonly class="mr-2"></v-checkbox-btn>
                 </template>
-                <v-list-item-title>{{ item.title }}</v-list-item-title>
+                 <!-- **核心修复**: 同样移除这里的手动标题渲染 -->
               </v-list-item>
             </template>
           </v-autocomplete>
@@ -93,22 +94,26 @@ const currentLongPool = ref<string[]>([]);
 const currentShortPool = ref<string[]>([]);
 const defaultCoinPools = ref({ long_coins_pool: [] as string[], short_coins_pool: [] as string[] });
 
-// 关键修复：确保币种列表源是唯一的
 const allAvailableCoins = computed(() => [...new Set(settingsStore.availableCoins)].sort());
+
+// **核心修复**: 将字符串数组转换为对象数组，明确指定 title 和 value
+const mapToSelectItems = (coins: string[]) => coins.map(coin => ({ title: coin, value: coin }));
 
 const longPoolAvailableCoins = computed(() => {
   const shortPoolSet = new Set(currentShortPool.value);
-  return allAvailableCoins.value.filter(coin => !shortPoolSet.has(coin));
+  const available = allAvailableCoins.value.filter(coin => !shortPoolSet.has(coin));
+  return mapToSelectItems(available);
 });
 
 const shortPoolAvailableCoins = computed(() => {
   const longPoolSet = new Set(currentLongPool.value);
-  return allAvailableCoins.value.filter(coin => !longPoolSet.has(coin));
+  const available = allAvailableCoins.value.filter(coin => !longPoolSet.has(coin));
+  return mapToSelectItems(available);
 });
 
 const selectAllCoins = (poolType: 'long' | 'short') => {
-  if (poolType === 'long') currentLongPool.value = [...longPoolAvailableCoins.value];
-  else if (poolType === 'short') currentShortPool.value = [...shortPoolAvailableCoins.value];
+  if (poolType === 'long') currentLongPool.value = longPoolAvailableCoins.value.map(item => item.value);
+  else if (poolType === 'short') currentShortPool.value = shortPoolAvailableCoins.value.map(item => item.value);
 };
 
 const initializeTempPools = () => {
@@ -148,7 +153,6 @@ const savePools = async () => {
 
 defineExpose({ savePools });
 
-// 更安全的侦听器，只在列表“增加”元素时触发，防止循环
 watch(currentLongPool, (newLongPool, oldLongPool) => {
   const addedToLong = newLongPool.filter(coin => !(oldLongPool || []).includes(coin));
   if (addedToLong.length > 0) {
@@ -164,12 +168,10 @@ watch(currentShortPool, (newShortPool, oldShortPool) => {
 });
 
 onMounted(() => {
-  // 简化 onMounted 逻辑，它现在依赖父组件在加载时获取设置
   if (settingsStore.settings) {
     defaultCoinPools.value.long_coins_pool = [...settingsStore.availableLongCoins];
     defaultCoinPools.value.short_coins_pool = [...settingsStore.availableShortCoins];
     initializeTempPools();
   }
 });
-
 </script>
