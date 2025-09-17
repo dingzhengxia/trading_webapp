@@ -82,7 +82,6 @@ export const useSettingsStore = defineStore('settings', () => {
   async function saveSelectedCoinPools() {
     if (!settings.value) return;
     try {
-      // 仅发送需要更新的字段
       await api.post('/api/settings', {
         long_coins_selected_pool: selectedLongCoins.value,
         short_coins_selected_pool: selectedShortCoins.value

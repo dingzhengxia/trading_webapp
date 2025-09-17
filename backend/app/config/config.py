@@ -41,9 +41,9 @@ DEFAULT_CONFIG = {
     'rebalance_foam_days': 21,
     'enable_proxy': False,
     'proxy_url': 'http://127.0.0.1:7890',
-    # 新增默认字段
     'long_coin_list': [],
     'short_coin_list': [],
+    # 新增默认字段
     'long_coins_selected_pool': [],
     'short_coins_selected_pool': []
 }
@@ -119,8 +119,6 @@ def save_settings(current_config):
         config_to_save = current_config.copy()
 
         # 核心修改：移除同步币种列表到 user_settings.json 的逻辑
-        print(f"--- [INFO] User settings successfully saved to '{USER_SETTINGS_FILE}'. ---")
-
         settings_data_to_write = {key: value for key, value in config_to_save.items() if key in DEFAULT_CONFIG}
 
         with open(USER_SETTINGS_FILE, 'w', encoding='utf-8') as f:

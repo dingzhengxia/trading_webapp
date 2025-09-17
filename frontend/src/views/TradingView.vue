@@ -68,7 +68,7 @@
       <v-btn
         color="info"
         variant="tonal"
-        @click="showTerminalLog = !showTerminalLog"
+        @click="uiStore.showTerminalLog = !uiStore.showTerminalLog"
         class="ml-2"
       >
         <v-icon left>mdi-text-box-outline</v-icon>
@@ -79,13 +79,15 @@
 
   <RebalancePlanDialog v-if="uiStore.rebalancePlan" v-model="uiStore.showRebalanceDialog" :plan="uiStore.rebalancePlan" @execute-plan="handleExecuteRebalancePlan" />
 
-</template>
+  </template>
 
 <script setup lang="ts">
 import { ref, computed } from 'vue';
 import { useSettingsStore } from '@/stores/settingsStore';
 import { useUiStore } from '@/stores/uiStore';
 import ControlPanel from '@/components/ControlPanel.vue';
+// 确保只导入你拥有的组件
+// import TerminalLog from '@/components/TerminalLog.vue';
 import apiClient from '@/services/api';
 import type { RebalanceCriteria, RebalancePlan } from '@/models/types';
 
