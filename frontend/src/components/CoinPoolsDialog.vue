@@ -5,88 +5,65 @@
         <span class="text-h5">管理交易币种列表</span>
       </v-card-title>
       <v-card-text>
-        <v-tabs v-model="currentTab" fixed-tabs>
-          <v-tab value="long">做多池</v-tab>
-          <v-tab value="short">做空池</v-tab>
-        </v-tabs>
-
-        <v-tabs-items v-model="currentTab">
-          <v-tab-item value="long">
-            <v-card variant="outlined" class="mt-4">
-              <v-card-title class="text-subtitle-1">
+        <v-row>
+          <v-col cols="12" md="6">
+            <v-card variant="outlined" class="pa-4">
+              <v-card-title class="text-subtitle-1 mb-2">
                 做多币种列表 ({{ currentLongPool.length }})
-              </v-card-title>
-              <v-card-text>
-                <v-autocomplete
-                  v-model="currentLongPool"
-                  :items="allAvailableCoins"
-                  label="选择或输入做多币种"
-                  multiple
-                  chips
-                  closable-chips
-                  clearable
-                  variant="outlined"
-                  auto-grow
-                  rows="3"
-                  row-height="30"
-                  class="mb-4"
-                  :loading="isRefreshingCoins"
-                  hide-details
-                  item-title="text"
-                  item-value="value"
-                  :menu-props="{ maxHeight: '300px' }"
-                >
-                  <template v-slot:append-outer>
-                    <v-tooltip location="top">
-                      <template v-slot:activator="{ props }">
-                        <v-btn icon="mdi-refresh" variant="text" v-bind="props" @click="refreshAvailableCoins" :loading="isRefreshingCoins"></v-btn>
-                      </template>
-                      <span>刷新可用币种列表</span>
-                    </v-tooltip>
+                <v-tooltip location="top">
+                  <template v-slot:activator="{ props }">
+                    <v-btn icon="mdi-select-all" variant="text" size="small" v-bind="props" @click="selectAllCoins('long')"></v-btn>
                   </template>
-                </v-autocomplete>
-              </v-card-text>
+                  <span>全选做多币种</span>
+                </v-tooltip>
+              </v-card-title>
+              <v-autocomplete
+                v-model="currentLongPool"
+                :items="longPoolAvailableCoins"
+                label="选择或输入做多币种"
+                multiple
+                chips
+                closable-chips
+                clearable
+                variant="outlined"
+                hide-details
+                item-title="text"
+                item-value="value"
+                :menu-props="{ maxHeight: '300px' }"
+              >
+              </v-autocomplete>
             </v-card>
-          </v-tab-item>
+          </v-col>
 
-          <v-tab-item value="short">
-            <v-card variant="outlined" class="mt-4">
-              <v-card-title class="text-subtitle-1">
+          <v-col cols="12" md="6">
+            <v-card variant="outlined" class="pa-4">
+              <v-card-title class="text-subtitle-1 mb-2">
                 做空币种列表 ({{ currentShortPool.length }})
-              </v-card-title>
-              <v-card-text>
-                <v-autocomplete
-                  v-model="currentShortPool"
-                  :items="allAvailableCoins"
-                  label="选择或输入做空币种"
-                  multiple
-                  chips
-                  closable-chips
-                  clearable
-                  variant="outlined"
-                  auto-grow
-                  rows="3"
-                  row-height="30"
-                  class="mb-4"
-                  :loading="isRefreshingCoins"
-                  hide-details
-                  item-title="text"
-                  item-value="value"
-                  :menu-props="{ maxHeight: '300px' }"
-                >
-                  <template v-slot:append-outer>
-                    <v-tooltip location="top">
-                      <template v-slot:activator="{ props }">
-                        <v-btn icon="mdi-refresh" variant="text" v-bind="props" @click="refreshAvailableCoins" :loading="isRefreshingCoins"></v-btn>
-                      </template>
-                      <span>刷新可用币种列表</span>
-                    </v-tooltip>
+                <v-tooltip location="top">
+                  <template v-slot:activator="{ props }">
+                    <v-btn icon="mdi-select-all" variant="text" size="small" v-bind="props" @click="selectAllCoins('short')"></v-btn>
                   </template>
-                </v-autocomplete>
-              </v-card-text>
+                  <span>全选做空币种</span>
+                </v-tooltip>
+              </v-card-title>
+              <v-autocomplete
+                v-model="currentShortPool"
+                :items="shortPoolAvailableCoins"
+                label="选择或输入做空币种"
+                multiple
+                chips
+                closable-chips
+                clearable
+                variant="outlined"
+                hide-details
+                item-title="text"
+                item-value="value"
+                :menu-props="{ maxHeight: '300px' }"
+              >
+              </v-autocomplete>
             </v-card>
-          </v-tab-item>
-        </v-tabs-items>
+          </v-col>
+        </v-row>
       </v-card-text>
       <v-card-actions>
         <v-btn color="primary" variant="text" @click="resetPools">重置为默认</v-btn>
@@ -110,40 +87,42 @@ const emit = defineEmits(['update:modelValue']);
 const settingsStore = useSettingsStore();
 const uiStore = useUiStore();
 
-const currentTab = ref('long');
 const currentLongPool = ref<string[]>([]);
 const currentShortPool = ref<string[]>([]);
-const isRefreshingCoins = ref(false);
-
 const defaultCoinPools = ref({
   long_coins_pool: [] as string[],
   short_coins_pool: [] as string[]
-});
-
-// 核心修改：根据当前标签页和另一个列表的内容来动态过滤可用币种
-const allAvailableCoins = computed(() => {
-  const allCoins = settingsStore.availableCoins;
-  let filteredCoins = allCoins;
-
-  // 使用 Set 来提高查找效率
-  const longPoolSet = new Set(currentLongPool.value);
-  const shortPoolSet = new Set(currentShortPool.value);
-
-  if (currentTab.value === 'long') {
-    // 如果在做多列表，排除做空列表已有的币种
-    filteredCoins = allCoins.filter(coin => !shortPoolSet.has(coin));
-  } else {
-    // 如果在做空列表，排除做多列表已有的币种
-    filteredCoins = allCoins.filter(coin => !longPoolSet.has(coin));
-  }
-
-  return filteredCoins.map(coin => ({ text: coin, value: coin }));
 });
 
 const show = computed({
   get: () => props.modelValue,
   set: (value) => emit('update:modelValue', value)
 });
+
+// 核心修改：做多列表可用币种，排除做空列表已选的币种
+const longPoolAvailableCoins = computed(() => {
+  const shortPoolSet = new Set(currentShortPool.value);
+  return settingsStore.availableCoins
+    .filter(coin => !shortPoolSet.has(coin))
+    .map(coin => ({ text: coin, value: coin }));
+});
+
+// 核心修改：做空列表可用币种，排除做多列表已选的币种
+const shortPoolAvailableCoins = computed(() => {
+  const longPoolSet = new Set(currentLongPool.value);
+  return settingsStore.availableCoins
+    .filter(coin => !longPoolSet.has(coin))
+    .map(coin => ({ text: coin, value: coin }));
+});
+
+// 新增功能：全选按钮逻辑
+const selectAllCoins = (poolType: 'long' | 'short') => {
+  if (poolType === 'long') {
+    currentLongPool.value = longPoolAvailableCoins.value.map(item => item.value);
+  } else if (poolType === 'short') {
+    currentShortPool.value = shortPoolAvailableCoins.value.map(item => item.value);
+  }
+};
 
 const initializeTempPools = () => {
   if (settingsStore.settings) {
@@ -162,22 +141,6 @@ const resetPools = () => {
   currentShortPool.value = defaultCoinPools.value.short_coins_pool || [];
 };
 
-const refreshAvailableCoins = async () => {
-  isRefreshingCoins.value = true;
-  try {
-    await settingsStore.fetchSettings();
-    defaultCoinPools.value.long_coins_pool = settingsStore.availableLongCoins || [];
-    defaultCoinPools.value.short_coins_pool = settingsStore.availableShortCoins || [];
-    resetPools();
-    uiStore.logStore.addLog({ message: '可用币种列表已刷新。', level: 'info', timestamp: new Date().toLocaleTimeString() });
-  } catch (error: any) {
-    const errorMsg = error.response?.data?.detail || error.message;
-    uiStore.logStore.addLog({ message: `刷新可用币种列表失败: ${errorMsg}`, level: 'error', timestamp: new Date().toLocaleTimeString() });
-  } finally {
-    isRefreshingCoins.value = false;
-  }
-};
-
 const savePools = async () => {
   if (!settingsStore.settings) return;
 
@@ -188,13 +151,13 @@ const savePools = async () => {
   };
 
   try {
-    // 核心修改：只调用更新币种列表的 API
+    // 调用更新币种列表的 API
     await apiClient.post('/api/settings/update-coin-pools', {
       long_coins_pool: updatedSettings.long_coin_list,
       short_coins_pool: updatedSettings.short_coin_list
     });
 
-    // 成功后，重新获取所有配置，确保前端状态与后端同步
+    // 重新获取所有配置，确保前端状态与后端同步
     await settingsStore.fetchSettings();
 
     uiStore.logStore.addLog({ message: '交易币种列表已更新并保存。', level: 'success', timestamp: new Date().toLocaleTimeString() });
@@ -207,7 +170,6 @@ const savePools = async () => {
 
 const closeDialog = () => {
   show.value = false;
-  currentTab.value = 'long';
 };
 
 watch(() => props.modelValue, (newValue) => {
@@ -230,14 +192,5 @@ onMounted(async () => {
 /* chip 之间的间距 */
 .v-chip {
   margin: 4px;
-}
-/* tab 内容的顶部间距 */
-.v-card-text > .v-tabs-items > .v-tab-item {
-  padding-top: 16px;
-}
-/* 调整 v-autocomplete 的样式 */
-.v-autocomplete {
-  max-height: 150px; /* 限制高度，防止过长 */
-  overflow-y: auto; /* 启用滚动条 */
 }
 </style>
