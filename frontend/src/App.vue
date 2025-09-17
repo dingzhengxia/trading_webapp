@@ -66,7 +66,7 @@ import CloseDialog from '@/components/CloseDialog.vue';
 import WeightConfigDialog from '@/components/WeightConfigDialog.vue';
 import ProgressBar from '@/components/ProgressBar.vue';
 import AccessKeyDialog from '@/components/AccessKeyDialog.vue'; // 导入新组件
-import CoinPoolsDialog from '@/components/CoinPoolsDialog.vue'; // 确保导入
+import CoinPoolsDialog from '@/components/CoinPoolsManager.vue'; // 确保导入
 
 const router = useRouter();
 const routes = router.getRoutes().filter(r => r.meta && r.meta.title && r.meta.icon);
