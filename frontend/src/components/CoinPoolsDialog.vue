@@ -44,6 +44,18 @@
                       <span>刷新可用币种列表</span>
                     </v-tooltip>
                   </template>
+                  <template v-slot:prepend-inner>
+                    <v-btn
+                      v-if="currentTab === 'long'"
+                      icon
+                      variant="text"
+                      @click="selectAllCoins"
+                      :disabled="isAllSelected"
+                    >
+                      <v-icon :color="isAllSelected ? 'green' : ''">{{ isAllSelected ? 'mdi-check-all' : 'mdi-select-all' }}</v-icon>
+                      <v-tooltip activator="parent" location="top">全选</v-tooltip>
+                    </v-btn>
+                  </template>
                 </v-autocomplete>
               </v-card-text>
             </v-card>
@@ -81,6 +93,18 @@
                       </template>
                       <span>刷新可用币种列表</span>
                     </v-tooltip>
+                  </template>
+                  <template v-slot:prepend-inner>
+                    <v-btn
+                      v-if="currentTab === 'short'"
+                      icon
+                      variant="text"
+                      @click="selectAllCoins"
+                      :disabled="isAllSelected"
+                    >
+                      <v-icon :color="isAllSelected ? 'green' : ''">{{ isAllSelected ? 'mdi-check-all' : 'mdi-select-all' }}</v-icon>
+                      <v-tooltip activator="parent" location="top">全选</v-tooltip>
+                    </v-btn>
                   </template>
                 </v-autocomplete>
               </v-card-text>
@@ -120,10 +144,36 @@ const defaultCoinPools = ref({
   short_coins_pool: [] as string[]
 });
 
-// 修改：直接使用 settingsStore 中新获取的总列表
+// 核心修改：根据当前标签页过滤掉另一个列表中的币种
 const allAvailableCoins = computed(() => {
-  return settingsStore.availableCoins.map(coin => ({ text: coin, value: coin }));
+  const allCoins = settingsStore.availableCoins;
+  let filteredCoins = allCoins;
+
+  if (currentTab.value === 'long') {
+    // 如果在做多列表，排除做空列表已有的币种
+    const shortCoins = new Set(currentShortPool.value);
+    filteredCoins = allCoins.filter(coin => !shortCoins.has(coin));
+  } else {
+    // 如果在做空列表，排除做多列表已有的币种
+    const longCoins = new Set(currentLongPool.value);
+    filteredCoins = allCoins.filter(coin => !longCoins.has(coin));
+  }
+
+  return filteredCoins.map(coin => ({ text: coin, value: coin }));
 });
+
+const isAllSelected = computed(() => {
+  const currentPool = currentTab.value === 'long' ? currentLongPool.value : currentShortPool.value;
+  return currentPool.length === allAvailableCoins.value.length;
+});
+
+const selectAllCoins = () => {
+  if (currentTab.value === 'long') {
+    currentLongPool.value = allAvailableCoins.value.map(item => item.value);
+  } else {
+    currentShortPool.value = allAvailableCoins.value.map(item => item.value);
+  }
+};
 
 const show = computed({
   get: () => props.modelValue,
