@@ -19,7 +19,7 @@
               </v-card-title>
               <v-autocomplete
                 v-model="currentLongPool"
-                :items="longPoolAvailableCoins"
+                :items="autocompleteItems"
                 label="选择或输入做多币种"
                 multiple
                 chips
@@ -31,6 +31,17 @@
                 item-value="value"
                 :menu-props="{ maxHeight: '300px' }"
               >
+                <template v-slot:item="{ item, props }">
+                  <v-list-item v-bind="props">
+                    <template v-slot:prepend>
+                      <v-icon
+                        :color="currentLongPool.includes(item.value) ? 'primary' : 'transparent'"
+                        :icon="currentLongPool.includes(item.value) ? 'mdi-check' : ''"
+                      ></v-icon>
+                    </template>
+                    <v-list-item-title>{{ item.title }}</v-list-item-title>
+                  </v-list-item>
+                </template>
               </v-autocomplete>
             </v-card>
           </v-col>
@@ -48,7 +59,7 @@
               </v-card-title>
               <v-autocomplete
                 v-model="currentShortPool"
-                :items="shortPoolAvailableCoins"
+                :items="autocompleteItems"
                 label="选择或输入做空币种"
                 multiple
                 chips
@@ -60,6 +71,17 @@
                 item-value="value"
                 :menu-props="{ maxHeight: '300px' }"
               >
+                <template v-slot:item="{ item, props }">
+                  <v-list-item v-bind="props">
+                    <template v-slot:prepend>
+                      <v-icon
+                        :color="currentShortPool.includes(item.value) ? 'primary' : 'transparent'"
+                        :icon="currentShortPool.includes(item.value) ? 'mdi-check' : ''"
+                      ></v-icon>
+                    </template>
+                    <v-list-item-title>{{ item.title }}</v-list-item-title>
+                  </v-list-item>
+                </template>
               </v-autocomplete>
             </v-card>
           </v-col>
@@ -99,28 +121,21 @@ const show = computed({
   set: (value) => emit('update:modelValue', value)
 });
 
-// 核心修改：做多列表可用币种，排除做空列表已选的币种
-const longPoolAvailableCoins = computed(() => {
-  const shortPoolSet = new Set(currentShortPool.value);
-  return settingsStore.availableCoins
-    .filter(coin => !shortPoolSet.has(coin))
-    .map(coin => ({ text: coin, value: coin }));
-});
-
-// 核心修改：做空列表可用币种，排除做多列表已选的币种
-const shortPoolAvailableCoins = computed(() => {
-  const longPoolSet = new Set(currentLongPool.value);
-  return settingsStore.availableCoins
-    .filter(coin => !longPoolSet.has(coin))
-    .map(coin => ({ text: coin, value: coin }));
+// 计算属性，用于生成下拉列表项，不进行过滤
+const autocompleteItems = computed(() => {
+  return settingsStore.availableCoins.map(coin => ({ text: coin, value: coin }));
 });
 
 // 新增功能：全选按钮逻辑
 const selectAllCoins = (poolType: 'long' | 'short') => {
   if (poolType === 'long') {
-    currentLongPool.value = longPoolAvailableCoins.value.map(item => item.value);
+    // 强制互斥：选择做多，则清空做空
+    currentShortPool.value = [];
+    currentLongPool.value = autocompleteItems.value.map(item => item.value);
   } else if (poolType === 'short') {
-    currentShortPool.value = shortPoolAvailableCoins.value.map(item => item.value);
+    // 强制互斥：选择做空，则清空做多
+    currentLongPool.value = [];
+    currentShortPool.value = autocompleteItems.value.map(item => item.value);
   }
 };
 
@@ -171,6 +186,21 @@ const savePools = async () => {
 const closeDialog = () => {
   show.value = false;
 };
+
+// 核心监听器：当任何一个列表变化时，强制互斥
+watch(currentLongPool, (newLongPool, oldLongPool) => {
+  const newlyAdded = newLongPool.filter(coin => !oldLongPool.includes(coin));
+  if (newlyAdded.length > 0) {
+    currentShortPool.value = currentShortPool.value.filter(coin => !newlyAdded.includes(coin));
+  }
+}, { deep: true });
+
+watch(currentShortPool, (newShortPool, oldShortPool) => {
+  const newlyAdded = newShortPool.filter(coin => !oldShortPool.includes(coin));
+  if (newlyAdded.length > 0) {
+    currentLongPool.value = currentLongPool.value.filter(coin => !newlyAdded.includes(coin));
+  }
+}, { deep: true });
 
 watch(() => props.modelValue, (newValue) => {
   if (newValue) {
