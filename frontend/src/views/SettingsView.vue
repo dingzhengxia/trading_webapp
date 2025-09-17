@@ -41,7 +41,8 @@
             <!-- 币种列表管理标签页 -->
             <v-window-item value="coin_pools">
               <v-card-text>
-                <CoinPoolsManager ref="coinPoolsManagerRef" />
+                <!-- **核心修改**: 移除了 ref 属性，因为它不再需要 -->
+                <CoinPoolsManager />
               </v-card-text>
             </v-window-item>
           </v-window>
@@ -67,15 +68,12 @@ import CoinPoolsManager from '@/components/CoinPoolsManager.vue';
 
 const settingsStore = useSettingsStore();
 const activeTab = ref('general');
-const coinPoolsManagerRef = ref<InstanceType<typeof CoinPoolsManager> | null>(null);
 
+// **核心修复**: 简化 handleSave 函数
 const handleSave = () => {
-  if (activeTab.value === 'general') {
-    if (settingsStore.settings) {
-      settingsStore.saveSettings(settingsStore.settings);
-    }
-  } else if (activeTab.value === 'coin_pools') {
-    coinPoolsManagerRef.value?.savePools();
+  // 无论在哪个标签页，都保存整个 settings 对象
+  if (settingsStore.settings) {
+    settingsStore.saveSettings(settingsStore.settings);
   }
 };
 </script>
