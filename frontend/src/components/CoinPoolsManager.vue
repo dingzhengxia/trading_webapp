@@ -30,7 +30,7 @@
             <template v-slot:item="{ item, props }">
               <v-list-item v-bind="props" class="pl-0">
                 <template v-slot:prepend>
-                  <v-checkbox-btn :model-value="currentLongPool.includes(item.value)" readonly class="mr-2"></v-checkbox-btn>
+                  <v-checkbox-btn :model-value="currentLongPool.includes(item.value as string)" readonly class="mr-2"></v-checkbox-btn>
                 </template>
                 <v-list-item-title>{{ item.title }}</v-list-item-title>
               </v-list-item>
@@ -67,7 +67,7 @@
             <template v-slot:item="{ item, props }">
               <v-list-item v-bind="props" class="pl-0">
                 <template v-slot:prepend>
-                  <v-checkbox-btn :model-value="currentShortPool.includes(item.value)" readonly class="mr-2"></v-checkbox-btn>
+                  <v-checkbox-btn :model-value="currentShortPool.includes(item.value as string)" readonly class="mr-2"></v-checkbox-btn>
                 </template>
                 <v-list-item-title>{{ item.title }}</v-list-item-title>
               </v-list-item>
@@ -76,8 +76,6 @@
         </v-card>
       </v-col>
     </v-row>
-
-    <!-- 重置按钮现在放在内容区域内 -->
     <v-btn color="primary" variant="text" @click="resetPools" class="mt-4">重置为默认</v-btn>
   </div>
 </template>
@@ -95,7 +93,7 @@ const currentLongPool = ref<string[]>([]);
 const currentShortPool = ref<string[]>([]);
 const defaultCoinPools = ref({ long_coins_pool: [] as string[], short_coins_pool: [] as string[] });
 
-// **关键修复**：添加前端去重作为最后防线，确保列表唯一
+// 关键修复：确保币种列表源是唯一的
 const allAvailableCoins = computed(() => [...new Set(settingsStore.availableCoins)].sort());
 
 const longPoolAvailableCoins = computed(() => {
@@ -115,14 +113,22 @@ const selectAllCoins = (poolType: 'long' | 'short') => {
 
 const initializeTempPools = () => {
   if (settingsStore.settings) {
-    currentLongPool.value = [...(settingsStore.settings.long_coin_list || [])];
-    currentShortPool.value = [...(settingsStore.settings.short_coin_list || [])];
+    const initialLong = settingsStore.settings.long_coin_list || [];
+    const initialShort = settingsStore.settings.short_coin_list || [];
+    const shortSet = new Set(initialShort);
+
+    currentLongPool.value = initialLong.filter(coin => !shortSet.has(coin));
+    currentShortPool.value = initialShort;
   }
 };
 
 const resetPools = () => {
-  currentLongPool.value = [...(defaultCoinPools.value.long_coins_pool || [])];
-  currentShortPool.value = [...(defaultCoinPools.value.short_coins_pool || [])];
+  const defaultLong = defaultCoinPools.value.long_coins_pool || [];
+  const defaultShort = defaultCoinPools.value.short_coins_pool || [];
+  const defaultShortSet = new Set(defaultShort);
+
+  currentLongPool.value = defaultLong.filter(coin => !defaultShortSet.has(coin));
+  currentShortPool.value = defaultShort;
 };
 
 const savePools = async () => {
@@ -132,7 +138,7 @@ const savePools = async () => {
       long_coins_pool: currentLongPool.value,
       short_coins_pool: currentShortPool.value
     });
-    await settingsStore.fetchSettings(); // 重新获取配置以同步
+    await settingsStore.fetchSettings();
     uiStore.logStore.addLog({ message: '交易币种列表已更新并保存。', level: 'success', timestamp: new Date().toLocaleTimeString() });
   } catch (error: any) {
     const errorMsg = error.response?.data?.detail || error.message;
@@ -140,23 +146,30 @@ const savePools = async () => {
   }
 };
 
-// 暴露 savePools 方法给父组件
 defineExpose({ savePools });
 
-watch(currentLongPool, (newVal) => {
-  currentShortPool.value = currentShortPool.value.filter(coin => !newVal.includes(coin));
-});
-
-watch(currentShortPool, (newVal) => {
-  currentLongPool.value = currentLongPool.value.filter(coin => !newVal.includes(coin));
-});
-
-onMounted(async () => {
-  if (!settingsStore.settings || settingsStore.availableCoins.length === 0) {
-    await settingsStore.fetchSettings();
+// 更安全的侦听器，只在列表“增加”元素时触发，防止循环
+watch(currentLongPool, (newLongPool, oldLongPool) => {
+  const addedToLong = newLongPool.filter(coin => !(oldLongPool || []).includes(coin));
+  if (addedToLong.length > 0) {
+    currentShortPool.value = currentShortPool.value.filter(coin => !addedToLong.includes(coin));
   }
-  defaultCoinPools.value.long_coins_pool = settingsStore.availableLongCoins || [];
-  defaultCoinPools.value.short_coins_pool = settingsStore.availableShortCoins || [];
-  initializeTempPools();
 });
+
+watch(currentShortPool, (newShortPool, oldShortPool) => {
+  const addedToShort = newShortPool.filter(coin => !(oldShortPool || []).includes(coin));
+  if (addedToShort.length > 0) {
+    currentLongPool.value = currentLongPool.value.filter(coin => !addedToShort.includes(coin));
+  }
+});
+
+onMounted(() => {
+  // 简化 onMounted 逻辑，它现在依赖父组件在加载时获取设置
+  if (settingsStore.settings) {
+    defaultCoinPools.value.long_coins_pool = [...settingsStore.availableLongCoins];
+    defaultCoinPools.value.short_coins_pool = [...settingsStore.availableShortCoins];
+    initializeTempPools();
+  }
+});
+
 </script>

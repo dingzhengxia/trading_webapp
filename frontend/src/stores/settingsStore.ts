@@ -1,11 +1,10 @@
-// frontend/src/stores/settingsStore.ts (确认版本)
+// frontend/src/stores/settingsStore.ts
 import { defineStore } from 'pinia';
-import { ref, watch } from 'vue';
+import { ref } from 'vue'; // 不再需要导入 'watch'
 import type { UserSettings } from '@/models/types';
 import api from '@/services/api';
 import { useUiStore } from './uiStore';
 
-// 确认所有字段都在这里
 const defaultSettings: UserSettings = {
   api_key: '', api_secret: '', use_testnet: true, enable_proxy: false, proxy_url: 'http://127.0.0.1:7890',
   leverage: 20,
@@ -38,7 +37,7 @@ const defaultSettings: UserSettings = {
 
 export const useSettingsStore = defineStore('settings', () => {
   const settings = ref<UserSettings | null>(null);
-  const availableCoins = ref<string[]>([]); // 新增：总可用币种列表
+  const availableCoins = ref<string[]>([]);
   const availableLongCoins = ref<string[]>([]);
   const availableShortCoins = ref<string[]>([]);
   const loading = ref(true);
@@ -49,7 +48,7 @@ export const useSettingsStore = defineStore('settings', () => {
     try {
       const response = await api.get('/api/settings');
       settings.value = { ...defaultSettings, ...response.data.user_settings };
-      availableCoins.value = response.data.available_coins; // 更改：从后端获取新的总列表
+      availableCoins.value = response.data.available_coins;
       availableLongCoins.value = response.data.available_long_coins;
       availableShortCoins.value = response.data.available_short_coins;
     } catch (error) {
@@ -64,26 +63,14 @@ export const useSettingsStore = defineStore('settings', () => {
     if (!newSettings) return;
     try {
       await api.post('/api/settings', newSettings);
-      uiStore.logStore.addLog({ message: "配置已自动保存。", level: 'info', timestamp: new Date().toLocaleTimeString() });
+      uiStore.logStore.addLog({ message: "通用配置已成功保存。", level: 'success', timestamp: new Date().toLocaleTimeString() });
     } catch (error) {
       console.error("Failed to save settings:", error);
-      uiStore.logStore.addLog({ message: "自动保存配置失败！", level: 'error', timestamp: new Date().toLocaleTimeString() });
+      uiStore.logStore.addLog({ message: "保存通用配置失败！", level: 'error', timestamp: new Date().toLocaleTimeString() });
     }
   }
 
-  let saveTimeout: number;
-  watch(
-    settings,
-    (newSettingsValue) => {
-      if (!loading.value && newSettingsValue) {
-        clearTimeout(saveTimeout);
-        saveTimeout = window.setTimeout(() => {
-          saveSettings(newSettingsValue);
-        }, 1200); // 延迟1.2秒保存
-      }
-    },
-    { deep: true }
-  );
+  // --- 核心修复：删除了导致无限循环的自动保存 watch 侦听器 ---
 
-  return { settings, availableCoins, availableLongCoins, availableShortCoins, loading, fetchSettings, saveSettings, defaultSettings };
+  return { settings, availableCoins, availableLongCoins, availableShortCoins, loading, fetchSettings, saveSettings };
 });
