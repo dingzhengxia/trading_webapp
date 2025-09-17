@@ -1,9 +1,10 @@
 {
-    "api_key": "",
-    "api_secret": "",
-    "use_testnet": false,
+    "api_key": "ca33ac77f5f1e42faef9a0d80fb05fce773939c4773abda4cd80a0372f354fdf",
+    "api_secret": "966fbfb8fc1475709bdf7e7db47b8b37da7cb92cdce1882ca5b8f8e6b0e07423",
+    "use_testnet": true,
+    "app_access_key": "CHANGE_THIS_IN_USER_SETTINGS.JSON",
     "enable_long_trades": true,
-    "enable_short_trades": false,
+    "enable_short_trades": true,
     "total_long_position_value": 1000,
     "total_short_position_value": 500,
     "leverage": 20,
@@ -13,25 +14,43 @@
     "enable_short_sl_tp": true,
     "short_stop_loss_percentage": 200,
     "short_take_profit_percentage": 300,
-    "long_custom_weights": {
-        "BTC": 30,
-        "DOGE": 15,
-        "BNB": 15,
-        "ETH": 25,
-        "SOL": 15
-    },
-    "open_order_fill_timeout_seconds": 50,
     "open_maker_retries": 15,
-    "close_order_fill_timeout_seconds": 50,
+    "open_order_fill_timeout_seconds": 50,
     "close_maker_retries": 15,
-    "enable_proxy": false,
-    "proxy_url": "http://127.0.0.1:19828",
+    "close_order_fill_timeout_seconds": 50,
     "rebalance_method": "multi_factor_weakest",
     "rebalance_top_n": 55,
     "rebalance_min_volume_usd": 10000000,
     "rebalance_abs_momentum_days": 2,
     "rebalance_rel_strength_days": 5,
     "rebalance_foam_days": 3,
-    "rebalance_short_ratio_max": 0.7,
-    "rebalance_short_ratio_min": 0.35
+    "enable_proxy": false,
+    "proxy_url": "http://127.0.0.1:19828",
+    "long_coin_list": [
+        "BNB",
+        "BTC",
+        "ETH",
+        "SOL"
+    ],
+    "short_coin_list": [
+        "BCH",
+        "DOGE",
+        "DRIFT",
+        "IMX",
+        "LTC",
+        "MERL",
+        "MYX",
+        "PROM",
+        "TAO",
+        "WLD",
+        "ZEC",
+        "ZORA"
+    ],
+    "long_custom_weights": {
+        "BTC": 30,
+        "DOGE": 15,
+        "BNB": 15,
+        "ETH": 25,
+        "SOL": 15
+    }
 }

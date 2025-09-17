@@ -1,4 +1,4 @@
-<!-- frontend/src/components/CloseDialog.vue (最终确认版) -->
+<!-- frontend/src/components/CloseDialog.vue (重构版) -->
 <template>
   <v-dialog v-model="uiStore.showCloseDialog" max-width="400px" persistent>
     <v-card v-if="uiStore.closeTarget">
@@ -26,7 +26,6 @@
 import { ref, computed } from 'vue';
 import { useUiStore } from '@/stores/uiStore';
 import { usePositionStore } from '@/stores/positionStore';
-import apiClient from '@/services/api';
 
 const uiStore = useUiStore();
 const positionStore = usePositionStore();
@@ -47,12 +46,16 @@ const dialogTitle = computed(() => {
 
 const closeDialog = () => { uiStore.showCloseDialog = false; closeRatio.value = 100; };
 
+// REFACTOR: 简化 executeClose 函数
 const executeClose = () => {
   const target = uiStore.closeTarget;
   if (!target || uiStore.isRunning) return;
 
   const ratio = closeRatio.value / 100;
-  let endpoint: string = '', payload: any = {}, taskName: string = '', totalTasks: number = 0;
+  let endpoint = '';
+  let payload: any = {};
+  let taskName = '';
+  let totalTasks = 0;
 
   if (target.type === 'single') {
     endpoint = '/api/positions/close';
@@ -75,25 +78,7 @@ const executeClose = () => {
 
   closeDialog();
 
-  // 使用统一的 "发射后不管" 逻辑
-  const requestId = `req-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
-  const payloadWithId = { ...payload, request_id: requestId };
-
-  uiStore.setStatus( `正在提交: ${taskName}...`, true);
-  uiStore.updateProgress({
-    success_count: 0, failed_count: 0, total: totalTasks,
-    task_name: taskName, is_final: false
-  });
-  uiStore.logStore.addLog({ message: `[前端] 已发送 '${taskName}' 启动指令 (ID: ${requestId})。`, level: 'info', timestamp: new Date().toLocaleTimeString() });
-
-  apiClient.post(endpoint, payloadWithId)
-    .then(response => {
-      console.log('API call successful:', response.data.message);
-    })
-    .catch(e => {
-      const errorMsg = e.response?.data?.detail || e.message;
-      uiStore.logStore.addLog({ message: `[前端] 任务提交失败: ${errorMsg}`, level: 'error', timestamp: new Date().toLocaleTimeString() });
-      uiStore.setStatus("任务启动失败", false);
-    });
+  // 使用统一的 action 来启动任务
+  uiStore.launchTask(endpoint, payload, taskName, totalTasks);
 };
 </script>

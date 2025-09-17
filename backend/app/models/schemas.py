@@ -2,6 +2,25 @@ from typing import List, Dict, Any, Optional
 
 from pydantic import BaseModel, Field
 
+# =================================================================
+# REFACTOR: 新增 API 响应和请求体模型
+# -----------------------------------------------------------------
+# 这些是在重构 api/settings.py 时引入的模型，之前被遗漏了。
+# 补全这些定义以解决 ImportError。
+
+class SettingsResponse(BaseModel):
+    user_settings: Dict[str, Any]
+    available_coins: List[str]
+    available_long_coins: List[str]
+    available_short_coins: List[str]
+
+class CoinPoolsUpdate(BaseModel):
+    long_coins_pool: List[str]
+    short_coins_pool: List[str]
+
+# =================================================================
+# 现有模型 (保持不变)
+# -----------------------------------------------------------------
 
 class Position(BaseModel):
     symbol: str

@@ -1,4 +1,4 @@
-// frontend/src/services/websocket.ts (最终修复版)
+// frontend/src/services/websocket.ts (优化心跳后的完整代码)
 import { useUiStore } from '@/stores/uiStore';
 import { usePositionStore } from '@/stores/positionStore';
 
@@ -11,8 +11,13 @@ declare global {
 class WebSocketService {
   private ws: WebSocket | null = null;
   private isConnecting: boolean = false;
-  private reconnectTimeout: number | undefined;
-  private heartbeatInterval: number | undefined;
+  private reconnectTimeoutId?: number;
+
+  // REFACTOR: 添加心跳和连接超时相关属性
+  private heartbeatIntervalId?: number;
+  private connectionTimeoutId?: number;
+  private readonly HEARTBEAT_INTERVAL = 25000; // 25秒发送一次ping
+  private readonly CONNECTION_TIMEOUT = this.HEARTBEAT_INTERVAL + 5000; // 30秒没收到任何消息则认为超时
 
   private getWebSocketUrl(): string {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -20,18 +25,33 @@ class WebSocketService {
     return `${protocol}//${host}/ws`;
   }
 
-  private startHeartbeat() {
-    this.stopHeartbeat();
-    this.heartbeatInterval = window.setInterval(() => {
+  // REFACTOR: 启动心跳和连接检查
+  private startHealthChecks() {
+    this.stopHealthChecks(); // 先确保旧的定时器被清除
+    this.heartbeatIntervalId = window.setInterval(() => {
       if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-        this.ws.send('ping');
+        // 发送JSON格式的心跳包
+        this.ws.send(JSON.stringify({ type: 'ping' }));
       }
-    }, 20000); // 延长到20秒一次
+    }, this.HEARTBEAT_INTERVAL);
+    this.resetConnectionTimeout();
   }
 
-  private stopHeartbeat() {
-    clearInterval(this.heartbeatInterval);
-    this.heartbeatInterval = undefined;
+  // REFACTOR: 停止所有健康检查相关的定时器
+  private stopHealthChecks() {
+    clearInterval(this.heartbeatIntervalId);
+    clearTimeout(this.connectionTimeoutId);
+    this.heartbeatIntervalId = undefined;
+    this.connectionTimeoutId = undefined;
+  }
+
+  // REFACTOR: 重置连接超时定时器
+  private resetConnectionTimeout() {
+    clearTimeout(this.connectionTimeoutId);
+    this.connectionTimeoutId = window.setTimeout(() => {
+      console.error("[WS] ❌ Connection timeout. No message received in the last 30 seconds. Forcing reconnect.");
+      this.ws?.close(); // 主动关闭会触发 onclose 中的重连逻辑
+    }, this.CONNECTION_TIMEOUT);
   }
 
   public connect() {
@@ -43,10 +63,8 @@ class WebSocketService {
     }
 
     this.isConnecting = true;
-
     const url = this.getWebSocketUrl();
     console.log(`[WS] Attempting to connect to: ${url}`);
-
     this.ws = new WebSocket(url);
 
     this.ws.onopen = () => {
@@ -54,20 +72,21 @@ class WebSocketService {
       this.isConnecting = false;
 
       const uiStore = useUiStore();
-      // --- 核心修改在这里 ---
-      // 如果当前没有任务在运行，才更新状态为“已连接”
-      // 如果有任务在运行，则不改变现有的 "正在执行..." 状态文字
       if (!uiStore.isRunning) {
-        uiStore.setStatus('已连接'); // 不再传递 running=false
+        uiStore.setStatus('已连接');
       }
-      // --- 修改结束 ---
-
-      this.startHeartbeat();
+      this.startHealthChecks(); // 连接成功后启动健康检查
     };
 
     this.ws.onmessage = (event) => {
+      this.resetConnectionTimeout(); // 收到任何消息（包括pong）都说明连接是健康的，重置超时
+
       const data = JSON.parse(event.data);
-      if (data.type === 'pong') return;
+
+      // 忽略后端发来的 pong 消息，它只用于重置超时
+      if (data.type === 'pong') {
+        return;
+      }
 
       const uiStore = useUiStore();
       const positionStore = usePositionStore();
@@ -90,36 +109,36 @@ class WebSocketService {
             positionStore.updatePositionContracts(full_symbol, ratio);
           }
           break;
-        case 'refresh_positions':
-          positionStore.fetchPositions();
-          break;
       }
     };
 
     this.ws.onclose = () => {
       console.error("[WS] ❌ Connection closed. Reconnecting in 5s...");
-      this.stopHeartbeat();
+      this.stopHealthChecks(); // 连接关闭时必须停止所有健康检查
       const uiStore = useUiStore();
-      // 在断开时，只更新文字，不改变 isRunning 状态
-      uiStore.setStatus('已断开');
+
+      if (!uiStore.isStopping) { // 如果不是用户主动停止任务导致的断开
+         uiStore.setStatus('已断开');
+      }
 
       this.ws = null;
       this.isConnecting = false;
-      clearTimeout(this.reconnectTimeout);
-      this.reconnectTimeout = window.setTimeout(() => this.connect(), 5000);
+      clearTimeout(this.reconnectTimeoutId);
+      this.reconnectTimeoutId = window.setTimeout(() => this.connect(), 5000);
     };
 
     this.ws.onerror = (event) => {
       console.error("[WS] ❌ WebSocket Error:", event);
       this.isConnecting = false;
+      this.ws?.close(); // 发生错误时，也尝试关闭以触发 onclose 的重连逻辑
     };
   }
 
   public disconnect() {
-      this.stopHeartbeat();
-      clearTimeout(this.reconnectTimeout);
+      this.stopHealthChecks();
+      clearTimeout(this.reconnectTimeoutId);
       if (this.ws) {
-          this.ws.onclose = null;
+          this.ws.onclose = null; // 移除 onclose 处理器以防止重连
           this.ws.close();
           this.ws = null;
       }

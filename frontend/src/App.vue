@@ -1,4 +1,4 @@
-<!-- frontend/src/App.vue (最终完整版) -->
+<!-- frontend/src/App.vue (重构版) -->
 <template>
   <v-app>
     <v-app-bar app density="compact">
@@ -40,24 +40,25 @@
     </v-main>
 
     <!-- App-level Dialogs and Components -->
-    <LogDrawer v-model="uiStore.showLogDrawer" temporary />
+    <LogDrawer v-model="uiStore.showLogDrawer" />
     <RebalanceDialog />
     <CloseDialog />
     <WeightConfigDialog v-model="uiStore.showWeightDialog" />
     <ProgressBar />
 
-    <!-- 新增：访问密钥输入对话框 -->
+    <!-- REFACTOR: 添加访问密钥输入对话框 -->
     <AccessKeyDialog />
 
   </v-app>
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref } from 'vue';
+import { onMounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { useDisplay } from 'vuetify';
 import { useUiStore } from '@/stores/uiStore';
 import { useSettingsStore } from '@/stores/settingsStore';
+import { useAuthStore } from '@/stores/authStore'; // 导入 auth store
 import websocketService from '@/services/websocket';
 
 import LogDrawer from '@/components/LogDrawer.vue';
@@ -66,33 +67,43 @@ import CloseDialog from '@/components/CloseDialog.vue';
 import WeightConfigDialog from '@/components/WeightConfigDialog.vue';
 import ProgressBar from '@/components/ProgressBar.vue';
 import AccessKeyDialog from '@/components/AccessKeyDialog.vue'; // 导入新组件
-import CoinPoolsDialog from '@/components/CoinPoolsManager.vue'; // 确保导入
 
 const router = useRouter();
 const routes = router.getRoutes().filter(r => r.meta && r.meta.title && r.meta.icon);
 
 const uiStore = useUiStore();
 const settingsStore = useSettingsStore();
+const authStore = useAuthStore(); // 初始化 auth store
 const { mdAndUp } = useDisplay();
 
 const drawer = ref(mdAndUp.value);
 
-onMounted(async () => {
-  try {
-    // 严格的、同步的启动流程
-    await settingsStore.fetchSettings();
-    const isTaskRunningInitially = await uiStore.checkInitialStatus();
-    websocketService.connect();
-    if (isTaskRunningInitially) {
-      const { usePositionStore } = await import('@/stores/positionStore');
-      usePositionStore().fetchPositions();
+const initializeApp = async () => {
+  // 只有在认证通过后才执行初始化
+  if (authStore.isAuthenticated) {
+    try {
+      await settingsStore.fetchSettings();
+      await uiStore.checkInitialStatus();
+      websocketService.connect();
+    } catch (error) {
+      console.error("应用初始化失败:", error);
+      if (!String(error).includes('403')) {
+          uiStore.setStatus("应用初始化失败", false);
+      }
     }
-  } catch (error) {
-    console.error("应用初始化失败:", error);
-    // 密钥错误会在api拦截器中处理，这里捕获其他可能的初始化错误
-    if (!String(error).includes('403')) {
-        uiStore.setStatus("应用初始化失败", false);
-    }
+  }
+};
+
+onMounted(() => {
+  // 首次挂载时尝试初始化
+  initializeApp();
+});
+
+// 监听认证状态的变化
+// 当用户在对话框中输入密钥后，isAuthenticated会变为true，从而触发初始化
+watch(() => authStore.isAuthenticated, (isAuth) => {
+  if (isAuth) {
+    initializeApp();
   }
 });
 </script>

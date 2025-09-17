@@ -1,6 +1,5 @@
-// 文件路径: frontend/src/models/types.ts
+// frontend/src/models/types.ts (重构版)
 
-// Position 接口保持不变，它是正确的
 export interface Position {
   symbol: string;
   full_symbol: string;
@@ -13,32 +12,40 @@ export interface Position {
   mark_price: number;
 }
 
-// --- 修改: 将 LogEntry 重命名为 Log ---
-// 这将匹配 TradingView.vue 中的导入和使用
+// REFACTOR: 将 LogEntry 统一为 Log
 export interface Log {
   message: string;
   level: 'normal' | 'info' | 'success' | 'warning' | 'error';
   timestamp: string;
 }
 
-// RebalancePlan 接口保持不变，它是正确的
 export interface RebalancePlan {
   target_ratio_perc: number;
-  positions_to_close: { symbol: string; close_value: number; close_ratio_perc: number }[];
-  positions_to_open: { symbol: string; open_value: number; percentage: number }[];
+  positions_to_close: {
+    symbol: string;
+    notional: number;
+    close_value: number;
+    close_ratio_perc: number;
+    close_ratio: number;
+  }[];
+  positions_to_open: {
+    symbol: string;
+    open_value: number;
+    percentage: number
+  }[];
   error?: string;
 }
 
-// --- 添加: 缺失的 Progress 接口 ---
-// 这个类型用于驱动进度条组件
-export interface Progress {
-  visible: boolean;
-  current: number;
+// REFACTOR: 新增 ProgressState 接口，为进度条数据提供类型安全
+export interface ProgressState {
+  success_count: number;
+  failed_count: number;
   total: number;
   task_name: string;
+  show: boolean;
+  is_final: boolean;
 }
 
-// UserSettings 接口保持不变，它是正确的
 export interface UserSettings {
   api_key: string;
   api_secret: string;
@@ -67,15 +74,9 @@ export interface UserSettings {
   rebalance_top_n: number;
   rebalance_min_volume_usd: number;
   rebalance_abs_momentum_days: number;
-  rel_strength_days: number;
+  rebalance_rel_strength_days: number;
   rebalance_foam_days: number;
-  rebalance_short_ratio_max: number;
-  rebalance_short_ratio_min: number;
 }
-
-// --- 添加: 缺失的 TradePlan 和 RebalanceCriteria 接口 ---
-// 尽管 UserSettings 包含了所有字段，但为 API 调用定义精确的类型是更好的做法
-export type TradePlan = UserSettings;
 
 export interface RebalanceCriteria {
   method: string;

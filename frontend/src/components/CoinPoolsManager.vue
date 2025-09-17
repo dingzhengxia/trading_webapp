@@ -1,3 +1,4 @@
+<!-- frontend/src/components/CoinPoolsManager.vue (最终正确版) -->
 <template>
   <div>
     <v-row>
@@ -9,12 +10,13 @@
               <template v-slot:activator="{ props }">
                 <v-btn icon="mdi-select-all" variant="text" size="small" v-bind="props" @click="selectAllCoins('long')"></v-btn>
               </template>
-              <span>全选</span>
+              <span>全选可用</span>
             </v-tooltip>
           </div>
+          <!-- FINAL, CORRECT FIX: :items 绑定到经过彻底过滤的 `availableForLongPool` -->
           <v-autocomplete
             v-model="longPool"
-            :items="mapToSelectItems(availableCoinsForLongPool)"
+            :items="availableForLongPool"
             label="从总池中选择做多备选币种"
             multiple chips closable-chips clearable variant="outlined" hide-details
             item-title="title" item-value="value" :menu-props="{ maxHeight: '300px' }"
@@ -34,16 +36,17 @@
         <v-card variant="tonal" class="pa-4">
           <div class="d-flex align-center mb-2">
             <span class="text-subtitle-1 font-weight-medium">做空币种备选池 ({{ shortPool.length }})</span>
-            <v-tooltip location="top">
+             <v-tooltip location="top">
               <template v-slot:activator="{ props }">
                 <v-btn icon="mdi-select-all" variant="text" size="small" v-bind="props" @click="selectAllCoins('short')"></v-btn>
               </template>
-              <span>全选</span>
+              <span>全选可用</span>
             </v-tooltip>
           </div>
+          <!-- FINAL, CORRECT FIX: :items 绑定到经过彻底过滤的 `availableForShortPool` -->
           <v-autocomplete
             v-model="shortPool"
-            :items="mapToSelectItems(availableCoinsForShortPool)"
+            :items="availableForShortPool"
             label="从总池中选择做空备选币种"
             multiple chips closable-chips clearable variant="outlined" hide-details
             item-title="title" item-value="value" :menu-props="{ maxHeight: '300px' }"
@@ -71,27 +74,35 @@ import apiClient from '@/services/api';
 const settingsStore = useSettingsStore();
 const uiStore = useUiStore();
 
-// longPool 和 shortPool 直接初始化为 store 中的数据
 const longPool = ref([...settingsStore.availableLongCoins]);
 const shortPool = ref([...settingsStore.availableShortCoins]);
 
 const allAvailableCoins = computed(() => [...new Set(settingsStore.availableCoins)].sort());
 const mapToSelectItems = (coins: string[]) => coins.map(coin => ({ title: coin, value: coin }));
 
-// 互斥逻辑的核心: 计算属性
-const availableCoinsForLongPool = computed(() => {
-  return allAvailableCoins.value.filter(coin => !shortPool.value.includes(coin));
+
+// FINAL, CORRECT FIX: 使用 computed 属性进行真正的互斥过滤
+// 做多池的可选列表 = 总列表 - 已被做空池选中的
+const availableForLongPool = computed(() => {
+  const shortSet = new Set(shortPool.value);
+  const available = allAvailableCoins.value.filter(coin => !shortSet.has(coin));
+  return mapToSelectItems(available);
 });
 
-const availableCoinsForShortPool = computed(() => {
-  return allAvailableCoins.value.filter(coin => !longPool.value.includes(coin));
+// 做空池的可选列表 = 总列表 - 已被做多池选中的
+const availableForShortPool = computed(() => {
+  const longSet = new Set(longPool.value);
+  const available = allAvailableCoins.value.filter(coin => !longSet.has(coin));
+  return mapToSelectItems(available);
 });
+
 
 const selectAllCoins = (poolType: 'long' | 'short') => {
   if (poolType === 'long') {
-    longPool.value = [...allAvailableCoins.value].filter(coin => !shortPool.value.includes(coin));
+    // 将所有当前可用的（即未被shortPool占用的）币种都添加到longPool
+    longPool.value = availableForLongPool.value.map(item => item.value);
   } else if (poolType === 'short') {
-    shortPool.value = [...allAvailableCoins.value].filter(coin => !longPool.value.includes(coin));
+    shortPool.value = availableForShortPool.value.map(item => item.value);
   }
 };
 
@@ -101,8 +112,7 @@ const savePools = async () => {
       long_coins_pool: longPool.value,
       short_coins_pool: shortPool.value
     });
-    // 成功保存后，刷新 store 以确保数据一致性
-    await settingsStore.fetchSettings();
+    settingsStore.updateAvailablePools(longPool.value, shortPool.value);
     uiStore.logStore.addLog({ message: '币种备选池已成功保存。', level: 'success', timestamp: new Date().toLocaleTimeString() });
   } catch (error: any) {
     const errorMsg = error.response?.data?.detail || error.message;
@@ -110,20 +120,16 @@ const savePools = async () => {
   }
 };
 
-// 监听 store 的变化，确保本地引用始终是最新值
+// 监听 store 的外部变化，确保本地引用与 store 同步
 watch(
   () => settingsStore.availableLongCoins,
-  (newVal) => {
-    longPool.value = [...newVal];
-  },
+  (newVal) => { longPool.value = [...newVal]; },
   { deep: true }
 );
 
 watch(
   () => settingsStore.availableShortCoins,
-  (newVal) => {
-    shortPool.value = [...newVal];
-  },
+  (newVal) => { shortPool.value = [...newVal]; },
   { deep: true }
 );
 

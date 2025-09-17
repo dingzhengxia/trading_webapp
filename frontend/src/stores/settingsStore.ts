@@ -1,10 +1,11 @@
-// frontend/src/stores/settingsStore.ts
+// frontend/src/stores/settingsStore.ts (修正版)
 import { defineStore } from 'pinia';
 import { ref } from 'vue';
 import type { UserSettings } from '@/models/types';
 import api from '@/services/api';
 import { useUiStore } from './uiStore';
 
+// 默认设置保持不变
 const defaultSettings: UserSettings = {
   api_key: '', api_secret: '', use_testnet: true, enable_proxy: false, proxy_url: 'http://127.0.0.1:7890',
   leverage: 20,
@@ -31,9 +32,8 @@ const defaultSettings: UserSettings = {
   rebalance_abs_momentum_days: 30,
   rebalance_rel_strength_days: 60,
   rebalance_foam_days: 1,
-  rebalance_short_ratio_max: 0.7,
-  rebalance_short_ratio_min: 0.35,
 };
+
 
 export const useSettingsStore = defineStore('settings', () => {
   const settings = ref<UserSettings | null>(null);
@@ -44,19 +44,41 @@ export const useSettingsStore = defineStore('settings', () => {
   const uiStore = useUiStore();
 
   async function fetchSettings() {
-    loading.value = true;
+    // REFACTOR: 只有在 settings 为 null 的首次加载时，才将 loading 设为 true
+    if (settings.value === null) {
+      loading.value = true;
+    }
+
     try {
       const response = await api.get('/api/settings');
-      settings.value = { ...defaultSettings, ...response.data.user_settings };
+      const fetchedSettings = { ...defaultSettings, ...response.data.user_settings };
+
+      // REFACTOR: 不直接替换整个对象，而是更新内部属性。
+      // 这样可以避免 v-if="settingsStore.settings" 导致整个组件重新渲染。
+      if (settings.value) {
+        // 如果 settings 已存在，逐字段更新
+        Object.assign(settings.value, fetchedSettings);
+      } else {
+        // 如果是首次加载，则直接赋值
+        settings.value = fetchedSettings;
+      }
+
       availableCoins.value = response.data.available_coins;
       availableLongCoins.value = response.data.available_long_coins;
       availableShortCoins.value = response.data.available_short_coins;
+
     } catch (error) {
       console.error("Failed to fetch settings:", error);
       uiStore.logStore.addLog({ message: "获取配置失败，请检查后端服务。", level: 'error', timestamp: new Date().toLocaleTimeString() });
     } finally {
       loading.value = false;
     }
+  }
+
+  // REFACTOR: 新增一个只更新币种池列表的 action
+  function updateAvailablePools(longPool: string[], shortPool: string[]) {
+    availableLongCoins.value = longPool;
+    availableShortCoins.value = shortPool;
   }
 
   async function saveGeneralSettings(newSettings: UserSettings | null) {
@@ -71,21 +93,35 @@ export const useSettingsStore = defineStore('settings', () => {
   }
 
   async function saveSelectedCoinLists(longList: string[], shortList: string[]) {
+    if (!settings.value) return;
     try {
-      await api.post('/api/settings', {
+      // 保持 settings.value 的其他部分不变，只更新列表
+      const payload = {
+        ...settings.value,
         long_coin_list: longList,
         short_coin_list: shortList
-      });
+      };
+      await api.post('/api/settings', payload);
       uiStore.logStore.addLog({ message: "交易终端币种列表已自动保存。", level: 'info', timestamp: new Date().toLocaleTimeString() });
       if (settings.value) {
         settings.value.long_coin_list = longList;
         settings.value.short_coin_list = shortList;
       }
     } catch (error) {
-      console.error("Failed to save selected coin pools:", error);
+      console.error("Failed to save selected coin lists:", error);
       uiStore.logStore.addLog({ message: "自动保存币种列表失败！", level: 'error', timestamp: new Date().toLocaleTimeString() });
     }
   }
 
-  return { settings, availableCoins, availableLongCoins, availableShortCoins, loading, fetchSettings, saveGeneralSettings, saveSelectedCoinLists };
+  return {
+    settings,
+    availableCoins,
+    availableLongCoins,
+    availableShortCoins,
+    loading,
+    fetchSettings,
+    saveGeneralSettings,
+    saveSelectedCoinLists,
+    updateAvailablePools // 导出新 action
+  };
 });

@@ -1,12 +1,10 @@
+<!-- frontend/src/views/TradingView.vue (重构版) -->
 <template>
   <div :style="{ paddingBottom: $vuetify.display.smAndDown ? '128px' : '80px' }">
     <v-container fluid>
       <v-row>
         <v-col cols="12">
-          <ControlPanel
-            v-model="activeTab"
-            @generate-rebalance-plan="handleGenerateRebalancePlan"
-          />
+          <ControlPanel v-model="activeTab" />
         </v-col>
       </v-row>
     </v-container>
@@ -59,14 +57,16 @@ import { usePositionStore } from '@/stores/positionStore';
 import { useSettingsStore } from '@/stores/settingsStore';
 import ControlPanel from '@/components/ControlPanel.vue';
 import apiClient from '@/services/api';
-import type { UserSettings, RebalanceCriteria } from '@/models/types';
+import type { RebalanceCriteria } from '@/models/types';
 
 const uiStore = useUiStore();
 const positionStore = usePositionStore();
 const settingsStore = useSettingsStore();
-
-// 修复 TypeError 的安全样式计算
 const vuetifyDisplay = useDisplay();
+
+const activeTab = ref('general');
+const isGeneratingPlan = ref(false);
+
 const footerStyle = computed(() => {
   const styles: { bottom: string, left: string } = {
     bottom: vuetifyDisplay.smAndDown.value ? '56px' : '0px',
@@ -78,48 +78,44 @@ const footerStyle = computed(() => {
   return styles;
 });
 
-const activeTab = ref('general');
-const isGeneratingPlan = ref(false);
-
-// 统一的、健壮的API调用函数
-const fireAndForgetApiCall = (endpoint: string, payload: any, taskName: string, totalTasks: number = 1) => {
-  if (uiStore.isRunning) {
-    uiStore.logStore.addLog({ message: '已有任务在运行中，请稍后再试。', level: 'warning', timestamp: new Date().toLocaleTimeString() });
-    return;
-  }
-  const requestId = `req-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
-  const payloadWithId = { ...payload, request_id: requestId };
-  uiStore.setStatus(`正在提交: ${taskName}...`, true);
-  uiStore.updateProgress({ success_count: 0, failed_count: 0, total: totalTasks, task_name: taskName, is_final: false });
-  uiStore.logStore.addLog({ message: `[前端] 已发送 '${taskName}' 启动指令 (ID: ${requestId})。`, level: 'info', timestamp: new Date().toLocaleTimeString() });
-  apiClient.post(endpoint, payloadWithId)
-    .then(response => { console.log('API call successful:', response.data.message); })
-    .catch(error => {
-      const errorMsg = error.response?.data?.detail || error.message;
-      uiStore.logStore.addLog({ message: `[前端] 任务提交失败: ${errorMsg}`, level: 'error', timestamp: new Date().toLocaleTimeString() });
-      uiStore.setStatus("任务提交失败", false);
-    });
-};
-
+// REFACTOR: 简化 handleStartTrading
 const handleStartTrading = () => {
   if (settingsStore.settings) {
     const plan = settingsStore.settings;
     const total = (plan.enable_long_trades ? plan.long_coin_list.length : 0) +
                   (plan.enable_short_trades ? plan.short_coin_list.length : 0);
-    fireAndForgetApiCall('/api/trading/start', plan, '自动开仓', total);
+    // 所有复杂的UI状态更新和API调用都已封装到 launchTask 中
+    uiStore.launchTask('/api/trading/start', plan, '自动开仓', total);
   }
 };
 
+// REFACTOR: 简化 handleSyncSlTp
 const handleSyncSlTp = () => {
   if (settingsStore.settings) {
-    // 修复：直接传递完整的 settings 对象，不再使用不存在的 SyncSltpRequest
-    fireAndForgetApiCall('/api/trading/sync-sltp', settingsStore.settings, '同步SL/TP', positionStore.positions.length);
+    const {
+      enable_long_sl_tp, long_stop_loss_percentage, long_take_profit_percentage,
+      enable_short_sl_tp, short_stop_loss_percentage, short_take_profit_percentage,
+      leverage
+    } = settingsStore.settings;
+
+    const payload = {
+      enable_long_sl_tp, long_stop_loss_percentage, long_take_profit_percentage,
+      enable_short_sl_tp, short_stop_loss_percentage, short_take_profit_percentage,
+      leverage
+    };
+
+    uiStore.launchTask(
+      '/api/trading/sync-sltp',
+      payload,
+      '同步SL/TP',
+      positionStore.positions.length
+    );
   }
 };
 
 const onGenerateRebalancePlan = () => {
   if (settingsStore.settings) {
-    const criteria = {
+    const criteria: RebalanceCriteria = {
       method: settingsStore.settings.rebalance_method,
       top_n: settingsStore.settings.rebalance_top_n,
       min_volume_usd: settingsStore.settings.rebalance_min_volume_usd,
@@ -153,6 +149,7 @@ const handleGenerateRebalancePlan = async (criteria: RebalanceCriteria) => {
 };
 
 onMounted(() => {
+  // 确保进入页面时有持仓数据，用于同步SL/TP等操作
   if (positionStore.positions.length === 0) {
     positionStore.fetchPositions();
   }
@@ -160,7 +157,6 @@ onMounted(() => {
 </script>
 
 <style scoped>
-/* Vuetify fix: 确保菜单不在 `v-tabs-item` 下被遮挡 */
 .v-container {
   overflow: visible;
 }

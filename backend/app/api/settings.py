@@ -1,82 +1,62 @@
-# backend/app/api/settings.py
-
+# backend/app/api/settings.py (重构版)
 from typing import Dict, Any, List
 
-from fastapi import APIRouter, Body, Depends, HTTPException
-from pydantic import BaseModel
+from fastapi import APIRouter, Body, Depends
 import json
-import os
 
-# 从 config.py 中导入所有全局变量
-from ..config.config import load_settings, save_settings, COIN_LISTS_FILE, AVAILABLE_COINS, AVAILABLE_LONG_COINS, \
-    AVAILABLE_SHORT_COINS
+# REFACTOR: 从 load_settings 改为只导入 save_settings
+from ..config.config import save_settings, COIN_LISTS_FILE, AVAILABLE_COINS, AVAILABLE_LONG_COINS, AVAILABLE_SHORT_COINS
+from ..core.dependencies import get_settings_dependency
 from ..core.security import verify_api_key
+# REFACTOR: 导入 Pydantic 模型
+from ..models.schemas import SettingsResponse, CoinPoolsUpdate
 
 router = APIRouter(prefix="/api/settings", tags=["Settings"], dependencies=[Depends(verify_api_key)])
 
 
-# 修改响应模型以包含新的总列表
-class SettingsResponse(BaseModel):
-    user_settings: Dict[str, Any]
-    available_coins: List[str]  # 新增字段
-    available_long_coins: List[str]
-    available_short_coins: List[str]
-
-
-# 更新的类，用于接收币种池的更新
-class CoinPoolsUpdate(BaseModel):
-    long_coins_pool: List[str]
-    short_coins_pool: List[str]
-
-
 @router.get("", response_model=SettingsResponse)
-def get_settings():
+def get_settings(settings: Dict[str, Any] = Depends(get_settings_dependency)):
     """获取所有用户配置和可选币种列表"""
-    # 确保返回的是内存中的最新列表
     return {
-        "user_settings": load_settings(),
-        "available_coins": AVAILABLE_COINS,  # 现在这个变量被正确导入了
+        "user_settings": settings,
+        "available_coins": AVAILABLE_COINS,
         "available_long_coins": AVAILABLE_LONG_COINS,
         "available_short_coins": AVAILABLE_SHORT_COINS,
     }
 
 
 @router.post("")
-def update_settings(settings: Dict[str, Any] = Body(...)):
+def update_settings(
+        updated_settings: Dict[str, Any] = Body(...),
+        current_settings: Dict[str, Any] = Depends(get_settings_dependency)
+):
     """保存用户配置到 user_settings.json 文件。"""
-    try:
-        current_settings = load_settings()
-        current_settings.update(settings)
-        save_settings(current_settings)
+    # REFACTOR: 移除了 try/except
+    current_settings.update(updated_settings)
+    if save_settings(current_settings):
         return {"message": "Settings saved successfully"}
-    except Exception as e:
-        return {"error": f"Failed to save settings: {e}"}
+    # 虽然全局异常会捕获，但这里可以给出一个更具体的失败响应
+    return {"error": "Failed to save settings"}
 
 
-# --- 新增 API 端点：用于更新 coin_lists.json ---
 @router.post("/update-coin-pools", status_code=204)
 def update_coin_pools(pools: CoinPoolsUpdate):
-    """
-    更新 coin_lists.json 文件中的做多/做空币种池。
-    """
-    try:
-        with open(COIN_LISTS_FILE, 'w', encoding='utf-8') as f:
-            data_to_save = {
-                # 保持 coins_pool 不变
-                "coins_pool": AVAILABLE_COINS,
-                "long_coins_pool": sorted(pools.long_coins_pool),
-                "short_coins_pool": sorted(pools.short_coins_pool)
-            }
-            json.dump(data_to_save, f, indent=4, ensure_ascii=False)
+    """更新 coin_lists.json 文件中的做多/做空币种池。"""
+    # REFACTOR: 移除了 try/except
+    global AVAILABLE_LONG_COINS, AVAILABLE_SHORT_COINS
 
-        # 刷新内存中的变量，只对需要修改的变量使用 global
-        global AVAILABLE_LONG_COINS, AVAILABLE_SHORT_COINS
-        AVAILABLE_LONG_COINS = data_to_save["long_coins_pool"]
-        AVAILABLE_SHORT_COINS = data_to_save["short_coins_pool"]
+    with open(COIN_LISTS_FILE, 'w', encoding='utf-8') as f:
+        data_to_save = {
+            # 保持总池不变
+            "coins_pool": AVAILABLE_COINS,
+            "long_coins_pool": sorted(list(set(pools.long_coins_pool))),
+            "short_coins_pool": sorted(list(set(pools.short_coins_pool)))
+        }
+        json.dump(data_to_save, f, indent=4, ensure_ascii=False)
 
-        print(
-            f"--- [INFO] Coin pools saved successfully. Long: {len(AVAILABLE_LONG_COINS)}, Short: {len(AVAILABLE_SHORT_COINS)} ---")
+    # 刷新内存中的变量
+    AVAILABLE_LONG_COINS = data_to_save["long_coins_pool"]
+    AVAILABLE_SHORT_COINS = data_to_save["short_coins_pool"]
 
-    except Exception as e:
-        print(f"--- [ERROR] Failed to save coin pools: {e} ---")
-        raise HTTPException(status_code=500, detail=f"Failed to save coin pools: {e}")
+    print(
+        f"--- [INFO] Coin pools saved successfully. Long: {len(AVAILABLE_LONG_COINS)}, Short: {len(AVAILABLE_SHORT_COINS)} ---")

@@ -1,11 +1,12 @@
-# backend/app/api/rebalance.py (最终完整版)
+# backend/app/api/rebalance.py (重构版)
 import asyncio
-from typing import List
+from typing import List, Dict, Any
 
 import ccxt.async_support as ccxt
-from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks
+from fastapi import APIRouter, Depends, BackgroundTasks
 
-from ..config.config import AVAILABLE_SHORT_COINS, AVAILABLE_LONG_COINS, load_settings, STABLECOIN_PREFERENCE
+from ..config.config import AVAILABLE_SHORT_COINS, AVAILABLE_LONG_COINS, STABLECOIN_PREFERENCE
+from ..core.dependencies import get_settings_dependency
 from ..core.exchange_manager import get_exchange_dependency
 from ..core.security import verify_api_key
 from ..core.trading_service import trading_service
@@ -104,67 +105,62 @@ async def screen_coins_task(exchange: ccxt.binanceusdm, criteria: RebalanceCrite
 
 @router.post("/plan", response_model=RebalancePlanResponse)
 async def generate_rebalance_plan(
-        criteria: RebalanceCriteria,
-        exchange: ccxt.binanceusdm = Depends(get_exchange_dependency)
+    criteria: RebalanceCriteria,
+    exchange: ccxt.binanceusdm = Depends(get_exchange_dependency),
+    config: Dict[str, Any] = Depends(get_settings_dependency)
 ):
     print("--- 📢 API HIT: /api/rebalance/plan ---")
-    try:
-        config = load_settings()
+    # REFACTOR: 移除了 try/except 和 load_settings()
+    positions_task = ex_async.fetch_positions_with_pnl_async(exchange, config.get('leverage', 1))
+    screening_task = screen_coins_task(exchange, criteria)
 
-        positions_task = ex_async.fetch_positions_with_pnl_async(exchange, config.get('leverage', 1))
-        screening_task = screen_coins_task(exchange, criteria)
+    all_positions, target_coin_list = await asyncio.gather(positions_task, screening_task)
 
-        all_positions, target_coin_list = await asyncio.gather(positions_task, screening_task)
+    await log_message(f"筛选完成，最终选出 {len(target_coin_list)} 个目标币种。", "success")
 
-        await log_message(f"筛选完成，最终选出 {len(target_coin_list)} 个目标币种。", "success")
+    long_positions = [p for p in all_positions if p.side == 'long']
+    current_short_positions = [p for p in all_positions if p.side == 'short']
+    current_long_value = sum(p.notional for p in long_positions)
 
-        long_positions = [p for p in all_positions if p.side == 'long']
-        current_short_positions = [p for p in all_positions if p.side == 'short']
-        current_long_value = sum(p.notional for p in long_positions)
+    if current_long_value <= 0:
+        raise ValueError("多头仓位价值为零，无法再平衡。")
 
-        if current_long_value <= 0:
-            raise ValueError("多头仓位价值为零，无法再平衡。")
+    alt_season_index = 50 # 示例值, 实际应用中可能来自外部API
+    target_ratio = rebalance_logic.calculate_target_ratio_by_alt_index(alt_season_index, config)
+    target_short_value = current_long_value * target_ratio
 
-        alt_season_index = 50 # 示例值, 实际应用中可能来自外部API
-        target_ratio = rebalance_logic.calculate_target_ratio_by_alt_index(alt_season_index, config)
-        target_short_value = current_long_value * target_ratio
+    await log_message(
+        f"当前多头价值: ${current_long_value:,.2f}, 目标空头比例: {target_ratio:.1%}, 目标空头总价值: ${target_short_value:,.2f}",
+        "info")
 
-        await log_message(
-            f"当前多头价值: ${current_long_value:,.2f}, 目标空头比例: {target_ratio:.1%}, 目标空头总价值: ${target_short_value:,.2f}",
-            "info")
+    close_plan_data, open_plan_data = rebalance_logic.generate_rebalance_plan(
+        current_short_positions, target_coin_list, target_short_value
+    )
 
-        close_plan_data, open_plan_data = rebalance_logic.generate_rebalance_plan(
-            current_short_positions, target_coin_list, target_short_value
-        )
+    close_plan_formatted = [
+        {
+            "symbol": p_info["symbol"],
+            "notional": p_info["notional"],
+            "close_value": p_info["notional"] * p_info["close_ratio"],
+            "close_ratio_perc": p_info["close_ratio"] * 100
+        } for p_info in close_plan_data
+    ]
 
-        close_plan_formatted = [
-            {
-                "symbol": p_info["symbol"],
-                "notional": p_info["notional"],
-                "close_value": p_info["notional"] * p_info["close_ratio"],
-                "close_ratio_perc": p_info["close_ratio"] * 100
-            } for p_info in close_plan_data
-        ]
+    open_plan_formatted = []
+    value_per_coin_ideal = target_short_value / len(target_coin_list) if target_coin_list else 0
+    for symbol, value in open_plan_data.items():
+        percentage = (value / value_per_coin_ideal) * 100 if value_per_coin_ideal > 0.01 else 100
+        open_plan_formatted.append({
+            "symbol": symbol,
+            "open_value": value,
+            "percentage": percentage
+        })
 
-        open_plan_formatted = []
-        value_per_coin_ideal = target_short_value / len(target_coin_list) if target_coin_list else 0
-        for symbol, value in open_plan_data.items():
-            percentage = (value / value_per_coin_ideal) * 100 if value_per_coin_ideal > 0.01 else 100
-            open_plan_formatted.append({
-                "symbol": symbol,
-                "open_value": value,
-                "percentage": percentage
-            })
-
-        return RebalancePlanResponse(
-            target_ratio_perc=target_ratio * 100,
-            positions_to_close=close_plan_formatted,
-            positions_to_open=open_plan_formatted
-        )
-    except Exception as e:
-        error_message = str(e)
-        await log_message(f"生成再平衡计划失败: {error_message}", "error")
-        raise HTTPException(status_code=500, detail=error_message)
+    return RebalancePlanResponse(
+        target_ratio_perc=target_ratio * 100,
+        positions_to_close=close_plan_formatted,
+        positions_to_open=open_plan_formatted
+    )
 
 
 @router.post("/execute")
