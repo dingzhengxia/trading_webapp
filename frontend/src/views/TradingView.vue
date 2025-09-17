@@ -68,7 +68,7 @@
       <v-btn
         color="info"
         variant="tonal"
-        @click="uiStore.showTerminalLog = !uiStore.showTerminalLog"
+        @click="showTerminalLog = !showTerminalLog"
         class="ml-2"
       >
         <v-icon left>mdi-text-box-outline</v-icon>
@@ -77,7 +77,6 @@
     </v-card>
   </v-footer>
 
-  <TerminalLog v-model="uiStore.showTerminalLog" />
   <RebalancePlanDialog v-if="uiStore.rebalancePlan" v-model="uiStore.showRebalanceDialog" :plan="uiStore.rebalancePlan" @execute-plan="handleExecuteRebalancePlan" />
 
 </template>
@@ -87,8 +86,6 @@ import { ref, computed } from 'vue';
 import { useSettingsStore } from '@/stores/settingsStore';
 import { useUiStore } from '@/stores/uiStore';
 import ControlPanel from '@/components/ControlPanel.vue';
-import TerminalLog from '@/components/TerminalLog.vue';
-import RebalancePlanDialog from '@/components/RebalancePlanDialog.vue';
 import apiClient from '@/services/api';
 import type { RebalanceCriteria, RebalancePlan } from '@/models/types';
 
