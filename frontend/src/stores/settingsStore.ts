@@ -70,5 +70,23 @@ export const useSettingsStore = defineStore('settings', () => {
     }
   }
 
-  return { settings, availableCoins, availableLongCoins, availableShortCoins, loading, fetchSettings, saveGeneralSettings };
+  // 新增一个方法，专门用来保存交易终端的币种列表
+  async function saveSelectedCoinLists(longList: string[], shortList: string[]) {
+    try {
+      await api.post('/api/settings', {
+        long_coin_list: longList,
+        short_coin_list: shortList
+      });
+      uiStore.logStore.addLog({ message: "交易终端币种列表已自动保存。", level: 'info', timestamp: new Date().toLocaleTimeString() });
+      if (settings.value) {
+        settings.value.long_coin_list = longList;
+        settings.value.short_coin_list = shortList;
+      }
+    } catch (error) {
+      console.error("Failed to save selected coin pools:", error);
+      uiStore.logStore.addLog({ message: "自动保存币种列表失败！", level: 'error', timestamp: new Date().toLocaleTimeString() });
+    }
+  }
+
+  return { settings, availableCoins, availableLongCoins, availableShortCoins, loading, fetchSettings, saveGeneralSettings, saveSelectedCoinLists };
 });
