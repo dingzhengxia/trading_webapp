@@ -124,8 +124,9 @@ const show = computed({
 // 核心修改：做多列表可用币种，排除做空列表已选的币种
 const longPoolAvailableCoins = computed(() => {
   const shortPoolSet = new Set(currentShortPool.value);
-  // 使用 availableCoins，因为它在 store 中已经去重
-  return settingsStore.availableCoins
+  // 使用 settingsStore.availableCoins，因为它在 store 中已经去重
+  const available = [...settingsStore.availableCoins];
+  return available
     .filter(coin => !shortPoolSet.has(coin))
     .map(coin => ({ text: coin, value: coin }));
 });
@@ -133,7 +134,8 @@ const longPoolAvailableCoins = computed(() => {
 // 核心修改：做空列表可用币种，排除做多列表已选的币种
 const shortPoolAvailableCoins = computed(() => {
   const longPoolSet = new Set(currentLongPool.value);
-  return settingsStore.availableCoins
+  const available = [...settingsStore.availableCoins];
+  return available
     .filter(coin => !longPoolSet.has(coin))
     .map(coin => ({ text: coin, value: coin }));
 });
