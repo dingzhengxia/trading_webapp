@@ -1,10 +1,12 @@
-<!-- frontend/src/views/TradingView.vue (重构版) -->
+<!-- frontend/src/views/TradingView.vue (最终修正版) -->
 <template>
   <div :style="{ paddingBottom: $vuetify.display.smAndDown ? '128px' : '80px' }">
     <v-container fluid>
       <v-row>
         <v-col cols="12">
-          <ControlPanel v-model="activeTab" />
+          <ControlPanel
+            v-model="activeTab"
+          />
         </v-col>
       </v-row>
     </v-container>
@@ -78,18 +80,15 @@ const footerStyle = computed(() => {
   return styles;
 });
 
-// REFACTOR: 简化 handleStartTrading
 const handleStartTrading = () => {
   if (settingsStore.settings) {
     const plan = settingsStore.settings;
     const total = (plan.enable_long_trades ? plan.long_coin_list.length : 0) +
                   (plan.enable_short_trades ? plan.short_coin_list.length : 0);
-    // 所有复杂的UI状态更新和API调用都已封装到 launchTask 中
     uiStore.launchTask('/api/trading/start', plan, '自动开仓', total);
   }
 };
 
-// REFACTOR: 简化 handleSyncSlTp
 const handleSyncSlTp = () => {
   if (settingsStore.settings) {
     const {
@@ -115,6 +114,7 @@ const handleSyncSlTp = () => {
 
 const onGenerateRebalancePlan = () => {
   if (settingsStore.settings) {
+    // --- FINAL FIX: 确保将所有需要的参数都包含在 criteria 对象中 ---
     const criteria: RebalanceCriteria = {
       method: settingsStore.settings.rebalance_method,
       top_n: settingsStore.settings.rebalance_top_n,
@@ -122,6 +122,9 @@ const onGenerateRebalancePlan = () => {
       abs_momentum_days: settingsStore.settings.rebalance_abs_momentum_days,
       rel_strength_days: settingsStore.settings.rebalance_rel_strength_days,
       foam_days: settingsStore.settings.rebalance_foam_days,
+      // 将新添加的成交量过滤参数也加入请求体
+      rebalance_volume_ma_days: settingsStore.settings.rebalance_volume_ma_days,
+      rebalance_volume_spike_ratio: settingsStore.settings.rebalance_volume_spike_ratio,
     };
     handleGenerateRebalancePlan(criteria);
   }
@@ -149,7 +152,6 @@ const handleGenerateRebalancePlan = async (criteria: RebalanceCriteria) => {
 };
 
 onMounted(() => {
-  // 确保进入页面时有持仓数据，用于同步SL/TP等操作
   if (positionStore.positions.length === 0) {
     positionStore.fetchPositions();
   }
