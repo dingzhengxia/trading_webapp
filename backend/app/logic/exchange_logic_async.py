@@ -1,4 +1,4 @@
-# backend/app/logic/exchange_logic_async.py (最终完整版)
+# backend/app/logic/exchange_logic_async.py (最终修正版)
 import asyncio
 import datetime
 from typing import List, Optional
@@ -6,6 +6,7 @@ from typing import List, Optional
 import ccxt.async_support as ccxt
 
 from .exceptions import RetriableOrderError, InterruptedError
+# REFACTOR: 导入清理SL/TP订单的函数
 from .sl_tp_logic_async import _cancel_sl_tp_orders_async, set_tp_sl_for_position_async
 from .utils import resolve_full_symbol
 from ..config import i18n
@@ -70,11 +71,15 @@ async def close_position_async(exchange: ccxt.binanceusdm, full_symbol_to_close:
         target_pos = next(
             (p for p in all_positions if p['symbol'] == full_symbol_to_close and float(p.get('contracts', 0)) != 0),
             None)
-        if not target_pos: return True
+        if not target_pos:
+            await async_logger(f"平仓 {full_symbol_to_close} 时未找到持仓，可能已被手动关闭。", "info")
+            return True
 
         pos_amt = float(target_pos['info']['positionAmt'])
         amount_to_close = float(exchange.amount_to_precision(full_symbol_to_close, abs(pos_amt) * ratio))
-        if amount_to_close <= 0: return True
+        if amount_to_close <= 0:
+            await async_logger(f"计算出的平仓数量为0，跳过 {full_symbol_to_close}。", "info")
+            return True
 
         config = load_settings()
         order_result = await _execute_maker_order_with_retry_async(
@@ -82,8 +87,12 @@ async def close_position_async(exchange: ccxt.binanceusdm, full_symbol_to_close:
             config.get('close_order_fill_timeout_seconds', 12), config.get('close_maker_retries', 3),
             async_logger, stop_event, contracts_to_trade=amount_to_close
         )
+
+        # FINAL FIX: 严格确保在平仓订单成功成交后，并且是全仓关闭时，才清理SL/TP订单。
         if order_result and abs(ratio - 1.0) < 1e-9:
+            await async_logger(f"✅ {full_symbol_to_close} 已完全平仓，准备清理其SL/TP挂单...", "info")
             await _cancel_sl_tp_orders_async(exchange, full_symbol_to_close, async_logger)
+
         return order_result
     except InterruptedError:
         await async_logger(f"平仓操作 {full_symbol_to_close} 被中断。", "warning")
@@ -103,23 +112,26 @@ async def _execute_maker_order_with_retry_async(exchange: ccxt.binanceusdm, symb
             order_book = await exchange.fetch_order_book(symbol, limit=5)
             price = order_book['bids'][0][0] if side == i18n.ORDER_SIDE_BUY else order_book['asks'][0][0]
             amount = contracts_to_trade or float(exchange.amount_to_precision(symbol, (value_to_trade or 0) / price))
-            if exchange.market(symbol).get('limits', {}).get('amount', {}).get('min', 0) > amount:
-                raise ValueError(f"计算数量 {amount} 小于最小下单量。")
+
+            min_amount = exchange.market(symbol).get('limits', {}).get('amount', {}).get('min')
+            if min_amount and amount < min_amount:
+                raise ValueError(f"计算数量 {amount} 小于最小下单量 {min_amount}。")
 
             if stop_event.is_set(): raise InterruptedError()
             order = await exchange.create_order(symbol, 'limit', side, amount, price, {**params, 'postOnly': True})
             order_id = order['id']
-            await async_logger(f"✅ 限价单已提交！ID: {order['id']}")
+            await async_logger(f"✅ {symbol} 限价单已提交 (ID: {order['id']})，等待成交...")
 
             start_time = asyncio.get_event_loop().time()
             while asyncio.get_event_loop().time() - start_time < timeout:
                 if stop_event.is_set(): raise InterruptedError()
-                if (await exchange.fetch_order(order_id, symbol))['status'] == 'closed':
-                    await async_logger(f"✅ 订单 {order_id} 已成交！", "success")
+                fetched_order = await exchange.fetch_order(order_id, symbol)
+                if fetched_order['status'] == 'closed':
+                    await async_logger(f"✅ {symbol} 订单 {order_id} 已成交！", "success")
                     return True
                 await asyncio.sleep(2)
 
-            raise RetriableOrderError(f"订单 {order_id} 超时未成交。")
+            raise RetriableOrderError(f"订单 {order_id} 在 {timeout} 秒内超时未成交。")
         except InterruptedError:
             if order_id:
                 try:
@@ -136,14 +148,14 @@ async def _execute_maker_order_with_retry_async(exchange: ccxt.binanceusdm, symb
                 except Exception:
                     pass
 
-            await async_logger(f"⚠️ 尝试失败 (第 {attempt + 1}/{retries + 1} 次)，可重试错误: {type(e).__name__}",
-                               "warning")
+            error_msg = f"⚠️ {symbol} 订单尝试失败 (第 {attempt + 1}/{retries + 1} 次)，可重试错误: {type(e).__name__}"
+            await async_logger(error_msg, "warning")
 
             if attempt < retries:
                 if stop_event.is_set(): raise InterruptedError()
                 await asyncio.sleep(3)
             else:
-                await async_logger(f"❌ 订单在 {retries + 1} 次尝试后仍然失败。", "error")
+                await async_logger(f"❌ {symbol} 订单在 {retries + 1} 次尝试后仍然失败。", "error")
                 return False
         except Exception as e:
             if order_id:
@@ -151,7 +163,7 @@ async def _execute_maker_order_with_retry_async(exchange: ccxt.binanceusdm, symb
                     await exchange.cancel_order(order_id, symbol)
                 except Exception:
                     pass
-            await async_logger(f"🚨 发生严重错误: {e}", "error")
+            await async_logger(f"🚨 {symbol} 订单发生严重错误: {e}", "error")
             raise
 
     return False
