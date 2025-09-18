@@ -1,4 +1,4 @@
-<!-- frontend/src/components/PositionsTable.vue (最终修正版) -->
+<!-- frontend/src/components/PositionsTable.vue (最终正确版) -->
 <template>
   <v-card>
     <!-- 顶部标题栏 -->
@@ -128,14 +128,14 @@ const headers: TDataTableHeader[] = [
 ];
 </script>
 
-<!-- FINAL FIX: 添加 scoped CSS 来控制表头样式 -->
+<!-- FINAL, CORRECT FIX: 使用更强力的CSS规则 -->
 <style scoped>
 /*
-  使用深度选择器 (>>> 或 :deep()) 来穿透 v-data-table-virtual 组件的样式封装。
-  这将确保我们的样式规则能准确地应用到表头单元格 (th) 上。
+  使用 :deep() 来穿透组件作用域，直接作用于 Vuetify 的内部 class。
+  我们直接 targeting the table header cell (<th>) 本身。
+  并使用 !important 来确保我们的样式拥有最高优先级，覆盖任何 Vuetify 的默认响应式样式。
 */
-:deep(.position-table th > span) {
-  /* 强制表头文字不换行 */
-  white-space: nowrap;
+:deep(.position-table .v-data-table__th) {
+  white-space: nowrap !important;
 }
 </style>
