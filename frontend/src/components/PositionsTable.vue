@@ -1,23 +1,20 @@
+<!-- frontend/src/components/PositionsTable.vue (最终修正版) -->
 <template>
   <v-card>
-    <!-- 顶部标题栏，负责显示信息 -->
+    <!-- 顶部标题栏 -->
     <v-toolbar density="compact" flat>
       <v-toolbar-title class="text-h6">{{ title }}</v-toolbar-title>
-
       <v-spacer></v-spacer>
-
       <v-chip :color="side === 'long' ? 'success' : 'error'" label variant="flat" size="small" class="mr-2">
         <span class="font-weight-bold">
           总价值: ${{ totalNotional.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) }}
         </span>
       </v-chip>
-
       <v-btn icon="mdi-refresh" variant="text" size="small" @click="emit('refresh')" :loading="loading"></v-btn>
     </v-toolbar>
 
     <!-- 第二行操作栏 -->
     <v-toolbar density="compact" flat color="transparent" class="px-2">
-       <!-- 智能的“平掉选中”按钮 -->
       <v-btn
         color="warning"
         variant="tonal"
@@ -28,10 +25,7 @@
       >
         平掉选中 ({{ selectedInThisTable.length }})
       </v-btn>
-
       <v-spacer></v-spacer>
-
-      <!-- 固定的“批量平仓”按钮 -->
       <v-btn
         color="blue-grey"
         variant="tonal"
@@ -52,7 +46,7 @@
       item-value="full_symbol"
       show-select
       density="compact"
-      class="text-caption"
+      class="text-caption position-table"
       fixed-header
       height="calc(50vh - 120px)"
       no-data-text="无持仓数据"
@@ -111,7 +105,7 @@ const selectedInThisTable = computed(() => {
   return positionStore.selectedPositions
     .filter(fullSymbol => currentTableSymbols.has(fullSymbol))
     .map(fullSymbol => props.positions.find(p => p.full_symbol === fullSymbol)!)
-    .filter(p => p); // 过滤掉可能的 undefined
+    .filter(p => p);
 });
 
 const handleCloseAll = () => {
@@ -133,3 +127,15 @@ const headers: TDataTableHeader[] = [
   { title: '操作', key: 'actions', sortable: false, align: 'end', width: '5%' },
 ];
 </script>
+
+<!-- FINAL FIX: 添加 scoped CSS 来控制表头样式 -->
+<style scoped>
+/*
+  使用深度选择器 (>>> 或 :deep()) 来穿透 v-data-table-virtual 组件的样式封装。
+  这将确保我们的样式规则能准确地应用到表头单元格 (th) 上。
+*/
+:deep(.position-table th > span) {
+  /* 强制表头文字不换行 */
+  white-space: nowrap;
+}
+</style>
