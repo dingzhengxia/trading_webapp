@@ -1,7 +1,6 @@
-<!-- frontend/src/components/WeightConfigDialog.vue (最终精确版) -->
 <template>
   <v-dialog v-model="show" max-width="500px" persistent>
-    <v-card>
+    <v-card> <!-- <--- 开标签 -->
       <v-card-title>
         <span class="text-h5">配置多头权重</span>
       </v-card-title>
@@ -42,8 +41,9 @@
         <v-btn color="blue-darken-1" variant="text" @click="close">取消</v-btn>
         <v-btn color="blue-darken-1" variant="tonal" @click="save" :disabled="Math.abs(totalWeight - 100) > 0.001">保存</v-btn>
       </v-card-actions>
-    </v-card>
-  </template>
+    </v-card> <!-- <--- FINAL FIX: 补上这个缺失的闭合标签 -->
+  </v-dialog>
+</template>
 
 <script setup lang="ts">
 import { ref, watch, computed, nextTick } from 'vue';
@@ -72,7 +72,6 @@ const onFocus = (symbol: string) => {
   manuallyEdited.value.add(symbol);
 };
 
-// --- 核心修复：确保总和精确为100的分配算法 ---
 const distribute = (total: number, items: { symbol: string; weight: number }[]) => {
   const count = items.length;
   if (count === 0) return;
@@ -82,10 +81,8 @@ const distribute = (total: number, items: { symbol: string; weight: number }[]) 
 
   items.forEach((item, index) => {
     if (index === count - 1) {
-      // 最后一项使用减法来确保总和精确
       item.weight = parseFloat((total - accumulatedWeight).toFixed(2));
     } else {
-      // 其他项四舍五入到两位小数
       const w = parseFloat(avg.toFixed(2));
       item.weight = w;
       accumulatedWeight += w;
@@ -125,7 +122,7 @@ const initWeights = () => {
   const selectedCoins = settingsStore.settings.long_coin_list;
   const currentWeights = settingsStore.settings.long_custom_weights || {};
 
-  manuallyEdited.value.clear(); // 每次打开都重置锁定状态
+  manuallyEdited.value.clear();
 
   localWeights.value = selectedCoins.map(coin => ({
     symbol: coin,
