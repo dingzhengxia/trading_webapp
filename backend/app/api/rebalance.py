@@ -1,4 +1,4 @@
-# backend/app/api/rebalance.py (重构版)
+# backend/app/api/rebalance.py (完整代码)
 import asyncio
 from typing import List, Dict, Any
 
@@ -46,50 +46,77 @@ async def screen_coins_task(exchange: ccxt.binanceusdm, criteria: RebalanceCrite
 
     await log_message(f"通过流动性筛选的币种数量: {len(liquid_coins_symbols)}", "info")
 
-    days_to_fetch = max(criteria.abs_momentum_days, criteria.rel_strength_days, criteria.foam_days, 2)
-    await log_message(f"准备并发获取 {len(liquid_coins_symbols)} 个币种过去 {days_to_fetch} 天的K线...", "info")
+    # REFACTOR: 确保获取足够长的K线以计算成交量MA
+    volume_ma_days = criteria.rebalance_volume_ma_days
+    days_to_fetch = max(
+        criteria.abs_momentum_days,
+        criteria.rel_strength_days,
+        criteria.foam_days,
+        volume_ma_days,
+        2
+    )
+    # 多获取两天数据作为缓冲
+    fetch_limit = days_to_fetch + 2
+    await log_message(f"准备并发获取 {len(liquid_coins_symbols)} 个币种过去 {fetch_limit} 天的K线...", "info")
 
     kline_tasks = []
     valid_symbols_for_kline = []
     for symbol in liquid_coins_symbols:
         full_usdt_symbol = ex_async.resolve_full_symbol(exchange, symbol)
         if full_usdt_symbol:
-            kline_tasks.append(ex_async.fetch_klines_async(exchange, full_usdt_symbol, '1d', days_to_fetch))
+            kline_tasks.append(ex_async.fetch_klines_async(exchange, full_usdt_symbol, '1d', fetch_limit))
             valid_symbols_for_kline.append(symbol)
 
-    results = await asyncio.gather(*kline_tasks, return_exceptions=True)
-
+    usdt_results = await asyncio.gather(*kline_tasks, return_exceptions=True)
     coin_data = []
+
     if criteria.method == 'multi_factor_weakest':
-        btc_kline_tasks = []
-        symbols_for_btc_kline = []
+        await log_message("正在获取 BTC/USDT K线作为相对强度基准...", "info")
+        btc_usdt_symbol = ex_async.resolve_full_symbol(exchange, "BTC")
+        if not btc_usdt_symbol:
+            raise ValueError("在交易所中找不到 BTC/USDT 交易对。")
 
-        usdt_klines_map = {}
-        for i, klines in enumerate(results):
-            if isinstance(klines, list) and len(klines) >= days_to_fetch:
+        btc_usdt_klines = await ex_async.fetch_klines_async(exchange, btc_usdt_symbol, '1d', fetch_limit)
+        if not btc_usdt_klines or len(btc_usdt_klines) < days_to_fetch:
+            raise ValueError("获取 BTC/USDT K线数据失败，无法计算相对强度。")
+
+        btc_klines_map = {kline[0]: kline for kline in btc_usdt_klines}
+        await log_message("BTC 基准数据准备完毕，开始合成各币种的相对强度K线...", "info")
+
+        for i, coin_usdt_klines in enumerate(usdt_results):
+            if isinstance(coin_usdt_klines, list) and len(coin_usdt_klines) >= days_to_fetch:
                 symbol = valid_symbols_for_kline[i]
-                usdt_klines_map[symbol] = klines
-                symbols_for_btc_kline.append(symbol)
-                btc_kline_tasks.append(
-                    ex_async.fetch_klines_async(exchange, f"{symbol}/BTC", '1d', criteria.rel_strength_days + 2))
+                synthetic_btc_klines = []
 
-        btc_results = await asyncio.gather(*btc_kline_tasks, return_exceptions=True)
+                for coin_kline in coin_usdt_klines:
+                    timestamp = coin_kline[0]
+                    btc_kline = btc_klines_map.get(timestamp)
 
-        for i, btc_klines in enumerate(btc_results):
-            symbol = symbols_for_btc_kline[i]
-            data = {'symbol': symbol, 'usdt_klines': usdt_klines_map.get(symbol)}
-            if isinstance(btc_klines, list):
-                data['btc_klines'] = btc_klines
-            coin_data.append(data)
-    else:  # foam
-        for i, klines in enumerate(results):
+                    if btc_kline and all(p > 1e-8 for p in btc_kline[1:5]):
+                        synthetic_kline = [
+                            timestamp,
+                            coin_kline[1] / btc_kline[1],
+                            coin_kline[2] / btc_kline[2],
+                            coin_kline[3] / btc_kline[3],
+                            coin_kline[4] / btc_kline[4],
+                            coin_kline[5]
+                        ]
+                        synthetic_btc_klines.append(synthetic_kline)
+
+                coin_data.append({
+                    'symbol': symbol,
+                    'usdt_klines': coin_usdt_klines,
+                    'btc_klines': synthetic_btc_klines
+                })
+    else:
+        for i, klines in enumerate(usdt_results):
             if isinstance(klines, list) and len(klines) >= days_to_fetch:
                 coin_data.append({'symbol': valid_symbols_for_kline[i], 'usdt_klines': klines})
 
     if not coin_data:
         raise ValueError("成功获取K线数据的币种为0，无法进行下一步计算。")
 
-    await log_message(f"成功获取 {len(coin_data)} 个币种的K线数据，开始计算排名...", "info")
+    await log_message(f"成功获取并处理了 {len(coin_data)} 个币种的K线数据，开始计算最终排名...", "info")
 
     loop = asyncio.get_running_loop()
     target_coin_list = await loop.run_in_executor(
@@ -105,12 +132,12 @@ async def screen_coins_task(exchange: ccxt.binanceusdm, criteria: RebalanceCrite
 
 @router.post("/plan", response_model=RebalancePlanResponse)
 async def generate_rebalance_plan(
-    criteria: RebalanceCriteria,
-    exchange: ccxt.binanceusdm = Depends(get_exchange_dependency),
-    config: Dict[str, Any] = Depends(get_settings_dependency)
+        criteria: RebalanceCriteria,
+        exchange: ccxt.binanceusdm = Depends(get_exchange_dependency),
+        config: Dict[str, Any] = Depends(get_settings_dependency)
 ):
     print("--- 📢 API HIT: /api/rebalance/plan ---")
-    # REFACTOR: 移除了 try/except 和 load_settings()
+
     positions_task = ex_async.fetch_positions_with_pnl_async(exchange, config.get('leverage', 1))
     screening_task = screen_coins_task(exchange, criteria)
 
@@ -125,7 +152,7 @@ async def generate_rebalance_plan(
     if current_long_value <= 0:
         raise ValueError("多头仓位价值为零，无法再平衡。")
 
-    alt_season_index = 50 # 示例值, 实际应用中可能来自外部API
+    alt_season_index = 50
     target_ratio = rebalance_logic.calculate_target_ratio_by_alt_index(alt_season_index, config)
     target_short_value = current_long_value * target_ratio
 
@@ -147,14 +174,15 @@ async def generate_rebalance_plan(
     ]
 
     open_plan_formatted = []
-    value_per_coin_ideal = target_short_value / len(target_coin_list) if target_coin_list else 0
-    for symbol, value in open_plan_data.items():
-        percentage = (value / value_per_coin_ideal) * 100 if value_per_coin_ideal > 0.01 else 100
-        open_plan_formatted.append({
-            "symbol": symbol,
-            "open_value": value,
-            "percentage": percentage
-        })
+    if target_coin_list:
+        value_per_coin_ideal = target_short_value / len(target_coin_list)
+        for symbol, value in open_plan_data.items():
+            percentage = (value / value_per_coin_ideal) * 100 if value_per_coin_ideal > 0.01 else 100
+            open_plan_formatted.append({
+                "symbol": symbol,
+                "open_value": value,
+                "percentage": percentage
+            })
 
     return RebalancePlanResponse(
         target_ratio_perc=target_ratio * 100,

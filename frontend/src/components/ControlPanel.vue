@@ -1,3 +1,4 @@
+<!-- frontend/src/components/ControlPanel.vue (完整代码) -->
 <template>
   <v-card v-if="settingsStore.settings">
     <v-card-title class="text-h6">交易参数</v-card-title>
@@ -69,13 +70,38 @@
           <p class="mb-4">根据市场指标动态筛选弱势币种，并生成调整空头仓位的交易计划。</p>
           <v-row>
             <v-col cols="12" md="6">
-              <v-select v-model="settingsStore.settings.rebalance_method" :items="rebalanceMethods" item-title="text" item-value="value" label="筛选策略"></v-select>
-              <v-text-field v-model.number="settingsStore.settings.rebalance_top_n" label="目标币种数量 (Top N)" type="number"></v-text-field>
-              <v-text-field v-model.number="settingsStore.settings.rebalance_min_volume_usd" label="最小24h交易额 (USD)" type="number"></v-text-field>
+              <v-select v-model="settingsStore.settings.rebalance_method" :items="rebalanceMethods" item-title="text" item-value="value" label="筛选策略" variant="outlined" density="compact"></v-select>
+              <v-text-field v-model.number="settingsStore.settings.rebalance_top_n" label="目标币种数量 (Top N)" type="number" variant="outlined" density="compact"></v-text-field>
+              <v-text-field v-model.number="settingsStore.settings.rebalance_min_volume_usd" label="最小24h交易额 (USD)" type="number" variant="outlined" density="compact"></v-text-field>
+              <!-- --- 新增UI控件 --- -->
+              <v-text-field
+                v-model.number="settingsStore.settings.rebalance_volume_ma_days"
+                label="成交量均线天数 (MA)"
+                type="number"
+                hint="用于计算平均成交量"
+                persistent-hint
+                variant="outlined"
+                density="compact"
+              ></v-text-field>
             </v-col>
             <v-col cols="12" md="6">
-              <div v-if="settingsStore.settings.rebalance_method === 'multi_factor_weakest'"><v-text-field v-model.number="settingsStore.settings.rebalance_abs_momentum_days" label="绝对动量天数" type="number"></v-text-field><v-text-field v-model.number="settingsStore.settings.rebalance_rel_strength_days" label="相对强度天数 (vs BTC)" type="number"></v-text-field></div>
-              <div v-if="settingsStore.settings.rebalance_method === 'foam'"><v-text-field v-model.number="settingsStore.settings.rebalance_foam_days" label="FOAM动量天数" type="number"></v-text-field></div>
+              <div v-if="settingsStore.settings.rebalance_method === 'multi_factor_weakest'">
+                <v-text-field v-model.number="settingsStore.settings.rebalance_abs_momentum_days" label="绝对动量天数" type="number" variant="outlined" density="compact"></v-text-field>
+                <v-text-field v-model.number="settingsStore.settings.rebalance_rel_strength_days" label="相对强度天数 (vs BTC)" type="number" variant="outlined" density="compact"></v-text-field>
+              </div>
+              <div v-if="settingsStore.settings.rebalance_method === 'foam'">
+                <v-text-field v-model.number="settingsStore.settings.rebalance_foam_days" label="FOAM动量天数" type="number" variant="outlined" density="compact"></v-text-field>
+              </div>
+              <!-- --- 新增UI控件 --- -->
+              <v-text-field
+                v-model.number="settingsStore.settings.rebalance_volume_spike_ratio"
+                label="成交量放大过滤倍数"
+                type="number"
+                hint="最近成交量 > N倍均量则过滤"
+                persistent-hint
+                variant="outlined"
+                density="compact"
+              ></v-text-field>
             </v-col>
           </v-row>
         </v-window-item>
@@ -83,11 +109,11 @@
     </v-card-text>
   </v-card>
   <v-skeleton-loader v-else type="card, article"></v-skeleton-loader>
-  <WeightConfigDialog v-if="settingsStore.settings" v-model="uiStore.showWeightDialog" :coins="settingsStore.settings.long_coin_list" :weights="settingsStore.settings.long_custom_weights || {}" @save="updateWeights" />
+  <WeightConfigDialog v-if="settingsStore.settings" v-model="uiStore.showWeightDialog" />
 </template>
 
 <script setup lang="ts">
-import { ref, watch } from 'vue';
+import { watch } from 'vue';
 import { useSettingsStore } from '@/stores/settingsStore';
 import { useUiStore } from '@/stores/uiStore';
 import WeightConfigDialog from './WeightConfigDialog.vue';
@@ -103,40 +129,16 @@ const rebalanceMethods = [
   { value: 'foam', text: 'FOAM强势动量' }
 ];
 
-const updateWeights = (newWeights: { [key: string]: number }) => {
-  if (settingsStore.settings) {
-    settingsStore.settings.long_custom_weights = newWeights;
-  }
-};
-
-// 统一的防抖保存函数
-const saveGeneralSettingsDebounced = debounce(() => {
+const saveSettingsDebounced = debounce(() => {
   if (settingsStore.settings) {
     settingsStore.saveGeneralSettings(settingsStore.settings);
   }
-}, 2000);
+}, 1500);
 
-// 专门为币种列表设置的防抖保存函数
-const saveSelectedListsDebounced = debounce(() => {
-  if (settingsStore.settings) {
-    settingsStore.saveSelectedCoinLists(settingsStore.settings.long_coin_list, settingsStore.settings.short_coin_list);
-  }
-}, 2000);
-
-// 深度监听settings对象，所有通用配置的变化都会触发此监听器
 watch(
   () => settingsStore.settings,
   () => {
-    saveGeneralSettingsDebounced();
-  },
-  { deep: true, immediate: true }
-);
-
-// 专门监听币种列表的变化
-watch(
-  () => [settingsStore.settings?.long_coin_list, settingsStore.settings?.short_coin_list],
-  () => {
-    saveSelectedListsDebounced();
+    saveSettingsDebounced();
   },
   { deep: true }
 );

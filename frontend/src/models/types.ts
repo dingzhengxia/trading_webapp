@@ -1,5 +1,4 @@
-// frontend/src/models/types.ts (重构版)
-
+// frontend/src/models/types.ts (完整代码)
 export interface Position {
   symbol: string;
   full_symbol: string;
@@ -12,7 +11,6 @@ export interface Position {
   mark_price: number;
 }
 
-// REFACTOR: 将 LogEntry 统一为 Log
 export interface Log {
   message: string;
   level: 'normal' | 'info' | 'success' | 'warning' | 'error';
@@ -36,7 +34,6 @@ export interface RebalancePlan {
   error?: string;
 }
 
-// REFACTOR: 新增 ProgressState 接口，为进度条数据提供类型安全
 export interface ProgressState {
   success_count: number;
   failed_count: number;
@@ -76,6 +73,9 @@ export interface UserSettings {
   rebalance_abs_momentum_days: number;
   rebalance_rel_strength_days: number;
   rebalance_foam_days: number;
+  // --- 新增字段 ---
+  rebalance_volume_ma_days: number;
+  rebalance_volume_spike_ratio: number;
 }
 
 export interface RebalanceCriteria {
@@ -85,4 +85,7 @@ export interface RebalanceCriteria {
   abs_momentum_days: number;
   rel_strength_days: number;
   foam_days: number;
+  // --- 新增字段 ---
+  rebalance_volume_ma_days: number;
+  rebalance_volume_spike_ratio: number;
 }

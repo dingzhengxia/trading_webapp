@@ -1,4 +1,4 @@
-# backend/app/config/config.py (重构版)
+# backend/app/config/config.py (完整代码)
 import json
 import os
 from pathlib import Path
@@ -35,7 +35,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     'open_order_fill_timeout_seconds': 60,
     'close_maker_retries': 3,
     'close_order_fill_timeout_seconds': 12,
-    'rebalance_method': 'multi_factor_weakest',
+    'rebalance_method': 'multi_factor_weakness',
     'rebalance_top_n': 10,
     'rebalance_min_volume_usd': 5000000.0,
     'rebalance_abs_momentum_days': 21,
@@ -46,6 +46,9 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     'long_coin_list': [],
     'short_coin_list': [],
     'long_custom_weights': {},
+    # --- 新增配置项 ---
+    'rebalance_volume_ma_days': 20,  # 计算成交量均线的天数
+    'rebalance_volume_spike_ratio': 3.0,  # 成交量放大过滤倍数
 }
 
 # 内存中全局变量
@@ -53,7 +56,6 @@ AVAILABLE_COINS: List[str] = []
 AVAILABLE_LONG_COINS: List[str] = []
 AVAILABLE_SHORT_COINS: List[str] = []
 
-# REFACTOR: 添加配置缓存机制以减少磁盘I/O
 _cached_settings: Dict[str, Any] | None = None
 _settings_lock = RLock()
 
@@ -80,7 +82,6 @@ def load_coin_lists() -> None:
 def load_settings() -> Dict[str, Any]:
     """
     加载用户配置，如果不存在则使用默认值。
-    REFACTOR: 使用缓存来避免重复的文件读取。
     """
     global _cached_settings
     with _settings_lock:
@@ -96,7 +97,6 @@ def load_settings() -> Dict[str, Any]:
             except json.JSONDecodeError as e:
                 print(f"--- [ERROR] Failed to load {USER_SETTINGS_FILE}: {e}. Using default settings. ---")
 
-        # 环境变量覆盖
         config['api_key'] = os.environ.get('BINANCE_API_KEY', config.get('api_key', ''))
         config['api_secret'] = os.environ.get('BINANCE_API_SECRET', config.get('api_secret', ''))
 
@@ -108,11 +108,9 @@ def load_settings() -> Dict[str, Any]:
 def save_settings(current_config: Dict[str, Any]) -> bool:
     """
     保存用户配置到文件。
-    REFACTOR: 保存成功后清除缓存，以便下次加载时能读取到最新内容。
     """
     global _cached_settings
     try:
-        # 只保存默认配置中存在的键，以避免意外字段被写入
         settings_to_write = {key: value for key, value in current_config.items() if key in DEFAULT_CONFIG}
 
         with open(USER_SETTINGS_FILE, 'w', encoding='utf-8') as f:
@@ -120,7 +118,6 @@ def save_settings(current_config: Dict[str, Any]) -> bool:
 
         print(f"--- [INFO] User settings successfully saved to '{USER_SETTINGS_FILE}'. ---")
 
-        # 清除缓存
         with _settings_lock:
             _cached_settings = None
         return True
