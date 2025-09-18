@@ -1,6 +1,7 @@
+<!-- frontend/src/components/WeightConfigDialog.vue (最终正确版) -->
 <template>
   <v-dialog v-model="show" max-width="500px" persistent>
-    <v-card> <!-- <--- 开标签 -->
+    <v-card>
       <v-card-title>
         <span class="text-h5">配置多头权重</span>
       </v-card-title>
@@ -16,8 +17,7 @@
             <v-col cols="8">
               <v-text-field
                 v-model.number="coin.weight"
-                @focus="onFocus(coin.symbol)"
-                @update:model-value="recalculateWeights(coin.symbol)"
+                @input="recalculateWeights(coin.symbol)"
                 type="number"
                 variant="outlined"
                 density="compact"
@@ -41,8 +41,8 @@
         <v-btn color="blue-darken-1" variant="text" @click="close">取消</v-btn>
         <v-btn color="blue-darken-1" variant="tonal" @click="save" :disabled="Math.abs(totalWeight - 100) > 0.001">保存</v-btn>
       </v-card-actions>
-    </v-card> <!-- <--- FINAL FIX: 补上这个缺失的闭合标签 -->
-  </v-dialog>
+    </v-card>
+  </v-dialog> <!-- FINAL FIX: 补上这个缺失的 v-dialog 闭合标签 -->
 </template>
 
 <script setup lang="ts">
@@ -68,8 +68,28 @@ const totalWeight = computed(() => {
   return localWeights.value.reduce((sum, item) => sum + (Number(item.weight) || 0), 0);
 });
 
-const onFocus = (symbol: string) => {
-  manuallyEdited.value.add(symbol);
+const recalculateWeights = (editedSymbol: string) => {
+  if (isRecalculating) return;
+  isRecalculating = true;
+
+  manuallyEdited.value.add(editedSymbol);
+
+  const unassignedItems = localWeights.value.filter(item => !manuallyEdited.value.has(item.symbol));
+
+  const lockedTotal = localWeights.value
+    .filter(item => manuallyEdited.value.has(item.symbol))
+    .reduce((sum, item) => sum + (Number(item.weight) || 0), 0);
+
+  if (unassignedItems.length > 0) {
+    const remainingTotal = 100 - lockedTotal;
+    distribute(remainingTotal >= 0 ? remainingTotal : 0, unassignedItems);
+  } else if (Math.abs(totalWeight.value - 100) > 0.001) {
+      const lastItem = localWeights.value[localWeights.value.length - 1];
+      const diff = 100 - totalWeight.value;
+      lastItem.weight = parseFloat(((Number(lastItem.weight) || 0) + diff).toFixed(2));
+  }
+
+  nextTick(() => { isRecalculating = false; });
 };
 
 const distribute = (total: number, items: { symbol: string; weight: number }[]) => {
@@ -90,27 +110,6 @@ const distribute = (total: number, items: { symbol: string; weight: number }[]) 
   });
 };
 
-
-const recalculateWeights = (editedSymbol: string) => {
-  if (isRecalculating) return;
-  isRecalculating = true;
-
-  manuallyEdited.value.add(editedSymbol);
-
-  const lockedTotal = localWeights.value
-    .filter(item => manuallyEdited.value.has(item.symbol))
-    .reduce((sum, item) => sum + (Number(item.weight) || 0), 0);
-
-  const unassignedItems = localWeights.value.filter(item => !manuallyEdited.value.has(item.symbol));
-
-  if (unassignedItems.length > 0) {
-    const remainingTotal = 100 - lockedTotal;
-    distribute(remainingTotal > 0 ? remainingTotal : 0, unassignedItems);
-  }
-
-  nextTick(() => { isRecalculating = false; });
-};
-
 const resetAndUnlock = () => {
   manuallyEdited.value.clear();
   distribute(100, localWeights.value);
@@ -118,12 +117,10 @@ const resetAndUnlock = () => {
 
 const initWeights = () => {
   if (!settingsStore.settings?.long_coin_list) return;
-
   const selectedCoins = settingsStore.settings.long_coin_list;
   const currentWeights = settingsStore.settings.long_custom_weights || {};
 
   manuallyEdited.value.clear();
-
   localWeights.value = selectedCoins.map(coin => ({
     symbol: coin,
     weight: currentWeights[coin] !== undefined ? currentWeights[coin] : 0
