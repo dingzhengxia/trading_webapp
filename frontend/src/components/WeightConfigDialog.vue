@@ -15,6 +15,7 @@
               <v-label>{{ coin.symbol }}</v-label>
             </v-col>
             <v-col cols="8">
+              <!-- FINAL FIX: 移除 @focus, 只使用 @input -->
               <v-text-field
                 v-model.number="coin.weight"
                 @input="recalculateWeights(coin.symbol)"
@@ -42,7 +43,7 @@
         <v-btn color="blue-darken-1" variant="tonal" @click="save" :disabled="Math.abs(totalWeight - 100) > 0.001">保存</v-btn>
       </v-card-actions>
     </v-card>
-  </v-dialog> <!-- FINAL FIX: 补上这个缺失的 v-dialog 闭合标签 -->
+  </v-dialog>
 </template>
 
 <script setup lang="ts">
@@ -68,10 +69,12 @@ const totalWeight = computed(() => {
   return localWeights.value.reduce((sum, item) => sum + (Number(item.weight) || 0), 0);
 });
 
+// --- 这是最终的、简单且正确的重新计算逻辑 ---
 const recalculateWeights = (editedSymbol: string) => {
   if (isRecalculating) return;
   isRecalculating = true;
 
+  // 核心修正：只有在值发生变动时，才将该项加入“手动编辑”列表
   manuallyEdited.value.add(editedSymbol);
 
   const unassignedItems = localWeights.value.filter(item => !manuallyEdited.value.has(item.symbol));
@@ -84,14 +87,17 @@ const recalculateWeights = (editedSymbol: string) => {
     const remainingTotal = 100 - lockedTotal;
     distribute(remainingTotal >= 0 ? remainingTotal : 0, unassignedItems);
   } else if (Math.abs(totalWeight.value - 100) > 0.001) {
-      const lastItem = localWeights.value[localWeights.value.length - 1];
-      const diff = 100 - totalWeight.value;
-      lastItem.weight = parseFloat(((Number(lastItem.weight) || 0) + diff).toFixed(2));
+      const lastItem = localWeights.value.find(item => item.symbol !== editedSymbol) || localWeights.value[0];
+      if(lastItem) {
+        const diff = 100 - totalWeight.value;
+        lastItem.weight = parseFloat(((Number(lastItem.weight) || 0) + diff).toFixed(2));
+      }
   }
 
   nextTick(() => { isRecalculating = false; });
 };
 
+// 精确的分配函数
 const distribute = (total: number, items: { symbol: string; weight: number }[]) => {
   const count = items.length;
   if (count === 0) return;
@@ -110,27 +116,31 @@ const distribute = (total: number, items: { symbol: string; weight: number }[]) 
   });
 };
 
+// “均分权重”按钮，清空所有锁定，然后重新均分
 const resetAndUnlock = () => {
   manuallyEdited.value.clear();
   distribute(100, localWeights.value);
 };
 
+// --- 核心修正：初始化函数 ---
 const initWeights = () => {
   if (!settingsStore.settings?.long_coin_list) return;
   const selectedCoins = settingsStore.settings.long_coin_list;
   const currentWeights = settingsStore.settings.long_custom_weights || {};
 
+  // 关键：每次打开弹窗，都必须清空“手动编辑”的记录！
   manuallyEdited.value.clear();
+
   localWeights.value = selectedCoins.map(coin => ({
     symbol: coin,
     weight: currentWeights[coin] !== undefined ? currentWeights[coin] : 0
   }));
 
+  // 如果没有自定义权重，或者总和不为100，则自动均分
   if (Object.keys(currentWeights).length === 0 || Math.abs(totalWeight.value - 100) > 0.001) {
     resetAndUnlock();
-  } else {
-    manuallyEdited.value = new Set(Object.keys(currentWeights));
   }
+  // 注意：不再有 else 分支去预设 manuallyEdited
 };
 
 const save = () => {
@@ -152,6 +162,7 @@ const close = () => {
 
 watch(() => props.modelValue, (newValue) => {
   if (newValue) {
+    // 每次打开弹窗，都重新初始化
     initWeights();
   }
 }, { immediate: true });
