@@ -1,11 +1,12 @@
-# backend/app/api/rebalance.py (完整代码)
+# backend/app/api/rebalance.py (最终正确版)
 import asyncio
 from typing import List, Dict, Any
 
 import ccxt.async_support as ccxt
 from fastapi import APIRouter, Depends, BackgroundTasks
 
-from ..config.config import AVAILABLE_SHORT_COINS, AVAILABLE_LONG_COINS, STABLECOIN_PREFERENCE
+# 核心修正：不再从 config 导入 AVAILABLE_SHORT_COINS
+from ..config.config import AVAILABLE_LONG_COINS, STABLECOIN_PREFERENCE
 from ..core.dependencies import get_settings_dependency
 from ..core.exchange_manager import get_exchange_dependency
 from ..core.security import verify_api_key
@@ -18,8 +19,16 @@ from ..models.schemas import RebalanceCriteria, RebalancePlanResponse, Execution
 router = APIRouter(prefix="/api/rebalance", tags=["Rebalance"], dependencies=[Depends(verify_api_key)])
 
 
-async def screen_coins_task(exchange: ccxt.binanceusdm, criteria: RebalanceCriteria) -> List[str]:
+# 核心修正：将 settings 对象传递给 screen_coins_task
+async def screen_coins_task(exchange: ccxt.binanceusdm, criteria: RebalanceCriteria, settings: Dict[str, Any]) -> List[
+    str]:
     await log_message(f"开始筛选，策略: {criteria.method}, 目标数量: {criteria.top_n}", "info")
+
+    # 核心修正：使用从 settings 传入的、用户精选的 short_coin_list
+    short_pool = set(settings.get('short_coin_list', []))
+    if not short_pool:
+        raise ValueError("做空交易列表为空，无法进行智能再平衡筛选。请先在'通用开仓设置'中配置。")
+    await log_message(f"将使用您配置的 {len(short_pool)} 个币种的做空列表进行筛选。", "info")
 
     await log_message("正在获取全市场行情以进行流动性筛选...", "info")
     all_tickers = await exchange.fetch_tickers()
@@ -34,19 +43,19 @@ async def screen_coins_task(exchange: ccxt.binanceusdm, criteria: RebalanceCrite
         quote = quote.split(':')[0]
         if base in processed_bases: continue
 
+        # 核心修正：严格使用从 settings 中获取的 short_pool 进行判断
         if (quote in stablecoins and
-                base in AVAILABLE_SHORT_COINS and
+                base in short_pool and
                 ticker.get('quoteVolume', 0) is not None and
                 ticker['quoteVolume'] > criteria.min_volume_usd):
             liquid_coins_symbols.append(base)
             processed_bases.add(base)
 
     if not liquid_coins_symbols:
-        raise ValueError("没有币种通过流动性筛选。请检查备选池或降低交易额门槛。")
+        raise ValueError("您选择的做空币种中，没有币种通过流动性筛选。请检查或降低交易额门槛。")
 
     await log_message(f"通过流动性筛选的币种数量: {len(liquid_coins_symbols)}", "info")
 
-    # REFACTOR: 确保获取足够长的K线以计算成交量MA
     volume_ma_days = criteria.rebalance_volume_ma_days
     days_to_fetch = max(
         criteria.abs_momentum_days,
@@ -55,7 +64,6 @@ async def screen_coins_task(exchange: ccxt.binanceusdm, criteria: RebalanceCrite
         volume_ma_days,
         2
     )
-    # 多获取两天数据作为缓冲
     fetch_limit = days_to_fetch + 2
     await log_message(f"准备并发获取 {len(liquid_coins_symbols)} 个币种过去 {fetch_limit} 天的K线...", "info")
 
@@ -108,7 +116,7 @@ async def screen_coins_task(exchange: ccxt.binanceusdm, criteria: RebalanceCrite
                     'usdt_klines': coin_usdt_klines,
                     'btc_klines': synthetic_btc_klines
                 })
-    else:
+    else:  # foam
         for i, klines in enumerate(usdt_results):
             if isinstance(klines, list) and len(klines) >= days_to_fetch:
                 coin_data.append({'symbol': valid_symbols_for_kline[i], 'usdt_klines': klines})
@@ -139,7 +147,8 @@ async def generate_rebalance_plan(
     print("--- 📢 API HIT: /api/rebalance/plan ---")
 
     positions_task = ex_async.fetch_positions_with_pnl_async(exchange, config.get('leverage', 1))
-    screening_task = screen_coins_task(exchange, criteria)
+    # 核心修正：将 config (即 settings) 传递下去
+    screening_task = screen_coins_task(exchange, criteria, config)
 
     all_positions, target_coin_list = await asyncio.gather(positions_task, screening_task)
 
