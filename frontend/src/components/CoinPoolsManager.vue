@@ -16,7 +16,7 @@
 
           <v-autocomplete
             v-model="longPool"
-            :items="filteredLongPoolItems"
+            :items="availableForLongPool"
             label="从总池中选择做多备选币种"
             multiple chips closable-chips clearable variant="outlined" hide-details
             item-title="title" item-value="value" :menu-props="{ maxHeight: '300px' }"
@@ -24,13 +24,17 @@
             hide-selected
           >
             <template v-slot:prepend-item>
+              <!--
+                v-model="longSearch" & :items="filtered..." 被移除
+                v-autocomplete 会自动处理搜索
+              -->
               <v-text-field
-                v-model="longSearch"
+                :model-value="longSearch"
+                @update:model-value="longSearch = $event"
                 placeholder="搜索币种..."
                 variant="underlined"
                 density="compact"
                 hide-details
-                autofocus
                 class="px-4 mb-2"
               ></v-text-field>
               <v-divider></v-divider>
@@ -62,7 +66,7 @@
 
           <v-autocomplete
             v-model="shortPool"
-            :items="filteredShortPoolItems"
+            :items="availableForShortPool"
             label="从总池中选择做空备选币种"
             multiple chips closable-chips clearable variant="outlined" hide-details
             item-title="title" item-value="value" :menu-props="{ maxHeight: '300px' }"
@@ -71,12 +75,12 @@
           >
             <template v-slot:prepend-item>
               <v-text-field
-                v-model="shortSearch"
+                :model-value="shortSearch"
+                @update:model-value="shortSearch = $event"
                 placeholder="搜索币种..."
                 variant="underlined"
                 density="compact"
                 hide-details
-                autofocus
                 class="px-4 mb-2"
               ></v-text-field>
               <v-divider></v-divider>
@@ -109,13 +113,14 @@ const uiStore = useUiStore();
 const longPool = ref([...settingsStore.availableLongCoins]);
 const shortPool = ref([...settingsStore.availableShortCoins]);
 
-// --- 新增：用于搜索框的 ref ---
+// 核心修正：search ref 仍然需要，但只用于传递给 v-text-field
 const longSearch = ref('');
 const shortSearch = ref('');
 
 const allAvailableCoins = computed(() => [...new Set(settingsStore.availableCoins)].sort());
 const mapToSelectItems = (coins: string[]) => coins.map(coin => ({ title: coin, value: coin }));
 
+// 核心修正：这些计算属性不再需要手动过滤，只负责互斥
 const availableForLongPool = computed(() => {
   const shortSet = new Set(shortPool.value);
   const available = allAvailableCoins.value.filter(coin => !shortSet.has(coin));
@@ -128,23 +133,15 @@ const availableForShortPool = computed(() => {
   return mapToSelectItems(available);
 });
 
-// --- 新增：根据搜索词过滤列表 ---
+// `v-autocomplete` 现在会根据 search ref 自动过滤 availableFor...Pool
+// 我们需要一个最终的列表给到组件
 const filteredLongPoolItems = computed(() => {
-  if (!longSearch.value) {
-    return availableForLongPool.value;
-  }
-  return availableForLongPool.value.filter(item =>
-    item.title.toLowerCase().includes(longSearch.value.toLowerCase())
-  );
+  if (!longSearch.value) return availableForLongPool.value;
+  return availableForLongPool.value.filter(i => i.title.toLowerCase().includes(longSearch.value.toLowerCase()));
 });
-
 const filteredShortPoolItems = computed(() => {
-  if (!shortSearch.value) {
-    return availableForShortPool.value;
-  }
-  return availableForShortPool.value.filter(item =>
-    item.title.toLowerCase().includes(shortSearch.value.toLowerCase())
-  );
+  if (!shortSearch.value) return availableForShortPool.value;
+  return availableForShortPool.value.filter(i => i.title.toLowerCase().includes(shortSearch.value.toLowerCase()));
 });
 
 

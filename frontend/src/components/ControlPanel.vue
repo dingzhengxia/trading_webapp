@@ -19,13 +19,14 @@
 
                   <v-autocomplete
                     v-model="settingsStore.settings.long_coin_list"
-                    :items="filteredLongListItems"
+                    :items="settingsStore.availableLongCoins"
                     label="从备选池中选择做多币种"
                     multiple
                     chips
                     closable-chips
                     hide-no-data
                     hide-selected
+                    :custom-filter="ignoreCaseFilter"
                     :disabled="!settingsStore.settings.enable_long_trades"
                   >
                     <template v-slot:prepend-item>
@@ -35,7 +36,6 @@
                         variant="underlined"
                         density="compact"
                         hide-details
-                        autofocus
                         class="px-4 mb-2"
                       ></v-text-field>
                       <v-divider></v-divider>
@@ -61,13 +61,14 @@
 
                   <v-autocomplete
                     v-model="settingsStore.settings.short_coin_list"
-                    :items="filteredShortListItems"
+                    :items="settingsStore.availableShortCoins"
                     label="从备选池中选择空头币种"
                     multiple
                     chips
                     closable-chips
                     hide-no-data
                     hide-selected
+                    :custom-filter="ignoreCaseFilter"
                     :disabled="!settingsStore.settings.enable_short_trades"
                   >
                      <template v-slot:prepend-item>
@@ -77,7 +78,6 @@
                         variant="underlined"
                         density="compact"
                         hide-details
-                        autofocus
                         class="px-4 mb-2"
                       ></v-text-field>
                       <v-divider></v-divider>
@@ -155,15 +155,17 @@ const uiStore = useUiStore();
 const longListSearch = ref('');
 const shortListSearch = ref('');
 
-const filteredLongListItems = computed(() => {
-    if (!longListSearch.value) return settingsStore.availableLongCoins;
-    return settingsStore.availableLongCoins.filter(c => c.toLowerCase().includes(longListSearch.value.toLowerCase()));
-});
+// 核心修正：这个 custom filter 是多余的，移除它，让 v-autocomplete 使用默认的、更强大的算法
+const ignoreCaseFilter = (itemTitle: string, queryText: string, item: any) => {
+  const title = item.title || itemTitle;
+  const query = queryText;
+  return title.toLowerCase().indexOf(query.toLowerCase()) > -1
+}
 
-const filteredShortListItems = computed(() => {
-    if (!shortListSearch.value) return settingsStore.availableShortCoins;
-    return settingsStore.availableShortCoins.filter(c => c.toLowerCase().includes(shortListSearch.value.toLowerCase()));
-});
+// 核心修正：移除手写的过滤 computed，直接将 store 的列表传给 :items
+// const filteredLongListItems = computed(() => { ... });
+// const filteredShortListItems = computed(() => { ... });
+
 
 const rebalanceMethods = [
   { value: 'multi_factor_weakest', text: '多因子弱势策略' },
