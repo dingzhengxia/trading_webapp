@@ -1,4 +1,4 @@
-<!-- frontend/src/components/ControlPanel.vue (最终正确版) -->
+<!-- frontend/src/components/ControlPanel.vue (完整代码) -->
 <template>
   <v-card v-if="settingsStore.settings">
     <v-card-title class="text-h6">交易参数</v-card-title>
@@ -17,30 +17,17 @@
                   <v-switch v-model="settingsStore.settings.enable_long_trades" label="开启多头交易" color="success" inset></v-switch>
                   <v-text-field v-model.number="settingsStore.settings.total_long_position_value" label="多头总价值 (USD)" type="number" :disabled="!settingsStore.settings.enable_long_trades"></v-text-field>
 
-                  <v-autocomplete
+                  <label class="v-label text-caption text-medium-emphasis">从备选池中选择做多币种</label>
+                  <MultiSelect
                     v-model="settingsStore.settings.long_coin_list"
-                    :items="settingsStore.availableLongCoins"
-                    label="从备选池中选择做多币种"
-                    multiple
-                    chips
-                    closable-chips
-                    hide-no-data
-                    hide-selected
-                    :custom-filter="ignoreCaseFilter"
+                    :options="settingsStore.availableLongCoins"
+                    placeholder="选择或搜索币种"
+                    filter
                     :disabled="!settingsStore.settings.enable_long_trades"
-                  >
-                    <template v-slot:prepend-item>
-                      <v-text-field
-                        v-model="longListSearch"
-                        placeholder="搜索币种..."
-                        variant="underlined"
-                        density="compact"
-                        hide-details
-                        class="px-4 mb-2"
-                      ></v-text-field>
-                      <v-divider></v-divider>
-                    </template>
-                  </v-autocomplete>
+                    class="w-full prime-multiselect mt-2 mb-4"
+                    :maxSelectedLabels="3"
+                    selectedItemsLabel="{0} 个币种已选择"
+                  />
 
                   <v-btn size="small" @click="uiStore.showWeightDialog = true" :disabled="!settingsStore.settings.enable_long_trades">配置权重</v-btn>
                   <v-divider class="my-4"></v-divider>
@@ -59,30 +46,17 @@
                   <v-switch v-model="settingsStore.settings.enable_short_trades" label="开启空头交易" color="error" inset></v-switch>
                   <v-text-field v-model.number="settingsStore.settings.total_short_position_value" label="空头总价值 (USD)" type="number" :disabled="!settingsStore.settings.enable_short_trades"></v-text-field>
 
-                  <v-autocomplete
+                  <label class="v-label text-caption text-medium-emphasis">从备选池中选择空头币种</label>
+                  <MultiSelect
                     v-model="settingsStore.settings.short_coin_list"
-                    :items="settingsStore.availableShortCoins"
-                    label="从备选池中选择空头币种"
-                    multiple
-                    chips
-                    closable-chips
-                    hide-no-data
-                    hide-selected
-                    :custom-filter="ignoreCaseFilter"
+                    :options="settingsStore.availableShortCoins"
+                    placeholder="选择或搜索币种"
+                    filter
                     :disabled="!settingsStore.settings.enable_short_trades"
-                  >
-                     <template v-slot:prepend-item>
-                      <v-text-field
-                        v-model="shortListSearch"
-                        placeholder="搜索币种..."
-                        variant="underlined"
-                        density="compact"
-                        hide-details
-                        class="px-4 mb-2"
-                      ></v-text-field>
-                      <v-divider></v-divider>
-                    </template>
-                  </v-autocomplete>
+                    class="w-full prime-multiselect mt-2 mb-4"
+                    :maxSelectedLabels="3"
+                    selectedItemsLabel="{0} 个币种已选择"
+                  />
 
                   <v-divider class="my-4"></v-divider>
                    <v-switch v-model="settingsStore.settings.enable_short_sl_tp" label="开启空头 SL/TP" color="info" inset :disabled="!settingsStore.settings.enable_short_trades"></v-switch>
@@ -140,32 +114,53 @@
   <WeightConfigDialog v-if="settingsStore.settings" v-model="uiStore.showWeightDialog" />
 </template>
 
+<style>
+/*
+  全局样式，适配 PrimeVue 组件以更好地融入 Vuetify 暗色主题。
+  移除 scoped 以便样式能正确应用到 PrimeVue 的弹出菜单。
+*/
+.prime-multiselect {
+  width: 100%;
+}
+.p-multiselect {
+  background-color: #2E2E2E !important;
+  border: 1px solid #4a4a4a !important;
+  box-shadow: none !important;
+}
+.p-multiselect:not(.p-disabled):hover {
+  border-color: #7a7a7a !important;
+}
+.p-multiselect-label {
+ color: rgba(255, 255, 255, 0.7) !important;
+}
+.p-multiselect-panel {
+  background-color: #2E2E2E !important;
+  border: 1px solid #4a4a4a !important;
+}
+.p-multiselect-header {
+   background-color: #2E2E2E !important;
+}
+.p-multiselect-item:hover {
+  background-color: #4a4a4a !important;
+}
+.p-inputtext {
+  background-color: #212121 !important;
+  color: white !important;
+}
+</style>
+
 <script setup lang="ts">
-import { ref, watch, computed } from 'vue';
+import { watch } from 'vue';
 import { useSettingsStore } from '@/stores/settingsStore';
 import { useUiStore } from '@/stores/uiStore';
 import WeightConfigDialog from './WeightConfigDialog.vue';
 import { debounce } from 'lodash-es';
+import MultiSelect from 'primevue/multiselect';
 
 const modelValue = defineModel<string>();
 
 const settingsStore = useSettingsStore();
 const uiStore = useUiStore();
-
-const longListSearch = ref('');
-const shortListSearch = ref('');
-
-// 核心修正：这个 custom filter 是多余的，移除它，让 v-autocomplete 使用默认的、更强大的算法
-const ignoreCaseFilter = (itemTitle: string, queryText: string, item: any) => {
-  const title = item.title || itemTitle;
-  const query = queryText;
-  return title.toLowerCase().indexOf(query.toLowerCase()) > -1
-}
-
-// 核心修正：移除手写的过滤 computed，直接将 store 的列表传给 :items
-// const filteredLongListItems = computed(() => { ... });
-// const filteredShortListItems = computed(() => { ... });
-
 
 const rebalanceMethods = [
   { value: 'multi_factor_weakest', text: '多因子弱势策略' },

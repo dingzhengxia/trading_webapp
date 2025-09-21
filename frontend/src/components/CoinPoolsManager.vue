@@ -1,4 +1,4 @@
-<!-- frontend/src/components/CoinPoolsManager.vue (最终正确版) -->
+<!-- frontend/src/components/CoinPoolsManager.vue (完整代码) -->
 <template>
   <div>
     <v-row>
@@ -14,40 +14,17 @@
             </v-tooltip>
           </div>
 
-          <v-autocomplete
+          <MultiSelect
             v-model="longPool"
-            :items="availableForLongPool"
-            label="从总池中选择做多备选币种"
-            multiple chips closable-chips clearable variant="outlined" hide-details
-            item-title="title" item-value="value" :menu-props="{ maxHeight: '300px' }"
-            hide-no-data
-            hide-selected
-          >
-            <template v-slot:prepend-item>
-              <!--
-                v-model="longSearch" & :items="filtered..." 被移除
-                v-autocomplete 会自动处理搜索
-              -->
-              <v-text-field
-                :model-value="longSearch"
-                @update:model-value="longSearch = $event"
-                placeholder="搜索币种..."
-                variant="underlined"
-                density="compact"
-                hide-details
-                class="px-4 mb-2"
-              ></v-text-field>
-              <v-divider></v-divider>
-            </template>
-
-            <template v-slot:item="{ item, props }">
-              <v-list-item v-bind="props" class="pl-0">
-                <template v-slot:prepend>
-                  <v-checkbox-btn :model-value="longPool.includes(item.value)" readonly class="mr-2"></v-checkbox-btn>
-                </template>
-              </v-list-item>
-            </template>
-          </v-autocomplete>
+            :options="availableForLongPool"
+            optionLabel="title"
+            optionValue="value"
+            placeholder="从总池中选择做多备选币种"
+            filter
+            class="w-full prime-multiselect"
+            :maxSelectedLabels="3"
+            selectedItemsLabel="{0} 个币种已选择"
+          />
 
         </v-card>
       </v-col>
@@ -64,36 +41,17 @@
             </v-tooltip>
           </div>
 
-          <v-autocomplete
+          <MultiSelect
             v-model="shortPool"
-            :items="availableForShortPool"
-            label="从总池中选择做空备选币种"
-            multiple chips closable-chips clearable variant="outlined" hide-details
-            item-title="title" item-value="value" :menu-props="{ maxHeight: '300px' }"
-            hide-no-data
-            hide-selected
-          >
-            <template v-slot:prepend-item>
-              <v-text-field
-                :model-value="shortSearch"
-                @update:model-value="shortSearch = $event"
-                placeholder="搜索币种..."
-                variant="underlined"
-                density="compact"
-                hide-details
-                class="px-4 mb-2"
-              ></v-text-field>
-              <v-divider></v-divider>
-            </template>
-
-            <template v-slot:item="{ item, props }">
-              <v-list-item v-bind="props" class="pl-0">
-                <template v-slot:prepend>
-                  <v-checkbox-btn :model-value="shortPool.includes(item.value)" readonly class="mr-2"></v-checkbox-btn>
-                </template>
-              </v-list-item>
-            </template>
-          </v-autocomplete>
+            :options="availableForShortPool"
+            optionLabel="title"
+            optionValue="value"
+            placeholder="从总池中选择做空备选币种"
+            filter
+            class="w-full prime-multiselect"
+            :maxSelectedLabels="3"
+            selectedItemsLabel="{0} 个币种已选择"
+          />
 
         </v-card>
       </v-col>
@@ -101,11 +59,47 @@
   </div>
 </template>
 
+<style>
+/*
+  全局样式，适配 PrimeVue 组件以更好地融入 Vuetify 暗色主题。
+  移除 scoped 以便样式能正确应用到 PrimeVue 的弹出菜单。
+*/
+.prime-multiselect {
+  width: 100%;
+}
+.p-multiselect {
+  background-color: #2E2E2E !important;
+  border: 1px solid #4a4a4a !important;
+  box-shadow: none !important;
+}
+.p-multiselect:not(.p-disabled):hover {
+  border-color: #7a7a7a !important;
+}
+.p-multiselect-label {
+ color: rgba(255, 255, 255, 0.7) !important;
+}
+.p-multiselect-panel {
+  background-color: #2E2E2E !important;
+  border: 1px solid #4a4a4a !important;
+}
+.p-multiselect-header {
+   background-color: #2E2E2E !important;
+}
+.p-multiselect-item:hover {
+  background-color: #4a4a4a !important;
+}
+.p-inputtext {
+  background-color: #212121 !important;
+  color: white !important;
+}
+</style>
+
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue';
 import { useSettingsStore } from '@/stores/settingsStore';
 import { useUiStore } from '@/stores/uiStore';
 import apiClient from '@/services/api';
+import MultiSelect from 'primevue/multiselect';
 
 const settingsStore = useSettingsStore();
 const uiStore = useUiStore();
@@ -113,14 +107,9 @@ const uiStore = useUiStore();
 const longPool = ref([...settingsStore.availableLongCoins]);
 const shortPool = ref([...settingsStore.availableShortCoins]);
 
-// 核心修正：search ref 仍然需要，但只用于传递给 v-text-field
-const longSearch = ref('');
-const shortSearch = ref('');
-
 const allAvailableCoins = computed(() => [...new Set(settingsStore.availableCoins)].sort());
 const mapToSelectItems = (coins: string[]) => coins.map(coin => ({ title: coin, value: coin }));
 
-// 核心修正：这些计算属性不再需要手动过滤，只负责互斥
 const availableForLongPool = computed(() => {
   const shortSet = new Set(shortPool.value);
   const available = allAvailableCoins.value.filter(coin => !shortSet.has(coin));
@@ -132,18 +121,6 @@ const availableForShortPool = computed(() => {
   const available = allAvailableCoins.value.filter(coin => !longSet.has(coin));
   return mapToSelectItems(available);
 });
-
-// `v-autocomplete` 现在会根据 search ref 自动过滤 availableFor...Pool
-// 我们需要一个最终的列表给到组件
-const filteredLongPoolItems = computed(() => {
-  if (!longSearch.value) return availableForLongPool.value;
-  return availableForLongPool.value.filter(i => i.title.toLowerCase().includes(longSearch.value.toLowerCase()));
-});
-const filteredShortPoolItems = computed(() => {
-  if (!shortSearch.value) return availableForShortPool.value;
-  return availableForShortPool.value.filter(i => i.title.toLowerCase().includes(shortSearch.value.toLowerCase()));
-});
-
 
 const selectAllCoins = (poolType: 'long' | 'short') => {
   if (poolType === 'long') {
@@ -169,12 +146,18 @@ const savePools = async () => {
 
 watch(
   () => settingsStore.availableLongCoins,
-  (newVal) => { longPool.value = [...newVal]; }, { deep: true }
+  (newVal) => {
+    longPool.value = [...newVal];
+  },
+  { deep: true }
 );
 
 watch(
   () => settingsStore.availableShortCoins,
-  (newVal) => { shortPool.value = [...newVal]; }, { deep: true }
+  (newVal) => {
+    shortPool.value = [...newVal];
+  },
+  { deep: true }
 );
 
 defineExpose({
