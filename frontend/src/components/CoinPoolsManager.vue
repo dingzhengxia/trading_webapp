@@ -1,4 +1,4 @@
-<!-- frontend/src/components/CoinPoolsManager.vue (最终完整代码) -->
+<!-- frontend/src/components/CoinPoolsManager.vue (最终正确版) -->
 <template>
   <div>
     <v-row>
@@ -13,14 +13,29 @@
               <span>全选可用</span>
             </v-tooltip>
           </div>
-          <!-- FINAL FIX: 将 v-autocomplete 替换为 v-select -->
-          <v-select
+
+          <v-autocomplete
             v-model="longPool"
-            :items="availableForLongPool"
+            :items="filteredLongPoolItems"
             label="从总池中选择做多备选币种"
             multiple chips closable-chips clearable variant="outlined" hide-details
             item-title="title" item-value="value" :menu-props="{ maxHeight: '300px' }"
+            hide-no-data
+            hide-selected
           >
+            <template v-slot:prepend-item>
+              <v-text-field
+                v-model="longSearch"
+                placeholder="搜索币种..."
+                variant="underlined"
+                density="compact"
+                hide-details
+                autofocus
+                class="px-4 mb-2"
+              ></v-text-field>
+              <v-divider></v-divider>
+            </template>
+
             <template v-slot:item="{ item, props }">
               <v-list-item v-bind="props" class="pl-0">
                 <template v-slot:prepend>
@@ -28,7 +43,8 @@
                 </template>
               </v-list-item>
             </template>
-          </v-select>
+          </v-autocomplete>
+
         </v-card>
       </v-col>
 
@@ -43,14 +59,29 @@
               <span>全选可用</span>
             </v-tooltip>
           </div>
-          <!-- FINAL FIX: 将 v-autocomplete 替换为 v-select -->
-          <v-select
+
+          <v-autocomplete
             v-model="shortPool"
-            :items="availableForShortPool"
+            :items="filteredShortPoolItems"
             label="从总池中选择做空备选币种"
             multiple chips closable-chips clearable variant="outlined" hide-details
             item-title="title" item-value="value" :menu-props="{ maxHeight: '300px' }"
+            hide-no-data
+            hide-selected
           >
+            <template v-slot:prepend-item>
+              <v-text-field
+                v-model="shortSearch"
+                placeholder="搜索币种..."
+                variant="underlined"
+                density="compact"
+                hide-details
+                autofocus
+                class="px-4 mb-2"
+              ></v-text-field>
+              <v-divider></v-divider>
+            </template>
+
             <template v-slot:item="{ item, props }">
               <v-list-item v-bind="props" class="pl-0">
                 <template v-slot:prepend>
@@ -58,7 +89,8 @@
                 </template>
               </v-list-item>
             </template>
-          </v-select>
+          </v-autocomplete>
+
         </v-card>
       </v-col>
     </v-row>
@@ -77,6 +109,10 @@ const uiStore = useUiStore();
 const longPool = ref([...settingsStore.availableLongCoins]);
 const shortPool = ref([...settingsStore.availableShortCoins]);
 
+// --- 新增：用于搜索框的 ref ---
+const longSearch = ref('');
+const shortSearch = ref('');
+
 const allAvailableCoins = computed(() => [...new Set(settingsStore.availableCoins)].sort());
 const mapToSelectItems = (coins: string[]) => coins.map(coin => ({ title: coin, value: coin }));
 
@@ -91,6 +127,26 @@ const availableForShortPool = computed(() => {
   const available = allAvailableCoins.value.filter(coin => !longSet.has(coin));
   return mapToSelectItems(available);
 });
+
+// --- 新增：根据搜索词过滤列表 ---
+const filteredLongPoolItems = computed(() => {
+  if (!longSearch.value) {
+    return availableForLongPool.value;
+  }
+  return availableForLongPool.value.filter(item =>
+    item.title.toLowerCase().includes(longSearch.value.toLowerCase())
+  );
+});
+
+const filteredShortPoolItems = computed(() => {
+  if (!shortSearch.value) {
+    return availableForShortPool.value;
+  }
+  return availableForShortPool.value.filter(item =>
+    item.title.toLowerCase().includes(shortSearch.value.toLowerCase())
+  );
+});
+
 
 const selectAllCoins = (poolType: 'long' | 'short') => {
   if (poolType === 'long') {
@@ -116,18 +172,12 @@ const savePools = async () => {
 
 watch(
   () => settingsStore.availableLongCoins,
-  (newVal) => {
-    longPool.value = [...newVal];
-  },
-  { deep: true }
+  (newVal) => { longPool.value = [...newVal]; }, { deep: true }
 );
 
 watch(
   () => settingsStore.availableShortCoins,
-  (newVal) => {
-    shortPool.value = [...newVal];
-  },
-  { deep: true }
+  (newVal) => { shortPool.value = [...newVal]; }, { deep: true }
 );
 
 defineExpose({
