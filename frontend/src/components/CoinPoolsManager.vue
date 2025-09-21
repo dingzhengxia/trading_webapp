@@ -1,4 +1,4 @@
-<!-- frontend/src/components/CoinPoolsManager.vue (最终 Vue-Multiselect 版) -->
+<!-- frontend/src/components/CoinPoolsManager.vue (完整代码) -->
 <template>
   <div>
     <v-row>
@@ -17,10 +17,13 @@
           <Multiselect
             v-model="longPool"
             :options="availableForLongPool"
-            mode="tags"
+            :multiple="true"
+            :taggable="true"
+            tag-placeholder="按回车添加新币种"
             placeholder="选择或搜索币种"
-            :searchable="true"
-            :close-on-select="false"
+            label="title"
+            track-by="value"
+            @tag="addTag($event, 'long')"
           />
 
         </v-card>
@@ -41,10 +44,13 @@
           <Multiselect
             v-model="shortPool"
             :options="availableForShortPool"
-            mode="tags"
+            :multiple="true"
+            :taggable="true"
+            tag-placeholder="按回车添加新币种"
             placeholder="选择或搜索币种"
-            :searchable="true"
-            :close-on-select="false"
+            label="title"
+            track-by="value"
+            @tag="addTag($event, 'short')"
           />
 
         </v-card>
@@ -53,33 +59,52 @@
   </div>
 </template>
 
-<!--
-  为了让 vue-multiselect 的样式能融入 Vuetify 暗色主题，
-  我们需要一些全局CSS。我们把它放在这里，并移除 scoped。
--->
 <style>
+/*
+  全局样式，适配 PrimeVue 组件以更好地融入 Vuetify 暗色主题。
+  移除 scoped 以便样式能正确应用到 PrimeVue 的弹出菜单。
+*/
 @import "vue-multiselect/dist/vue-multiselect.css";
 
 :root {
+  /* General */
+  --ms-font-size: 0.875rem;
+  --ms-line-height: 1.25rem;
   --ms-bg: #2E2E2E;
+  --ms-bg-disabled: #424242;
+
+  /* Border */
   --ms-border-color: #4a4a4a;
-  --ms-ring-color: #5897fb;
+  --ms-border-width: 1px;
+  --ms-radius: 4px;
+
+  /* Ring */
+  --ms-ring-width: 3px;
+  --ms-ring-color: #1867C080;
+
+  /* Text */
   --ms-placeholder-color: rgba(255, 255, 255, 0.5);
+  --ms-text-color: rgba(255, 255, 255, 0.8);
+  --ms-text-color-disabled: #9e9e9e;
+
+  /* Dropdown */
+  --ms-dropdown-bg: #363636;
+  --ms-dropdown-border-color: #4a4a4a;
+  --ms-dropdown-border-width: 1px;
+
+  /* Options */
   --ms-option-bg-pointed: #4a4a4a;
   --ms-option-bg-selected: #1867C0;
   --ms-option-bg-selected-pointed: #1E88E5;
+  --ms-option-color-pointed: #FFFFFF;
+  --ms-option-color-selected: #FFFFFF;
+  --ms-group-label-bg-pointed: var(--ms-option-bg-pointed);
+  --ms-group-label-color-pointed: var(--ms-option-color-pointed);
+
+  /* Tags */
   --ms-tag-bg: #1867C0;
   --ms-tag-color: #FFFFFF;
   --ms-tag-radius: 4px;
-  --ms-dropdown-bg: #2E2E2E;
-  --ms-dropdown-border-color: #4a4a4a;
-  --ms-font-size: 0.875rem;
-  --ms-line-height: 1.25rem;
-}
-
-.multiselect-tags-search {
-  background: var(--ms-bg) !important;
-  color: white !important;
 }
 </style>
 
@@ -93,20 +118,28 @@ import Multiselect from 'vue-multiselect';
 const settingsStore = useSettingsStore();
 const uiStore = useUiStore();
 
-const longPool = ref([...settingsStore.availableLongCoins]);
-const shortPool = ref([...settingsStore.availableShortCoins]);
+// vue-multiselect 在 v-model 中需要对象数组
+const longPool = ref<{title: string, value: string}[]>(
+  settingsStore.availableLongCoins.map(c => ({ title: c, value: c }))
+);
+const shortPool = ref<{title: string, value: string}[]>(
+  settingsStore.availableShortCoins.map(c => ({ title: c, value: c }))
+);
 
 const allAvailableCoins = computed(() => [...new Set(settingsStore.availableCoins)].sort());
+const mapToSelectItems = (coins: string[]) => coins.map(coin => ({ title: coin, value: coin }));
 
-// vue-multiselect 需要字符串数组作为 options
+// :options 仍然是对象数组
 const availableForLongPool = computed(() => {
-  const shortSet = new Set(shortPool.value);
-  return allAvailableCoins.value.filter(coin => !shortSet.has(coin));
+  const shortSet = new Set(shortPool.value.map(c => c.value));
+  const available = allAvailableCoins.value.filter(coin => !shortSet.has(coin));
+  return mapToSelectItems(available);
 });
 
 const availableForShortPool = computed(() => {
-  const longSet = new Set(longPool.value);
-  return allAvailableCoins.value.filter(coin => !longSet.has(coin));
+  const longSet = new Set(longPool.value.map(c => c.value));
+  const available = allAvailableCoins.value.filter(coin => !longSet.has(coin));
+  return mapToSelectItems(available);
 });
 
 const selectAllCoins = (poolType: 'long' | 'short') => {
@@ -117,13 +150,26 @@ const selectAllCoins = (poolType: 'long' | 'short') => {
   }
 };
 
+// 新增 addTag 函数，用于处理用户手动输入新标签
+const addTag = (newTag: string, type: 'long' | 'short') => {
+  const tag = { title: newTag.toUpperCase(), value: newTag.toUpperCase() };
+  if (type === 'long') {
+    longPool.value.push(tag);
+  } else {
+    shortPool.value.push(tag);
+  }
+}
+
 const savePools = async () => {
   try {
     await apiClient.post('/api/settings/update-coin-pools', {
-      long_coins_pool: longPool.value,
-      short_coins_pool: shortPool.value
+      long_coins_pool: longPool.value.map(c => c.value), // 保存时只提取 value
+      short_coins_pool: shortPool.value.map(c => c.value),
     });
-    settingsStore.updateAvailablePools(longPool.value, shortPool.value);
+    settingsStore.updateAvailablePools(
+      longPool.value.map(c => c.value),
+      shortPool.value.map(c => c.value)
+    );
     uiStore.logStore.addLog({ message: '币种备选池已成功保存。', level: 'success', timestamp: new Date().toLocaleTimeString() });
   } catch (error: any) {
     const errorMsg = error.response?.data?.detail || error.message;
@@ -133,12 +179,12 @@ const savePools = async () => {
 
 watch(
   () => settingsStore.availableLongCoins,
-  (newVal) => { longPool.value = [...newVal]; }, { deep: true }
+  (newVal) => { longPool.value = newVal.map(c => ({ title: c, value: c })); }, { deep: true }
 );
 
 watch(
   () => settingsStore.availableShortCoins,
-  (newVal) => { shortPool.value = [...newVal]; }, { deep: true }
+  (newVal) => { shortPool.value = newVal.map(c => ({ title: c, value: c })); }, { deep: true }
 );
 
 defineExpose({

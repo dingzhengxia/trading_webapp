@@ -1,4 +1,4 @@
-<!-- frontend/src/components/ControlPanel.vue (最终 Vue-Multiselect 版) -->
+<!-- frontend/src/components/ControlPanel.vue (完整代码) -->
 <template>
   <v-card v-if="settingsStore.settings">
     <v-card-title class="text-h6">交易参数</v-card-title>
@@ -21,12 +21,13 @@
                   <Multiselect
                     v-model="settingsStore.settings.long_coin_list"
                     :options="settingsStore.availableLongCoins"
-                    mode="tags"
+                    :multiple="true"
+                    :taggable="true"
+                    tag-placeholder="按回车添加新币种"
                     placeholder="选择或搜索币种"
-                    :searchable="true"
-                    :close-on-select="false"
                     :disabled="!settingsStore.settings.enable_long_trades"
                     class="mt-2 mb-4"
+                    @tag="addTagToSettings($event, 'long')"
                   />
 
                   <v-btn size="small" @click="uiStore.showWeightDialog = true" :disabled="!settingsStore.settings.enable_long_trades">配置权重</v-btn>
@@ -50,12 +51,13 @@
                   <Multiselect
                     v-model="settingsStore.settings.short_coin_list"
                     :options="settingsStore.availableShortCoins"
-                    mode="tags"
+                    :multiple="true"
+                    :taggable="true"
+                    tag-placeholder="按回车添加新币种"
                     placeholder="选择或搜索币种"
-                    :searchable="true"
-                    :close-on-select="false"
                     :disabled="!settingsStore.settings.enable_short_trades"
                     class="mt-2 mb-4"
+                    @tag="addTagToSettings($event, 'short')"
                   />
 
                   <v-divider class="my-4"></v-divider>
@@ -125,6 +127,19 @@ import Multiselect from 'vue-multiselect';
 const modelValue = defineModel<string>();
 const settingsStore = useSettingsStore();
 const uiStore = useUiStore();
+
+const addTagToSettings = (newTag: string, type: 'long' | 'short') => {
+  const tag = newTag.toUpperCase();
+  if (type === 'long') {
+    if (settingsStore.settings && !settingsStore.settings.long_coin_list.includes(tag)) {
+        settingsStore.settings.long_coin_list.push(tag);
+    }
+  } else {
+    if (settingsStore.settings && !settingsStore.settings.short_coin_list.includes(tag)) {
+        settingsStore.settings.short_coin_list.push(tag);
+    }
+  }
+}
 
 const rebalanceMethods = [
   { value: 'multi_factor_weakest', text: '多因子弱势策略' },
