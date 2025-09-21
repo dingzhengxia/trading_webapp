@@ -14,17 +14,14 @@
             </v-tooltip>
           </div>
 
-          <v-autocomplete
-            ref="longPoolRef"
+          <!-- FINAL FIX: 使用 v-select 结合 v-text-field 实现完美交互 -->
+          <v-select
             v-model="longPool"
             :items="filteredLongPoolItems"
             label="从总池中选择做多备选币种"
             multiple chips closable-chips clearable variant="outlined" hide-details
             item-title="title" item-value="value" :menu-props="{ maxHeight: '300px' }"
-            hide-no-data
             hide-selected
-            readonly
-            @click="activateMenu('longPool')"
           >
             <template v-slot:prepend-item>
               <v-text-field
@@ -33,7 +30,6 @@
                 variant="underlined"
                 density="compact"
                 hide-details
-                autofocus
                 class="px-4 mb-2"
                 @click.stop
               ></v-text-field>
@@ -47,8 +43,7 @@
                 </template>
               </v-list-item>
             </template>
-          </v-autocomplete>
-
+          </v-select>
         </v-card>
       </v-col>
 
@@ -64,17 +59,13 @@
             </v-tooltip>
           </div>
 
-          <v-autocomplete
-            ref="shortPoolRef"
+          <v-select
             v-model="shortPool"
             :items="filteredShortPoolItems"
             label="从总池中选择做空备选币种"
             multiple chips closable-chips clearable variant="outlined" hide-details
             item-title="title" item-value="value" :menu-props="{ maxHeight: '300px' }"
-            hide-no-data
             hide-selected
-            readonly
-            @click="activateMenu('shortPool')"
           >
             <template v-slot:prepend-item>
               <v-text-field
@@ -83,7 +74,6 @@
                 variant="underlined"
                 density="compact"
                 hide-details
-                autofocus
                 class="px-4 mb-2"
                 @click.stop
               ></v-text-field>
@@ -97,7 +87,7 @@
                 </template>
               </v-list-item>
             </template>
-          </v-autocomplete>
+          </v-select>
 
         </v-card>
       </v-col>
@@ -110,16 +100,6 @@ import { ref, computed, watch } from 'vue';
 import { useSettingsStore } from '@/stores/settingsStore';
 import { useUiStore } from '@/stores/uiStore';
 import apiClient from '@/services/api';
-
-const longPoolRef = ref<any>(null);
-const shortPoolRef = ref<any>(null);
-
-const activateMenu = (type: 'longPool' | 'shortPool') => {
-    const refToActivate = type === 'longPool' ? longPoolRef.value : shortPoolRef.value;
-    if (refToActivate && !refToActivate.isMenuActive) {
-        refToActivate.activateMenu();
-    }
-}
 
 const settingsStore = useSettingsStore();
 const uiStore = useUiStore();
