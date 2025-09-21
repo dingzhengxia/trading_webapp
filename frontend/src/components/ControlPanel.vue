@@ -25,6 +25,7 @@
                     chips
                     closable-chips
                     hide-selected
+                    :close-on-content-click="false"
                     :disabled="!settingsStore.settings.enable_long_trades"
                   >
                     <template v-slot:prepend-item>
@@ -66,6 +67,7 @@
                     chips
                     closable-chips
                     hide-selected
+                    :close-on-content-click="false"
                     :disabled="!settingsStore.settings.enable_short_trades"
                   >
                      <template v-slot:prepend-item>

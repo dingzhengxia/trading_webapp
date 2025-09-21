@@ -14,7 +14,6 @@
             </v-tooltip>
           </div>
 
-          <!-- FINAL FIX: 使用 v-select 结合 v-text-field 实现完美交互 -->
           <v-select
             v-model="longPool"
             :items="filteredLongPoolItems"
@@ -22,6 +21,7 @@
             multiple chips closable-chips clearable variant="outlined" hide-details
             item-title="title" item-value="value" :menu-props="{ maxHeight: '300px' }"
             hide-selected
+            :close-on-content-click="false"
           >
             <template v-slot:prepend-item>
               <v-text-field
@@ -66,6 +66,7 @@
             multiple chips closable-chips clearable variant="outlined" hide-details
             item-title="title" item-value="value" :menu-props="{ maxHeight: '300px' }"
             hide-selected
+            :close-on-content-click="false"
           >
             <template v-slot:prepend-item>
               <v-text-field
