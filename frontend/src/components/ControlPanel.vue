@@ -1,4 +1,4 @@
-<!-- frontend/src/components/ControlPanel.vue (完整代码) -->
+<!-- frontend/src/components/ControlPanel.vue (最终完整代码) -->
 <template>
   <v-card v-if="settingsStore.settings">
     <v-card-title class="text-h6">交易参数</v-card-title>
@@ -25,6 +25,7 @@
                     chips
                     closable-chips
                     :disabled="!settingsStore.settings.enable_long_trades"
+                    readonly
                   ></v-autocomplete>
 
                   <v-btn size="small" @click="uiStore.showWeightDialog = true" :disabled="!settingsStore.settings.enable_long_trades">配置权重</v-btn>
@@ -52,6 +53,7 @@
                     chips
                     closable-chips
                     :disabled="!settingsStore.settings.enable_short_trades"
+                    readonly
                   ></v-autocomplete>
 
                   <v-divider class="my-4"></v-divider>
@@ -73,7 +75,6 @@
               <v-select v-model="settingsStore.settings.rebalance_method" :items="rebalanceMethods" item-title="text" item-value="value" label="筛选策略" variant="outlined" density="compact"></v-select>
               <v-text-field v-model.number="settingsStore.settings.rebalance_top_n" label="目标币种数量 (Top N)" type="number" variant="outlined" density="compact"></v-text-field>
               <v-text-field v-model.number="settingsStore.settings.rebalance_min_volume_usd" label="最小24h交易额 (USD)" type="number" variant="outlined" density="compact"></v-text-field>
-              <!-- --- 新增UI控件 --- -->
               <v-text-field
                 v-model.number="settingsStore.settings.rebalance_volume_ma_days"
                 label="成交量均线天数 (MA)"
@@ -92,7 +93,6 @@
               <div v-if="settingsStore.settings.rebalance_method === 'foam'">
                 <v-text-field v-model.number="settingsStore.settings.rebalance_foam_days" label="FOAM动量天数" type="number" variant="outlined" density="compact"></v-text-field>
               </div>
-              <!-- --- 新增UI控件 --- -->
               <v-text-field
                 v-model.number="settingsStore.settings.rebalance_volume_spike_ratio"
                 label="成交量放大过滤倍数"
