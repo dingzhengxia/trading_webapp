@@ -11,11 +11,6 @@ import * as components from 'vuetify/components'
 import * as directives from 'vuetify/directives'
 import '@mdi/font/css/materialdesignicons.css'
 
-// --- 新增：PrimeVue ---
-import PrimeVue from 'primevue/config';
-// 引入一个与 Vuetify 暗色主题比较接近的 PrimeVue 主题
-import 'primevue/resources/themes/aura-dark-noir/theme.css';
-
 const vuetify = createVuetify({
   components,
   directives,
@@ -28,5 +23,5 @@ const app = createApp(App)
 app.use(createPinia())
 app.use(router)
 app.use(vuetify)
-app.use(PrimeVue); // <-- 注册 PrimeVue
+// app.use(PrimeVue); // <-- 移除
 app.mount('#app')
