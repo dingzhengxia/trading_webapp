@@ -8,15 +8,13 @@
   >
     {{ snackbarStore.message }}
     <template v-slot:actions>
-      <v-btn variant="text" @click="snackbarStore.hide()">
-        关闭
-      </v-btn>
+      <v-btn variant="text" @click="snackbarStore.hide()"> 关闭 </v-btn>
     </template>
   </v-snackbar>
 </template>
 
 <script setup lang="ts">
-import { useSnackbarStore } from '@/stores/snackbar';
+import { useSnackbarStore } from '@/stores/snackbar'
 
-const snackbarStore = useSnackbarStore();
+const snackbarStore = useSnackbarStore()
 </script>

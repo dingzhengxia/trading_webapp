@@ -1,12 +1,7 @@
 <!-- 文件路径: frontend/src/components/LogDrawer.vue (已适配 v-model) -->
 <template>
   <!-- v-model="show" 会自动处理抽屉的打开和关闭 -->
-  <v-navigation-drawer
-    v-model="show"
-    location="right"
-    width="400"
-    class="log-drawer"
-  >
+  <v-navigation-drawer v-model="show" location="right" width="400" class="log-drawer">
     <v-toolbar density="compact">
       <v-toolbar-title class="text-subtitle-1">执行日志</v-toolbar-title>
       <v-spacer></v-spacer>
@@ -29,27 +24,32 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue';
-import { useLogStore } from '@/stores/logStore';
-import type { LogEntry } from '@/models/types'; // <-- 修正为 LogEntry
+import { computed } from 'vue'
+import { useLogStore } from '@/stores/logStore'
+import type { LogEntry } from '@/models/types' // <-- 修正为 LogEntry
 
 // --- 核心修改在这里 ---
 // 使用 defineModel 来创建一个双向绑定的 v-model
-const show = defineModel<boolean>();
+const show = defineModel<boolean>()
 // -----------------------
 
-const logStore = useLogStore();
+const logStore = useLogStore()
 
 // 样式函数保持不变
 const logLevelColor = (level: string) => {
   switch (level) {
-    case 'success': return 'text-success';
-    case 'error': return 'text-error';
-    case 'warning': return 'text-orange';
-    case 'info': return 'text-info';
-    default: return '';
+    case 'success':
+      return 'text-success'
+    case 'error':
+      return 'text-error'
+    case 'warning':
+      return 'text-orange'
+    case 'info':
+      return 'text-info'
+    default:
+      return ''
   }
-};
+}
 </script>
 
 <style scoped>

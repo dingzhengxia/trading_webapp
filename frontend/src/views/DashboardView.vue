@@ -37,14 +37,14 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted } from 'vue';
-import { usePositionStore } from '@/stores/positionStore';
-import PositionsTable from '@/components/PositionsTable.vue';
-import PnlSummary from '@/components/PnlSummary.vue';
+import { onMounted } from 'vue'
+import { usePositionStore } from '@/stores/positionStore'
+import PositionsTable from '@/components/PositionsTable.vue'
+import PnlSummary from '@/components/PnlSummary.vue'
 
-const positionStore = usePositionStore();
+const positionStore = usePositionStore()
 
 onMounted(() => {
-  positionStore.fetchPositions();
-});
+  positionStore.fetchPositions()
+})
 </script>

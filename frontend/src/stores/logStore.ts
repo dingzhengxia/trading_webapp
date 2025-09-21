@@ -1,5 +1,5 @@
-import { defineStore } from 'pinia';
-import type { LogEntry } from '@/models/types';
+import { defineStore } from 'pinia'
+import type { LogEntry } from '@/models/types'
 
 export const useLogStore = defineStore('log', {
   state: () => ({
@@ -7,10 +7,10 @@ export const useLogStore = defineStore('log', {
   }),
   actions: {
     addLog(log: LogEntry) {
-      this.logs.unshift(log);
+      this.logs.unshift(log)
     },
     clearLogs() {
-      this.logs = [];
+      this.logs = []
     },
   },
-});
+})

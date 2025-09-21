@@ -7,8 +7,17 @@
         <!-- 多头总盈亏 -->
         <v-col>
           <div class="text-caption">多头总盈亏</div>
-          <div class="text-h6 font-weight-bold" :class="pnlStore.longPnl >= 0 ? 'text-success' : 'text-error'">
-            {{ pnlStore.longPnl >= 0 ? '+' : '' }}{{ pnlStore.longPnl.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) }}
+          <div
+            class="text-h6 font-weight-bold"
+            :class="pnlStore.longPnl >= 0 ? 'text-success' : 'text-error'"
+          >
+            {{ pnlStore.longPnl >= 0 ? '+' : ''
+            }}{{
+              pnlStore.longPnl.toLocaleString('en-US', {
+                minimumFractionDigits: 2,
+                maximumFractionDigits: 2,
+              })
+            }}
           </div>
         </v-col>
 
@@ -17,8 +26,16 @@
         <!-- 空头总盈亏 -->
         <v-col>
           <div class="text-caption">空头总盈亏</div>
-          <div class="text-h6 font-weight-bold" :class="pnlStore.shortPnl >= 0 ? 'text-success' : 'text-error'">
-             {{ pnlStore.shortPnl.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) }}
+          <div
+            class="text-h6 font-weight-bold"
+            :class="pnlStore.shortPnl >= 0 ? 'text-success' : 'text-error'"
+          >
+            {{
+              pnlStore.shortPnl.toLocaleString('en-US', {
+                minimumFractionDigits: 2,
+                maximumFractionDigits: 2,
+              })
+            }}
           </div>
         </v-col>
 
@@ -27,8 +44,17 @@
         <!-- 净总盈亏 -->
         <v-col>
           <div class="text-caption">净总盈亏</div>
-          <div class="text-h6 font-weight-bold" :class="pnlStore.totalPnl >= 0 ? 'text-success' : 'text-error'">
-             {{ pnlStore.totalPnl >= 0 ? '+' : '' }}{{ pnlStore.totalPnl.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) }}
+          <div
+            class="text-h6 font-weight-bold"
+            :class="pnlStore.totalPnl >= 0 ? 'text-success' : 'text-error'"
+          >
+            {{ pnlStore.totalPnl >= 0 ? '+' : ''
+            }}{{
+              pnlStore.totalPnl.toLocaleString('en-US', {
+                minimumFractionDigits: 2,
+                maximumFractionDigits: 2,
+              })
+            }}
           </div>
         </v-col>
       </v-row>
@@ -37,7 +63,7 @@
 </template>
 
 <script setup lang="ts">
-import { usePositionStore } from '@/stores/positionStore';
+import { usePositionStore } from '@/stores/positionStore'
 
-const pnlStore = usePositionStore();
+const pnlStore = usePositionStore()
 </script>

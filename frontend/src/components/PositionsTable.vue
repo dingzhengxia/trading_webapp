@@ -5,12 +5,29 @@
     <v-toolbar density="compact" flat>
       <v-toolbar-title class="text-h6">{{ title }}</v-toolbar-title>
       <v-spacer></v-spacer>
-      <v-chip :color="side === 'long' ? 'success' : 'error'" label variant="flat" size="small" class="mr-2">
+      <v-chip
+        :color="side === 'long' ? 'success' : 'error'"
+        label
+        variant="flat"
+        size="small"
+        class="mr-2"
+      >
         <span class="font-weight-bold">
-          总价值: ${{ totalNotional.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) }}
+          总价值: ${{
+            totalNotional.toLocaleString('en-US', {
+              minimumFractionDigits: 2,
+              maximumFractionDigits: 2,
+            })
+          }}
         </span>
       </v-chip>
-      <v-btn icon="mdi-refresh" variant="text" size="small" @click="emit('refresh')" :loading="loading"></v-btn>
+      <v-btn
+        icon="mdi-refresh"
+        variant="text"
+        size="small"
+        @click="emit('refresh')"
+        :loading="loading"
+      ></v-btn>
     </v-toolbar>
 
     <!-- 第二行操作栏 -->
@@ -53,7 +70,9 @@
     >
       <template v-slot:item.notional="{ item }">${{ item.notional.toFixed(2) }}</template>
       <template v-slot:item.pnl="{ item }">
-        <span :class="item.pnl >= 0 ? 'text-success' : 'text-error'">{{ item.pnl.toFixed(2) }}</span>
+        <span :class="item.pnl >= 0 ? 'text-success' : 'text-error'">{{
+          item.pnl.toFixed(2)
+        }}</span>
       </template>
       <template v-slot:item.pnl_percentage="{ item }">
         <span :class="item.pnl_percentage >= 0 ? 'text-success' : 'text-error'">
@@ -61,7 +80,12 @@
         </span>
       </template>
       <template v-slot:item.actions="{ item }">
-        <v-btn color="error" variant="text" size="x-small" @click="uiStore.openCloseDialog({ type: 'single', position: item })">
+        <v-btn
+          color="error"
+          variant="text"
+          size="x-small"
+          @click="uiStore.openCloseDialog({ type: 'single', position: item })"
+        >
           平仓
         </v-btn>
       </template>
@@ -70,53 +94,53 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue';
-import type { Position } from '@/models/types';
-import { useUiStore } from '@/stores/uiStore';
-import { usePositionStore } from '@/stores/positionStore';
+import { computed } from 'vue'
+import type { Position } from '@/models/types'
+import { useUiStore } from '@/stores/uiStore'
+import { usePositionStore } from '@/stores/positionStore'
 
 type TDataTableHeader = {
-  key: string;
-  value?: any;
-  title: string;
-  align?: 'start' | 'center' | 'end';
-  sortable?: boolean;
-  width?: string | number;
-  [key: string]: any;
-};
+  key: string
+  value?: any
+  title: string
+  align?: 'start' | 'center' | 'end'
+  sortable?: boolean
+  width?: string | number
+  [key: string]: any
+}
 
 const props = defineProps<{
-  title: string;
-  side: 'long' | 'short';
-  positions: Position[];
-  loading: boolean;
-}>();
+  title: string
+  side: 'long' | 'short'
+  positions: Position[]
+  loading: boolean
+}>()
 
-const emit = defineEmits(['refresh']);
-const uiStore = useUiStore();
-const positionStore = usePositionStore();
+const emit = defineEmits(['refresh'])
+const uiStore = useUiStore()
+const positionStore = usePositionStore()
 
 const totalNotional = computed(() => {
-  return props.positions.reduce((sum, position) => sum + position.notional, 0);
-});
+  return props.positions.reduce((sum, position) => sum + position.notional, 0)
+})
 
 const selectedInThisTable = computed(() => {
-  const currentTableSymbols = new Set(props.positions.map(p => p.full_symbol));
+  const currentTableSymbols = new Set(props.positions.map((p) => p.full_symbol))
   return positionStore.selectedPositions
-    .filter(fullSymbol => currentTableSymbols.has(fullSymbol))
-    .map(fullSymbol => props.positions.find(p => p.full_symbol === fullSymbol)!)
-    .filter(p => p);
-});
+    .filter((fullSymbol) => currentTableSymbols.has(fullSymbol))
+    .map((fullSymbol) => props.positions.find((p) => p.full_symbol === fullSymbol)!)
+    .filter((p) => p)
+})
 
 const handleCloseAll = () => {
-  uiStore.openCloseDialog({ type: 'by_side', side: props.side });
-};
+  uiStore.openCloseDialog({ type: 'by_side', side: props.side })
+}
 
 const handleCloseSelected = () => {
   if (selectedInThisTable.value.length > 0) {
-    uiStore.openCloseDialog({ type: 'selected', positions: selectedInThisTable.value });
+    uiStore.openCloseDialog({ type: 'selected', positions: selectedInThisTable.value })
   }
-};
+}
 
 const headers: TDataTableHeader[] = [
   { title: '合约', key: 'full_symbol', sortable: true, width: '20%' },
@@ -125,7 +149,7 @@ const headers: TDataTableHeader[] = [
   { title: '回报率', key: 'pnl_percentage', sortable: true, width: '15%' },
   { title: '开仓均价', key: 'entry_price', width: '15%' },
   { title: '操作', key: 'actions', sortable: false, align: 'end', width: '5%' },
-];
+]
 </script>
 
 <!-- FINAL, CORRECT FIX: 使用更强力的CSS规则 -->

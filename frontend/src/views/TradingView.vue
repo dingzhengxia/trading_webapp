@@ -4,16 +4,20 @@
     <v-container fluid>
       <v-row>
         <v-col cols="12">
-          <ControlPanel
-            v-model="activeTab"
-          />
+          <ControlPanel v-model="activeTab" />
         </v-col>
       </v-row>
     </v-container>
   </div>
 
   <v-footer
-    style="position: fixed; bottom: 0; right: 0; z-index: 1000; border-top: 1px solid rgba(255, 255, 255, 0.12);"
+    style="
+      position: fixed;
+      bottom: 0;
+      right: 0;
+      z-index: 1000;
+      border-top: 1px solid rgba(255, 255, 255, 0.12);
+    "
     class="pa-0"
     :style="footerStyle"
   >
@@ -21,7 +25,13 @@
       <v-spacer></v-spacer>
 
       <template v-if="activeTab === 'general'">
-        <v-btn color="info" variant="tonal" @click="handleSyncSlTp" :disabled="uiStore.isRunning" class="mr-3">
+        <v-btn
+          color="info"
+          variant="tonal"
+          @click="handleSyncSlTp"
+          :disabled="uiStore.isRunning"
+          class="mr-3"
+        >
           校准 SL/TP
         </v-btn>
         <v-btn
@@ -52,65 +62,74 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue';
-import { useDisplay } from 'vuetify';
-import { useUiStore } from '@/stores/uiStore';
-import { usePositionStore } from '@/stores/positionStore';
-import { useSettingsStore } from '@/stores/settingsStore';
-import ControlPanel from '@/components/ControlPanel.vue';
-import apiClient from '@/services/api';
-import type { RebalanceCriteria } from '@/models/types';
+import { ref, onMounted, computed } from 'vue'
+import { useDisplay } from 'vuetify'
+import { useUiStore } from '@/stores/uiStore'
+import { usePositionStore } from '@/stores/positionStore'
+import { useSettingsStore } from '@/stores/settingsStore'
+import ControlPanel from '@/components/ControlPanel.vue'
+import apiClient from '@/services/api'
+import type { RebalanceCriteria } from '@/models/types'
 
-const uiStore = useUiStore();
-const positionStore = usePositionStore();
-const settingsStore = useSettingsStore();
-const vuetifyDisplay = useDisplay();
+const uiStore = useUiStore()
+const positionStore = usePositionStore()
+const settingsStore = useSettingsStore()
+const vuetifyDisplay = useDisplay()
 
-const activeTab = ref('general');
-const isGeneratingPlan = ref(false);
+const activeTab = ref('general')
+const isGeneratingPlan = ref(false)
 
 const footerStyle = computed(() => {
-  const styles: { bottom: string, left: string } = {
+  const styles: { bottom: string; left: string } = {
     bottom: vuetifyDisplay.smAndDown.value ? '56px' : '0px',
-    left: '0px'
-  };
-  if (vuetifyDisplay.mdAndUp.value && vuetifyDisplay.application) {
-    styles.left = `${vuetifyDisplay.application.left}px`;
+    left: '0px',
   }
-  return styles;
-});
+  if (vuetifyDisplay.mdAndUp.value && vuetifyDisplay.application) {
+    styles.left = `${vuetifyDisplay.application.left}px`
+  }
+  return styles
+})
 
 const handleStartTrading = () => {
   if (settingsStore.settings) {
-    const plan = settingsStore.settings;
-    const total = (plan.enable_long_trades ? plan.long_coin_list.length : 0) +
-                  (plan.enable_short_trades ? plan.short_coin_list.length : 0);
-    uiStore.launchTask('/api/trading/start', plan, '自动开仓', total);
+    const plan = settingsStore.settings
+    const total =
+      (plan.enable_long_trades ? plan.long_coin_list.length : 0) +
+      (plan.enable_short_trades ? plan.short_coin_list.length : 0)
+    uiStore.launchTask('/api/trading/start', plan, '自动开仓', total)
   }
-};
+}
 
 const handleSyncSlTp = () => {
   if (settingsStore.settings) {
     const {
-      enable_long_sl_tp, long_stop_loss_percentage, long_take_profit_percentage,
-      enable_short_sl_tp, short_stop_loss_percentage, short_take_profit_percentage,
-      leverage
-    } = settingsStore.settings;
+      enable_long_sl_tp,
+      long_stop_loss_percentage,
+      long_take_profit_percentage,
+      enable_short_sl_tp,
+      short_stop_loss_percentage,
+      short_take_profit_percentage,
+      leverage,
+    } = settingsStore.settings
 
     const payload = {
-      enable_long_sl_tp, long_stop_loss_percentage, long_take_profit_percentage,
-      enable_short_sl_tp, short_stop_loss_percentage, short_take_profit_percentage,
-      leverage
-    };
+      enable_long_sl_tp,
+      long_stop_loss_percentage,
+      long_take_profit_percentage,
+      enable_short_sl_tp,
+      short_stop_loss_percentage,
+      short_take_profit_percentage,
+      leverage,
+    }
 
     uiStore.launchTask(
       '/api/trading/sync-sltp',
       payload,
       '同步SL/TP',
-      positionStore.positions.length
-    );
+      positionStore.positions.length,
+    )
   }
-};
+}
 
 const onGenerateRebalancePlan = () => {
   if (settingsStore.settings) {
@@ -125,37 +144,49 @@ const onGenerateRebalancePlan = () => {
       // 将新添加的成交量过滤参数也加入请求体
       rebalance_volume_ma_days: settingsStore.settings.rebalance_volume_ma_days,
       rebalance_volume_spike_ratio: settingsStore.settings.rebalance_volume_spike_ratio,
-    };
-    handleGenerateRebalancePlan(criteria);
+    }
+    handleGenerateRebalancePlan(criteria)
   }
-};
+}
 
 const handleGenerateRebalancePlan = async (criteria: RebalanceCriteria) => {
-  if (uiStore.isRunning || isGeneratingPlan.value) return;
-  isGeneratingPlan.value = true;
-  uiStore.logStore.addLog({ message: '[前端] 正在生成再平衡计划...', level: 'info', timestamp: new Date().toLocaleTimeString() });
+  if (uiStore.isRunning || isGeneratingPlan.value) return
+  isGeneratingPlan.value = true
+  uiStore.logStore.addLog({
+    message: '[前端] 正在生成再平衡计划...',
+    level: 'info',
+    timestamp: new Date().toLocaleTimeString(),
+  })
   try {
-    const response = await apiClient.post('/api/rebalance/plan', criteria);
-    const planData = response.data;
+    const response = await apiClient.post('/api/rebalance/plan', criteria)
+    const planData = response.data
     if (planData.error) {
-      uiStore.logStore.addLog({ message: `计划生成逻辑错误: ${planData.error}`, level: 'error', timestamp: new Date().toLocaleTimeString() });
+      uiStore.logStore.addLog({
+        message: `计划生成逻辑错误: ${planData.error}`,
+        level: 'error',
+        timestamp: new Date().toLocaleTimeString(),
+      })
     } else {
-      uiStore.rebalancePlan = planData;
-      uiStore.showRebalanceDialog = true;
+      uiStore.rebalancePlan = planData
+      uiStore.showRebalanceDialog = true
     }
   } catch (error: any) {
-     const errorMsg = error.response?.data?.detail || error.message;
-    uiStore.logStore.addLog({ message: `[后端] ❌ 生成计划请求失败: ${errorMsg}`, level: 'error', timestamp: new Date().toLocaleTimeString() });
+    const errorMsg = error.response?.data?.detail || error.message
+    uiStore.logStore.addLog({
+      message: `[后端] ❌ 生成计划请求失败: ${errorMsg}`,
+      level: 'error',
+      timestamp: new Date().toLocaleTimeString(),
+    })
   } finally {
-    isGeneratingPlan.value = false;
+    isGeneratingPlan.value = false
   }
-};
+}
 
 onMounted(() => {
   if (positionStore.positions.length === 0) {
-    positionStore.fetchPositions();
+    positionStore.fetchPositions()
   }
-});
+})
 </script>
 
 <style scoped>

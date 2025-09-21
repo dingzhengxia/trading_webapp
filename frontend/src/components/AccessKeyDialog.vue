@@ -29,23 +29,23 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue';
-import { useAuthStore } from '@/stores/authStore';
+import { ref, computed } from 'vue'
+import { useAuthStore } from '@/stores/authStore'
 
-const authStore = useAuthStore();
-const inputKey = ref('');
-const error = ref('');
+const authStore = useAuthStore()
+const inputKey = ref('')
+const error = ref('')
 
 // 对话框的显示状态，直接取决于 store 中是否有有效的 key
-const dialog = computed(() => !authStore.isAuthenticated);
+const dialog = computed(() => !authStore.isAuthenticated)
 
 const saveKey = () => {
   if (!inputKey.value.trim()) {
-    error.value = '密钥不能为空';
-    return;
+    error.value = '密钥不能为空'
+    return
   }
-  error.value = '';
+  error.value = ''
   // 调用 store action 来设置密钥并持久化
-  authStore.setAccessKey(inputKey.value);
-};
+  authStore.setAccessKey(inputKey.value)
+}
 </script>
