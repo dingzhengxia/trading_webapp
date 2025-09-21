@@ -14,16 +14,28 @@
             </v-tooltip>
           </div>
 
-          <v-autocomplete
-            ref="longPoolRef"
+          <!-- FINAL FIX: 使用 v-select 结合 v-text-field 实现完美交互 -->
+          <v-select
             v-model="longPool"
-            :items="availableForLongPool"
-            label="从总池中选择或搜索做多备选币种"
+            :items="filteredLongPoolItems"
+            label="从总池中选择做多备选币种"
             multiple chips closable-chips clearable variant="outlined" hide-details
             item-title="title" item-value="value" :menu-props="{ maxHeight: '300px' }"
-            :readonly="$vuetify.display.smAndDown"
-            @click="activateMenu('longPool')"
+            hide-selected
           >
+            <template v-slot:prepend-item>
+              <v-text-field
+                v-model="longSearch"
+                placeholder="搜索币种..."
+                variant="underlined"
+                density="compact"
+                hide-details
+                class="px-4 mb-2"
+                @click.stop
+              ></v-text-field>
+              <v-divider></v-divider>
+            </template>
+
             <template v-slot:item="{ item, props }">
               <v-list-item v-bind="props" class="pl-0">
                 <template v-slot:prepend>
@@ -31,7 +43,7 @@
                 </template>
               </v-list-item>
             </template>
-          </v-autocomplete>
+          </v-select>
         </v-card>
       </v-col>
 
@@ -47,16 +59,27 @@
             </v-tooltip>
           </div>
 
-          <v-autocomplete
-            ref="shortPoolRef"
+          <v-select
             v-model="shortPool"
-            :items="availableForShortPool"
-            label="从总池中选择或搜索做空备选币种"
+            :items="filteredShortPoolItems"
+            label="从总池中选择做空备选币种"
             multiple chips closable-chips clearable variant="outlined" hide-details
             item-title="title" item-value="value" :menu-props="{ maxHeight: '300px' }"
-            :readonly="$vuetify.display.smAndDown"
-            @click="activateMenu('shortPool')"
+            hide-selected
           >
+            <template v-slot:prepend-item>
+              <v-text-field
+                v-model="shortSearch"
+                placeholder="搜索币种..."
+                variant="underlined"
+                density="compact"
+                hide-details
+                class="px-4 mb-2"
+                @click.stop
+              ></v-text-field>
+              <v-divider></v-divider>
+            </template>
+
             <template v-slot:item="{ item, props }">
               <v-list-item v-bind="props" class="pl-0">
                 <template v-slot:prepend>
@@ -64,7 +87,8 @@
                 </template>
               </v-list-item>
             </template>
-          </v-autocomplete>
+          </v-select>
+
         </v-card>
       </v-col>
     </v-row>
@@ -76,27 +100,15 @@ import { ref, computed, watch } from 'vue';
 import { useSettingsStore } from '@/stores/settingsStore';
 import { useUiStore } from '@/stores/uiStore';
 import apiClient from '@/services/api';
-import { useDisplay } from 'vuetify';
-
-const vuetifyDisplay = useDisplay();
-const longPoolRef = ref<any>(null);
-const shortPoolRef = ref<any>(null);
-
-const activateMenu = (type: 'longPool' | 'shortPool') => {
-  // 只在移动端 readonly 状态下，才需要手动激活
-  if (vuetifyDisplay.smAndDown.value) {
-    const refToActivate = type === 'longPool' ? longPoolRef.value : shortPoolRef.value;
-    if (refToActivate && !refToActivate.isMenuActive) {
-        refToActivate.activateMenu();
-    }
-  }
-}
 
 const settingsStore = useSettingsStore();
 const uiStore = useUiStore();
 
 const longPool = ref([...settingsStore.availableLongCoins]);
 const shortPool = ref([...settingsStore.availableShortCoins]);
+
+const longSearch = ref('');
+const shortSearch = ref('');
 
 const allAvailableCoins = computed(() => [...new Set(settingsStore.availableCoins)].sort());
 const mapToSelectItems = (coins: string[]) => coins.map(coin => ({ title: coin, value: coin }));
@@ -111,6 +123,24 @@ const availableForShortPool = computed(() => {
   const longSet = new Set(longPool.value);
   const available = allAvailableCoins.value.filter(coin => !longSet.has(coin));
   return mapToSelectItems(available);
+});
+
+const filteredLongPoolItems = computed(() => {
+  if (!longSearch.value) {
+    return availableForLongPool.value;
+  }
+  return availableForLongPool.value.filter(item =>
+    item.title.toLowerCase().includes(longSearch.value.toLowerCase())
+  );
+});
+
+const filteredShortPoolItems = computed(() => {
+  if (!shortSearch.value) {
+    return availableForShortPool.value;
+  }
+  return availableForShortPool.value.filter(item =>
+    item.title.toLowerCase().includes(shortSearch.value.toLowerCase())
+  );
 });
 
 const selectAllCoins = (poolType: 'long' | 'short') => {

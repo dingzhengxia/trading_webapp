@@ -17,18 +17,29 @@
                   <v-switch v-model="settingsStore.settings.enable_long_trades" label="开启多头交易" color="success" inset></v-switch>
                   <v-text-field v-model.number="settingsStore.settings.total_long_position_value" label="多头总价值 (USD)" type="number" :disabled="!settingsStore.settings.enable_long_trades"></v-text-field>
 
-                  <v-autocomplete
-                    ref="longListRef"
+                  <v-select
                     v-model="settingsStore.settings.long_coin_list"
-                    :items="settingsStore.availableLongCoins"
-                    label="从备选池中选择或搜索做多币种"
+                    :items="filteredLongListItems"
+                    label="从备选池中选择做多币种"
                     multiple
                     chips
                     closable-chips
+                    hide-selected
                     :disabled="!settingsStore.settings.enable_long_trades"
-                    :readonly="$vuetify.display.smAndDown"
-                    @click="activateMenu('longList')"
-                  ></v-autocomplete>
+                  >
+                    <template v-slot:prepend-item>
+                      <v-text-field
+                        v-model="longListSearch"
+                        placeholder="搜索币种..."
+                        variant="underlined"
+                        density="compact"
+                        hide-details
+                        class="px-4 mb-2"
+                        @click.stop
+                      ></v-text-field>
+                      <v-divider></v-divider>
+                    </template>
+                  </v-select>
 
                   <v-btn size="small" @click="uiStore.showWeightDialog = true" :disabled="!settingsStore.settings.enable_long_trades">配置权重</v-btn>
                   <v-divider class="my-4"></v-divider>
@@ -47,18 +58,29 @@
                   <v-switch v-model="settingsStore.settings.enable_short_trades" label="开启空头交易" color="error" inset></v-switch>
                   <v-text-field v-model.number="settingsStore.settings.total_short_position_value" label="空头总价值 (USD)" type="number" :disabled="!settingsStore.settings.enable_short_trades"></v-text-field>
 
-                  <v-autocomplete
-                    ref="shortListRef"
+                  <v-select
                     v-model="settingsStore.settings.short_coin_list"
-                    :items="settingsStore.availableShortCoins"
-                    label="从备选池中选择或搜索空头币种"
+                    :items="filteredShortListItems"
+                    label="从备选池中选择空头币种"
                     multiple
                     chips
                     closable-chips
+                    hide-selected
                     :disabled="!settingsStore.settings.enable_short_trades"
-                    :readonly="$vuetify.display.smAndDown"
-                    @click="activateMenu('shortList')"
-                  ></v-autocomplete>
+                  >
+                     <template v-slot:prepend-item>
+                      <v-text-field
+                        v-model="shortListSearch"
+                        placeholder="搜索币种..."
+                        variant="underlined"
+                        density="compact"
+                        hide-details
+                        class="px-4 mb-2"
+                        @click.stop
+                      ></v-text-field>
+                      <v-divider></v-divider>
+                    </template>
+                  </v-select>
 
                   <v-divider class="my-4"></v-divider>
                    <v-switch v-model="settingsStore.settings.enable_short_sl_tp" label="开启空头 SL/TP" color="info" inset :disabled="!settingsStore.settings.enable_short_trades"></v-switch>
@@ -118,28 +140,28 @@
 
 <script setup lang="ts">
 import { ref, watch, computed } from 'vue';
-import { useDisplay } from 'vuetify';
 import { useSettingsStore } from '@/stores/settingsStore';
 import { useUiStore } from '@/stores/uiStore';
 import WeightConfigDialog from './WeightConfigDialog.vue';
 import { debounce } from 'lodash-es';
 
-const vuetifyDisplay = useDisplay();
-const longListRef = ref<any>(null);
-const shortListRef = ref<any>(null);
-
-const activateMenu = (type: 'longList' | 'shortList') => {
-  if (vuetifyDisplay.smAndDown.value) {
-    const refToActivate = type === 'longList' ? longListRef.value : shortListRef.value;
-    if (refToActivate && !refToActivate.isMenuActive) {
-      refToActivate.activateMenu();
-    }
-  }
-}
-
 const modelValue = defineModel<string>();
+
 const settingsStore = useSettingsStore();
 const uiStore = useUiStore();
+
+const longListSearch = ref('');
+const shortListSearch = ref('');
+
+const filteredLongListItems = computed(() => {
+    if (!longListSearch.value) return settingsStore.availableLongCoins;
+    return settingsStore.availableLongCoins.filter(c => c.toLowerCase().includes(longListSearch.value.toLowerCase()));
+});
+
+const filteredShortListItems = computed(() => {
+    if (!shortListSearch.value) return settingsStore.availableShortCoins;
+    return settingsStore.availableShortCoins.filter(c => c.toLowerCase().includes(shortListSearch.value.toLowerCase()));
+});
 
 const rebalanceMethods = [
   { value: 'multi_factor_weakest', text: '多因子弱势策略' },
