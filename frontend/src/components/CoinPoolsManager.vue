@@ -13,13 +13,13 @@
               <span>全选可用</span>
             </v-tooltip>
           </div>
-          <v-autocomplete
+          <!-- FINAL FIX: 将 v-autocomplete 替换为 v-select -->
+          <v-select
             v-model="longPool"
             :items="availableForLongPool"
             label="从总池中选择做多备选币种"
             multiple chips closable-chips clearable variant="outlined" hide-details
             item-title="title" item-value="value" :menu-props="{ maxHeight: '300px' }"
-            readonly
           >
             <template v-slot:item="{ item, props }">
               <v-list-item v-bind="props" class="pl-0">
@@ -28,7 +28,7 @@
                 </template>
               </v-list-item>
             </template>
-          </v-autocomplete>
+          </v-select>
         </v-card>
       </v-col>
 
@@ -43,13 +43,13 @@
               <span>全选可用</span>
             </v-tooltip>
           </div>
-          <v-autocomplete
+          <!-- FINAL FIX: 将 v-autocomplete 替换为 v-select -->
+          <v-select
             v-model="shortPool"
             :items="availableForShortPool"
             label="从总池中选择做空备选币种"
             multiple chips closable-chips clearable variant="outlined" hide-details
             item-title="title" item-value="value" :menu-props="{ maxHeight: '300px' }"
-            readonly
           >
             <template v-slot:item="{ item, props }">
               <v-list-item v-bind="props" class="pl-0">
@@ -58,7 +58,7 @@
                 </template>
               </v-list-item>
             </template>
-          </v-autocomplete>
+          </v-select>
         </v-card>
       </v-col>
     </v-row>

@@ -17,7 +17,7 @@
                   <v-switch v-model="settingsStore.settings.enable_long_trades" label="开启多头交易" color="success" inset></v-switch>
                   <v-text-field v-model.number="settingsStore.settings.total_long_position_value" label="多头总价值 (USD)" type="number" :disabled="!settingsStore.settings.enable_long_trades"></v-text-field>
 
-                  <v-autocomplete
+                  <v-select
                     v-model="settingsStore.settings.long_coin_list"
                     :items="settingsStore.availableLongCoins"
                     label="从备选池中选择做多币种"
@@ -25,8 +25,7 @@
                     chips
                     closable-chips
                     :disabled="!settingsStore.settings.enable_long_trades"
-                    readonly
-                  ></v-autocomplete>
+                  ></v-select>
 
                   <v-btn size="small" @click="uiStore.showWeightDialog = true" :disabled="!settingsStore.settings.enable_long_trades">配置权重</v-btn>
                   <v-divider class="my-4"></v-divider>
@@ -45,7 +44,7 @@
                   <v-switch v-model="settingsStore.settings.enable_short_trades" label="开启空头交易" color="error" inset></v-switch>
                   <v-text-field v-model.number="settingsStore.settings.total_short_position_value" label="空头总价值 (USD)" type="number" :disabled="!settingsStore.settings.enable_short_trades"></v-text-field>
 
-                  <v-autocomplete
+                  <v-select
                     v-model="settingsStore.settings.short_coin_list"
                     :items="settingsStore.availableShortCoins"
                     label="从备选池中选择空头币种"
@@ -53,8 +52,7 @@
                     chips
                     closable-chips
                     :disabled="!settingsStore.settings.enable_short_trades"
-                    readonly
-                  ></v-autocomplete>
+                  ></v-select>
 
                   <v-divider class="my-4"></v-divider>
                    <v-switch v-model="settingsStore.settings.enable_short_sl_tp" label="开启空头 SL/TP" color="info" inset :disabled="!settingsStore.settings.enable_short_trades"></v-switch>
