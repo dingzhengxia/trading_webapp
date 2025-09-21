@@ -14,36 +14,35 @@
             </v-tooltip>
           </div>
 
-          <v-menu activator="parent" :close-on-content-click="false" max-height="400">
-            <template v-slot:activator="{ props }">
-              <v-autocomplete
-                v-bind="props"
-                :model-value="longPool"
-                label="从总池中选择做多备选币种"
-                multiple chips closable-chips readonly
-                variant="outlined" hide-details
-              ></v-autocomplete>
-            </template>
-            <v-card min-width="300">
-              <v-autocomplete
-                v-model="longPool"
-                :items="availableForLongPool"
-                multiple chips closable-chips
-                item-title="title" item-value="value"
-                autofocus
-                hide-details
+          <v-select
+            v-model="longPool"
+            :items="filteredLongPoolItems"
+            label="从总池中选择做多备选币种"
+            multiple chips closable-chips clearable variant="outlined" hide-details
+            item-title="title" item-value="value" :menu-props="{ maxHeight: '300px' }"
+            hide-selected
+          >
+            <template v-slot:prepend-item>
+              <v-text-field
+                v-model="longSearch"
                 placeholder="搜索币种..."
-              >
-                <template v-slot:item="{ item, props }">
-                  <v-list-item v-bind="props" class="pl-0">
-                    <template v-slot:prepend>
-                      <v-checkbox-btn :model-value="longPool.includes(item.value)" readonly class="mr-2"></v-checkbox-btn>
-                    </template>
-                  </v-list-item>
+                variant="underlined"
+                density="compact"
+                hide-details
+                class="px-4 mb-2"
+                @click.stop
+              ></v-text-field>
+              <v-divider></v-divider>
+            </template>
+
+            <template v-slot:item="{ item, props }">
+              <v-list-item v-bind="props" class="pl-0">
+                <template v-slot:prepend>
+                  <v-checkbox-btn :model-value="longPool.includes(item.value)" readonly class="mr-2"></v-checkbox-btn>
                 </template>
-              </v-autocomplete>
-            </v-card>
-          </v-menu>
+              </v-list-item>
+            </template>
+          </v-select>
         </v-card>
       </v-col>
 
@@ -59,36 +58,36 @@
             </v-tooltip>
           </div>
 
-          <v-menu activator="parent" :close-on-content-click="false" max-height="400">
-             <template v-slot:activator="{ props }">
-                <v-autocomplete
-                  v-bind="props"
-                  :model-value="shortPool"
-                  label="从总池中选择做空备选币种"
-                  multiple chips closable-chips readonly
-                  variant="outlined" hide-details
-                ></v-autocomplete>
-             </template>
-             <v-card min-width="300">
-                <v-autocomplete
-                  v-model="shortPool"
-                  :items="availableForShortPool"
-                  multiple chips closable-chips
-                  item-title="title" item-value="value"
-                  autofocus
-                  hide-details
-                  placeholder="搜索币种..."
-                >
-                  <template v-slot:item="{ item, props }">
-                    <v-list-item v-bind="props" class="pl-0">
-                      <template v-slot:prepend>
-                        <v-checkbox-btn :model-value="shortPool.includes(item.value)" readonly class="mr-2"></v-checkbox-btn>
-                      </template>
-                    </v-list-item>
-                  </template>
-                </v-autocomplete>
-             </v-card>
-          </v-menu>
+          <v-select
+            v-model="shortPool"
+            :items="filteredShortPoolItems"
+            label="从总池中选择做空备选币种"
+            multiple chips closable-chips clearable variant="outlined" hide-details
+            item-title="title" item-value="value" :menu-props="{ maxHeight: '300px' }"
+            hide-selected
+          >
+            <template v-slot:prepend-item>
+              <v-text-field
+                v-model="shortSearch"
+                placeholder="搜索币种..."
+                variant="underlined"
+                density="compact"
+                hide-details
+                class="px-4 mb-2"
+                @click.stop
+              ></v-text-field>
+              <v-divider></v-divider>
+            </template>
+
+            <template v-slot:item="{ item, props }">
+              <v-list-item v-bind="props" class="pl-0">
+                <template v-slot:prepend>
+                  <v-checkbox-btn :model-value="shortPool.includes(item.value)" readonly class="mr-2"></v-checkbox-btn>
+                </template>
+              </v-list-item>
+            </template>
+          </v-select>
+
         </v-card>
       </v-col>
     </v-row>
@@ -107,6 +106,9 @@ const uiStore = useUiStore();
 const longPool = ref([...settingsStore.availableLongCoins]);
 const shortPool = ref([...settingsStore.availableShortCoins]);
 
+const longSearch = ref('');
+const shortSearch = ref('');
+
 const allAvailableCoins = computed(() => [...new Set(settingsStore.availableCoins)].sort());
 const mapToSelectItems = (coins: string[]) => coins.map(coin => ({ title: coin, value: coin }));
 
@@ -120,6 +122,24 @@ const availableForShortPool = computed(() => {
   const longSet = new Set(longPool.value);
   const available = allAvailableCoins.value.filter(coin => !longSet.has(coin));
   return mapToSelectItems(available);
+});
+
+const filteredLongPoolItems = computed(() => {
+  if (!longSearch.value) {
+    return availableForLongPool.value;
+  }
+  return availableForLongPool.value.filter(item =>
+    item.title.toLowerCase().includes(longSearch.value.toLowerCase())
+  );
+});
+
+const filteredShortPoolItems = computed(() => {
+  if (!shortSearch.value) {
+    return availableForShortPool.value;
+  }
+  return availableForShortPool.value.filter(item =>
+    item.title.toLowerCase().includes(shortSearch.value.toLowerCase())
+  );
 });
 
 const selectAllCoins = (poolType: 'long' | 'short') => {
