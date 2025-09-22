@@ -1,9 +1,10 @@
-// frontend/src/stores/uiStore.ts (重构版)
+// frontend/src/stores/uiStore.ts (主题切换版)
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import { useLogStore } from './logStore'
 import type { RebalancePlan, Position, ProgressState } from '@/models/types'
 import api from '@/services/api'
+import type { ThemeInstance } from 'vuetify' // 导入 Vuetify 的类型
 
 export type CloseTarget =
   | { type: 'single'; position: Position }
@@ -12,6 +13,14 @@ export type CloseTarget =
 
 export const useUiStore = defineStore('ui', () => {
   const logStore = useLogStore()
+
+  // --- 新增：主题状态 ---
+  // 从 localStorage 读取保存的主题，如果没有则默认为 'dark'
+  const theme = ref<'dark' | 'light'>(
+    (localStorage.getItem('theme') as 'dark' | 'light') || 'dark',
+  )
+  // --- 修改结束 ---
+
   const statusMessage = ref('初始化中...')
   const isRunning = ref(false)
   const isStopping = ref(false)
@@ -42,12 +51,21 @@ export const useUiStore = defineStore('ui', () => {
     return 'info'
   })
 
+  // --- 新增：切换主题的 action ---
+  function toggleTheme(vuetifyTheme: ThemeInstance) {
+    const newTheme = theme.value === 'dark' ? 'light' : 'dark'
+    theme.value = newTheme
+    vuetifyTheme.global.name.value = newTheme // 告诉 Vuetify 更新主题
+    localStorage.setItem('theme', newTheme) // 保存用户的选择
+  }
+  // --- 修改结束 ---
+
   function hideProgress() {
     progress.value.show = false
     progress.value.is_final = false
   }
 
-  // REFACTOR: 新增一个 action 来统一处理所有“即发即忘”的后台任务启动逻辑。
+  // (其他函数保持不变)
   function launchTask(endpoint: string, payload: any, taskName: string, totalTasks: number) {
     if (isRunning.value) {
       logStore.addLog({
@@ -161,25 +179,28 @@ export const useUiStore = defineStore('ui', () => {
     showCloseDialog.value = true
   }
 
+
   return {
+    logStore,
+    theme, // 导出 theme
     statusMessage,
     isRunning,
     isStopping,
+    progress,
     showLogDrawer,
     showRebalanceDialog,
-    statusColor,
-    logStore,
     rebalancePlan,
     showCloseDialog,
     closeTarget,
     showWeightDialog,
-    progress,
+    statusColor,
+    toggleTheme, // 导出 toggleTheme
+    launchTask,
     setStatus,
-    toggleLogDrawer,
-    openCloseDialog,
     updateProgress,
     initiateStop,
     checkInitialStatus,
-    launchTask,
+    toggleLogDrawer,
+    openCloseDialog,
   }
 })
