@@ -1,4 +1,4 @@
-<!-- frontend/src/components/AccessKeyDialog.vue (新文件) -->
+<!-- frontend/src/components/AccessKeyDialog.vue (最终安全版) -->
 <template>
   <v-dialog v-model="dialog" persistent max-width="400px">
     <v-card>
@@ -17,12 +17,23 @@
             autofocus
             :error-messages="error"
             @input="error = ''"
+            placeholder="只能包含英文、数字和符号"
           ></v-text-field>
         </v-form>
       </v-card-text>
       <v-card-actions>
         <v-spacer></v-spacer>
-        <v-btn color="primary" variant="tonal" @click="saveKey">确认</v-btn>
+        <!-- --- 核心修改：绑定 loading 状态并调用新 action --- -->
+        <v-btn
+          color="primary"
+          variant="tonal"
+          @click="saveKey"
+          :loading="authStore.isLoading"
+          :disabled="authStore.isLoading"
+        >
+          确认
+        </v-btn>
+        <!-- --- 修改结束 --- -->
       </v-card-actions>
     </v-card>
   </v-dialog>
@@ -36,16 +47,31 @@ const authStore = useAuthStore()
 const inputKey = ref('')
 const error = ref('')
 
-// 对话框的显示状态，直接取决于 store 中是否有有效的 key
 const dialog = computed(() => !authStore.isAuthenticated)
 
-const saveKey = () => {
-  if (!inputKey.value.trim()) {
+// --- 核心修改：重写 saveKey 逻辑 ---
+const saveKey = async () => {
+  const key = inputKey.value.trim()
+  if (!key) {
     error.value = '密钥不能为空'
     return
   }
+
+  const validKeyRegex = /^[\x00-\xFF]*$/
+  if (!validKeyRegex.test(key)) {
+    error.value = '密钥包含无效字符 (例如中文)，请只使用英文、数字和符号。'
+    return
+  }
   error.value = ''
-  // 调用 store action 来设置密钥并持久化
-  authStore.setAccessKey(inputKey.value)
+
+  // 调用新的验证 action
+  const success = await authStore.validateAndSetKey(key)
+
+  // 如果验证失败，在对话框中显示错误提示
+  if (!success) {
+    error.value = '访问密钥验证失败，请检查后重试。'
+  }
+  // 如果成功，isAuthenticated 会变为 true，对话框会自动关闭
 }
+// --- 修改结束 ---
 </script>
