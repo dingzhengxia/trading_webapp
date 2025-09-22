@@ -1,9 +1,46 @@
-<!-- frontend/src/components/CoinPoolsManager.vue (最终正确版) -->
+<!-- frontend/src/components/CoinPoolsManager.vue (自动大写修正版) -->
 <template>
   <div>
+    <!-- --- 添加新币种UI保持不变，但逻辑已更新 --- -->
+    <v-card variant="outlined" class="mb-6">
+      <v-card-title class="text-subtitle-1 font-weight-medium d-flex align-center">
+        <v-icon start>mdi-database-plus-outline</v-icon>
+        <span>手动添加币种</span>
+      </v-card-title>
+      <v-divider></v-divider>
+      <v-card-text>
+        <div class="d-flex align-center">
+          <v-text-field
+            v-model="newCoinSymbol"
+            label="输入币种代码 (例如: btc)"
+            variant="outlined"
+            density="compact"
+            hide-details
+            class="mr-4"
+            @keyup.enter="addCoin"
+            autofocus
+          ></v-text-field>
+          <v-btn
+            color="primary"
+            variant="tonal"
+            @click="addCoin"
+            :loading="isAddingCoin"
+            :disabled="!newCoinSymbol.trim()"
+            prepend-icon="mdi-plus"
+          >
+            添加
+          </v-btn>
+        </div>
+        <div class="text-caption text-grey mt-2">
+          添加到总池后，您就可以在下方的做多/做空备选池中选择它。
+        </div>
+      </v-card-text>
+    </v-card>
+    <!-- --- 修改结束 --- -->
+
     <v-row>
       <v-col cols="12" md="6">
-        <v-card variant="tonal" class="pa-4">
+        <v-card variant="tonal" class="pa-4" style="height: 100%">
           <div class="d-flex align-center mb-2">
             <span class="text-subtitle-1 font-weight-medium"
               >做多币种备选池 ({{ longPool.length }})</span
@@ -67,7 +104,7 @@
       </v-col>
 
       <v-col cols="12" md="6">
-        <v-card variant="tonal" class="pa-4">
+        <v-card variant="tonal" class="pa-4" style="height: 100%">
           <div class="d-flex align-center mb-2">
             <span class="text-subtitle-1 font-weight-medium"
               >做空币种备选池 ({{ shortPool.length }})</span
@@ -136,46 +173,51 @@
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
 import { useSettingsStore } from '@/stores/settingsStore'
-import { useUiStore } from '@/stores/uiStore'
+import { useSnackbarStore } from '@/stores/snackbar'
 import apiClient from '@/services/api'
 
 const settingsStore = useSettingsStore()
-const uiStore = useUiStore()
+const snackbarStore = useSnackbarStore()
 
 const longPool = ref([...settingsStore.availableLongCoins])
 const shortPool = ref([...settingsStore.availableShortCoins])
-
 const longSearch = ref('')
 const shortSearch = ref('')
+const newCoinSymbol = ref('')
+const isAddingCoin = ref(false)
+
+// --- 核心修改：添加 watch 侦听器 ---
+watch(newCoinSymbol, (newValue) => {
+  // 检查新值是否存在，并且是否与它的大写版本不同
+  if (newValue && newValue !== newValue.toUpperCase()) {
+    // 如果不同，则强制将其更新为大写
+    newCoinSymbol.value = newValue.toUpperCase()
+  }
+})
+// --- 修改结束 ---
 
 const allAvailableCoins = computed(() => [...new Set(settingsStore.availableCoins)].sort())
 const mapToSelectItems = (coins: string[]) => coins.map((coin) => ({ title: coin, value: coin }))
 
 const availableForLongPool = computed(() => {
   const shortSet = new Set(shortPool.value)
-  const available = allAvailableCoins.value.filter((coin) => !shortSet.has(coin))
-  return mapToSelectItems(available)
+  return mapToSelectItems(allAvailableCoins.value.filter((coin) => !shortSet.has(coin)))
 })
 
 const availableForShortPool = computed(() => {
   const longSet = new Set(longPool.value)
-  const available = allAvailableCoins.value.filter((coin) => !longSet.has(coin))
-  return mapToSelectItems(available)
+  return mapToSelectItems(allAvailableCoins.value.filter((coin) => !longSet.has(coin)))
 })
 
 const filteredLongPoolItems = computed(() => {
-  if (!longSearch.value) {
-    return availableForLongPool.value
-  }
+  if (!longSearch.value) return availableForLongPool.value
   return availableForLongPool.value.filter((item) =>
     item.title.toLowerCase().includes(longSearch.value.toLowerCase()),
   )
 })
 
 const filteredShortPoolItems = computed(() => {
-  if (!shortSearch.value) {
-    return availableForShortPool.value
-  }
+  if (!shortSearch.value) return availableForShortPool.value
   return availableForShortPool.value.filter((item) =>
     item.title.toLowerCase().includes(shortSearch.value.toLowerCase()),
   )
@@ -196,38 +238,42 @@ const savePools = async () => {
       short_coins_pool: shortPool.value,
     })
     settingsStore.updateAvailablePools(longPool.value, shortPool.value)
-    uiStore.logStore.addLog({
-      message: '币种备选池已成功保存。',
-      level: 'success',
-      timestamp: new Date().toLocaleTimeString(),
-    })
+    snackbarStore.show({ message: '币种备选池已成功保存。', color: 'success' })
   } catch (error: any) {
     const errorMsg = error.response?.data?.detail || error.message
-    uiStore.logStore.addLog({
-      message: `保存币种备选池失败: ${errorMsg}`,
-      level: 'error',
-      timestamp: new Date().toLocaleTimeString(),
-    })
+    snackbarStore.show({ message: `保存币种备选池失败: ${errorMsg}`, color: 'error' })
+  }
+}
+
+const addCoin = async () => {
+  const symbol = newCoinSymbol.value.trim() // 此处已经是大写了，只需 trim
+  if (!symbol || isAddingCoin.value) return
+
+  isAddingCoin.value = true
+  try {
+    const response = await apiClient.post('/api/settings/add-coin', { coin: symbol })
+    settingsStore.availableCoins = response.data
+    newCoinSymbol.value = ''
+    snackbarStore.show({ message: `币种 '${symbol}' 添加成功！`, color: 'success' })
+  } catch (error: any) {
+    const errorMsg = error.response?.data?.detail || error.message
+    snackbarStore.show({ message: `添加失败: ${errorMsg}`, color: 'error' })
+  } finally {
+    isAddingCoin.value = false
   }
 }
 
 watch(
   () => settingsStore.availableLongCoins,
-  (newVal) => {
-    longPool.value = [...newVal]
-  },
+  (newVal) => (longPool.value = [...newVal]),
   { deep: true },
 )
 
 watch(
   () => settingsStore.availableShortCoins,
-  (newVal) => {
-    shortPool.value = [...newVal]
-  },
+  (newVal) => (shortPool.value = [...newVal]),
   { deep: true },
 )
 
-defineExpose({
-  savePools,
-})
+defineExpose({ savePools })
 </script>

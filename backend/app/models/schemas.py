@@ -1,4 +1,4 @@
-# backend/app/models/schemas.py (最终修正版)
+# backend/app/models/schemas.py (修改版)
 from typing import List, Dict, Any, Optional
 
 from pydantic import BaseModel, Field
@@ -14,6 +14,11 @@ class CoinPoolsUpdate(BaseModel):
     long_coins_pool: List[str]
     short_coins_pool: List[str]
 
+# --- 新增模型 ---
+class AddCoinRequest(BaseModel):
+    coin: str
+# --- 修改结束 ---
+
 class Position(BaseModel):
     symbol: str
     full_symbol: str
@@ -22,14 +27,14 @@ class Position(BaseModel):
     notional: float
     pnl: float
     pnl_percentage: float
-    entry_price: float
+    entry_price: float # 这个字段现在将填充为损益两平价
     mark_price: float
 
 class BaseTaskRequest(BaseModel):
     request_id: Optional[str] = None
 
 class TradePlanRequest(BaseTaskRequest):
-    # 这个模型包含了所有可能的设置字段
+    # ... (内容不变)
     leverage: int
     total_long_position_value: float
     total_short_position_value: float
@@ -54,7 +59,6 @@ class TradePlanRequest(BaseTaskRequest):
     enable_short_sl_tp: bool
     short_stop_loss_percentage: float
     short_take_profit_percentage: float
-    # 新增的成交量字段也应包含
     rebalance_volume_ma_days: int
     rebalance_volume_spike_ratio: float
 
@@ -90,7 +94,6 @@ class ExecutionOrderItem(BaseModel):
 class ExecutionPlanRequest(BaseTaskRequest):
     orders: List[ExecutionOrderItem]
 
-# --- 核心修复在这里 ---
 class RebalanceCriteria(BaseModel):
     method: str = "multi_factor_weakest"
     top_n: int = 50
@@ -98,7 +101,6 @@ class RebalanceCriteria(BaseModel):
     abs_momentum_days: int = 30
     rel_strength_days: int = 60
     foam_days: int = 1
-    # 新增的字段必须在这里定义，FastAPI才能正确解析它们
     rebalance_volume_ma_days: int = 20
     rebalance_volume_spike_ratio: float = 3.0
 

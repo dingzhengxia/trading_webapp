@@ -46,7 +46,11 @@ async def fetch_positions_with_pnl_async(exchange: ccxt.binanceusdm, leverage: i
                 if not ticker: continue
                 current_price = float(ticker.get('mark', ticker.get('last', 0.0)))
                 notional = current_price * abs(signed_contracts)
-                entry_price = float(raw_pos.get('entryPrice', 0.0))
+                # --- 核心修改在这里：使用损益两平价 ---
+                # 原代码: entry_price = float(raw_pos.get('entryPrice', 0.0))
+                # 新代码:
+                entry_price = float(info.get('breakEvenPrice', raw_pos.get('entryPrice', 0.0)))
+                # --- 修改结束 ---
                 pnl = float(raw_pos.get('unrealizedPnl', 0.0))
                 margin = float(raw_pos.get('initialMargin', 0.0)) or (notional / leverage if leverage > 0 else 0)
                 pnl_percentage = (pnl / margin) * 100 if margin > 0 else 0.0

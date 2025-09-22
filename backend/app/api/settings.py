@@ -1,15 +1,16 @@
-# backend/app/api/settings.py (重构版)
+# backend/app/api/settings.py (修改版)
 from typing import Dict, Any, List
 
-from fastapi import APIRouter, Body, Depends
+from fastapi import APIRouter, Body, Depends, HTTPException, status
 import json
 
 # REFACTOR: 从 load_settings 改为只导入 save_settings
-from ..config.config import save_settings, COIN_LISTS_FILE, AVAILABLE_COINS, AVAILABLE_LONG_COINS, AVAILABLE_SHORT_COINS
+# 新增: 导入 add_coin_to_pool 函数
+from ..config.config import save_settings, COIN_LISTS_FILE, AVAILABLE_COINS, AVAILABLE_LONG_COINS, AVAILABLE_SHORT_COINS, add_coin_to_pool
 from ..core.dependencies import get_settings_dependency
 from ..core.security import verify_api_key
 # REFACTOR: 导入 Pydantic 模型
-from ..models.schemas import SettingsResponse, CoinPoolsUpdate
+from ..models.schemas import SettingsResponse, CoinPoolsUpdate, AddCoinRequest
 
 router = APIRouter(prefix="/api/settings", tags=["Settings"], dependencies=[Depends(verify_api_key)])
 
@@ -60,3 +61,19 @@ def update_coin_pools(pools: CoinPoolsUpdate):
 
     print(
         f"--- [INFO] Coin pools saved successfully. Long: {len(AVAILABLE_LONG_COINS)}, Short: {len(AVAILABLE_SHORT_COINS)} ---")
+
+
+# --- 新增API端点 ---
+@router.post("/add-coin", response_model=List[str])
+def add_new_coin_to_pool(request: AddCoinRequest):
+    """
+    添加一个新币种到总币池 (coins_pool) 中。
+    """
+    try:
+        updated_pool = add_coin_to_pool(request.coin)
+        return updated_pool
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to add coin: {e}")
+# --- 修改结束 ---

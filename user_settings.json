@@ -1,7 +1,7 @@
 {
-    "api_key": "ca33ac77f5f1e42faef9a0d80fb05fce773939c4773abda4cd80a0372f354fdf",
-    "api_secret": "966fbfb8fc1475709bdf7e7db47b8b37da7cb92cdce1882ca5b8f8e6b0e07423",
-    "use_testnet": true,
+    "api_key": "RglkJXR15gwcDjtTUXkfEiyf1clrHUpSisX4p9Pgl4XCUFSnL62miqXuHowaMKO3",
+    "api_secret": "WT98NRRko9dfF28PgcUBhXhlLnThgvXGa8smps6V1O6HxSNfRZUTazfJc7x7bRWy",
+    "use_testnet": false,
     "app_access_key": "CHANGE_THIS_IN_USER_SETTINGS.JSON",
     "enable_long_trades": true,
     "enable_short_trades": true,
@@ -52,5 +52,7 @@
         "BNB": 15,
         "ETH": 25,
         "SOL": 15
-    }
+    },
+    "rebalance_volume_ma_days": 20,
+    "rebalance_volume_spike_ratio": 3
 }

@@ -1,4 +1,4 @@
-# backend/app/config/config.py (完整代码)
+# backend/app/config/config.py (修改版)
 import json
 import os
 from pathlib import Path
@@ -58,25 +58,31 @@ AVAILABLE_SHORT_COINS: List[str] = []
 
 _cached_settings: Dict[str, Any] | None = None
 _settings_lock = RLock()
+_coin_list_lock = RLock() # 为币种列表文件添加专用的锁
 
 
 def load_coin_lists() -> None:
     """加载 coin_lists.json 文件到内存中的全局变量。"""
     global AVAILABLE_COINS, AVAILABLE_LONG_COINS, AVAILABLE_SHORT_COINS
-    if not COIN_LISTS_FILE.exists():
-        print(f"--- [WARNING] {COIN_LISTS_FILE} not found. Coin pools will be empty.")
-        return
+    with _coin_list_lock:
+        if not COIN_LISTS_FILE.exists():
+            print(f"--- [WARNING] {COIN_LISTS_FILE} not found. Creating a new one.")
+            # 如果文件不存在，创建一个空的结构
+            with open(COIN_LISTS_FILE, 'w', encoding='utf-8') as f:
+                json.dump({"coins_pool": [], "long_coins_pool": [], "short_coins_pool": []}, f, indent=4)
+            AVAILABLE_COINS, AVAILABLE_LONG_COINS, AVAILABLE_SHORT_COINS = [], [], []
+            return
 
-    try:
-        with open(COIN_LISTS_FILE, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-            AVAILABLE_COINS = data.get('coins_pool', [])
-            AVAILABLE_LONG_COINS = data.get('long_coins_pool', [])
-            AVAILABLE_SHORT_COINS = data.get('short_coins_pool', [])
-        print(
-            f"--- [INFO] Loaded coin lists from '{COIN_LISTS_FILE}'. Total: {len(AVAILABLE_COINS)}, Long: {len(AVAILABLE_LONG_COINS)}, Short: {len(AVAILABLE_SHORT_COINS)} ---")
-    except json.JSONDecodeError as e:
-        print(f"--- [ERROR] Failed to decode JSON from {COIN_LISTS_FILE}: {e} ---")
+        try:
+            with open(COIN_LISTS_FILE, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                AVAILABLE_COINS = data.get('coins_pool', [])
+                AVAILABLE_LONG_COINS = data.get('long_coins_pool', [])
+                AVAILABLE_SHORT_COINS = data.get('short_coins_pool', [])
+            print(
+                f"--- [INFO] Loaded coin lists from '{COIN_LISTS_FILE}'. Total: {len(AVAILABLE_COINS)}, Long: {len(AVAILABLE_LONG_COINS)}, Short: {len(AVAILABLE_SHORT_COINS)} ---")
+        except json.JSONDecodeError as e:
+            print(f"--- [ERROR] Failed to decode JSON from {COIN_LISTS_FILE}: {e} ---")
 
 
 def load_settings() -> Dict[str, Any]:
@@ -124,6 +130,44 @@ def save_settings(current_config: Dict[str, Any]) -> bool:
     except Exception as e:
         print(f"--- [ERROR] Failed to save user settings: {e} ---")
         return False
+
+
+# --- 新增函数 ---
+def add_coin_to_pool(coin_symbol: str) -> List[str]:
+    """
+    添加新币种到总池中，并保存到文件。
+    """
+    global AVAILABLE_COINS
+    if not coin_symbol or not isinstance(coin_symbol, str):
+        raise ValueError("Coin symbol cannot be empty.")
+
+    symbol_upper = coin_symbol.strip().upper()
+    if not symbol_upper:
+        raise ValueError("Coin symbol cannot be empty.")
+
+    with _coin_list_lock:
+        # 重新从文件读取以获取最新状态
+        try:
+            with open(COIN_LISTS_FILE, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            data = {"coins_pool": [], "long_coins_pool": [], "short_coins_pool": []}
+
+        current_pool = set(data.get('coins_pool', []))
+        if symbol_upper in current_pool:
+            raise ValueError(f"'{symbol_upper}' already exists in the coin pool.")
+
+        current_pool.add(symbol_upper)
+        data['coins_pool'] = sorted(list(current_pool))
+
+        with open(COIN_LISTS_FILE, 'w', encoding='utf-8') as f:
+            json.dump(data, f, indent=4, ensure_ascii=False)
+
+        # 更新内存中的全局变量
+        AVAILABLE_COINS = data['coins_pool']
+        print(f"--- [INFO] Added '{symbol_upper}' to coin pool. Total now: {len(AVAILABLE_COINS)} ---")
+        return AVAILABLE_COINS
+# --- 修改结束 ---
 
 
 # 首次加载

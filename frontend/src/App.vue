@@ -1,6 +1,7 @@
-<!-- frontend/src/App.vue (重构版) -->
+<!-- frontend/src/App.vue (修改版) -->
 <template>
   <v-app>
+    <!-- ... (v-app-bar, v-navigation-drawer, v-main 不变) ... -->
     <v-app-bar app density="compact">
       <v-app-bar-nav-icon @click="drawer = !drawer" class="d-md-none"></v-app-bar-nav-icon>
       <v-toolbar-title>Web 交易终端</v-toolbar-title>
@@ -49,9 +50,12 @@
     <CloseDialog />
     <WeightConfigDialog v-model="uiStore.showWeightDialog" />
     <ProgressBar />
-
-    <!-- REFACTOR: 添加访问密钥输入对话框 -->
     <AccessKeyDialog />
+
+    <!-- --- 新增 Snackbar 组件 --- -->
+    <Snackbar />
+    <!-- --- 修改结束 --- -->
+
   </v-app>
 </template>
 
@@ -61,7 +65,7 @@ import { useRouter } from 'vue-router'
 import { useDisplay } from 'vuetify'
 import { useUiStore } from '@/stores/uiStore'
 import { useSettingsStore } from '@/stores/settingsStore'
-import { useAuthStore } from '@/stores/authStore' // 导入 auth store
+import { useAuthStore } from '@/stores/authStore'
 import websocketService from '@/services/websocket'
 
 import LogDrawer from '@/components/LogDrawer.vue'
@@ -69,20 +73,20 @@ import RebalanceDialog from '@/components/RebalanceDialog.vue'
 import CloseDialog from '@/components/CloseDialog.vue'
 import WeightConfigDialog from '@/components/WeightConfigDialog.vue'
 import ProgressBar from '@/components/ProgressBar.vue'
-import AccessKeyDialog from '@/components/AccessKeyDialog.vue' // 导入新组件
+import AccessKeyDialog from '@/components/AccessKeyDialog.vue'
+import Snackbar from '@/components/Snackbar.vue' // <-- 导入新组件
 
 const router = useRouter()
 const routes = router.getRoutes().filter((r) => r.meta && r.meta.title && r.meta.icon)
 
 const uiStore = useUiStore()
 const settingsStore = useSettingsStore()
-const authStore = useAuthStore() // 初始化 auth store
+const authStore = useAuthStore()
 const { mdAndUp } = useDisplay()
 
 const drawer = ref(mdAndUp.value)
 
 const initializeApp = async () => {
-  // 只有在认证通过后才执行初始化
   if (authStore.isAuthenticated) {
     try {
       await settingsStore.fetchSettings()
@@ -98,12 +102,9 @@ const initializeApp = async () => {
 }
 
 onMounted(() => {
-  // 首次挂载时尝试初始化
   initializeApp()
 })
 
-// 监听认证状态的变化
-// 当用户在对话框中输入密钥后，isAuthenticated会变为true，从而触发初始化
 watch(
   () => authStore.isAuthenticated,
   (isAuth) => {

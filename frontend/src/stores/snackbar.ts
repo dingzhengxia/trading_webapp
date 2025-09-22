@@ -1,4 +1,4 @@
-// 文件路径: frontend/src/stores/snackbar.ts
+// 文件路径: frontend/src/stores/snackbar.ts (新文件)
 import { defineStore } from 'pinia'
 
 interface SnackbarState {
