@@ -1,4 +1,4 @@
-# backend/app/logic/exchange_logic_async.py (最终修正版)
+# backend/app/logic/exchange_logic_async.py (最终PNL计算修正版)
 import asyncio
 import datetime
 from typing import List, Optional
@@ -6,7 +6,6 @@ from typing import List, Optional
 import ccxt.async_support as ccxt
 
 from .exceptions import RetriableOrderError, InterruptedError
-# REFACTOR: 导入清理SL/TP订单的函数
 from .sl_tp_logic_async import _cancel_sl_tp_orders_async, set_tp_sl_for_position_async
 from .utils import resolve_full_symbol
 from ..config import i18n
@@ -41,23 +40,43 @@ async def fetch_positions_with_pnl_async(exchange: ccxt.binanceusdm, leverage: i
         final_positions = []
         for raw_pos in non_zero_positions:
             try:
-                info, signed_contracts = raw_pos.get('info', {}), float(raw_pos['info'].get('positionAmt', 0.0))
-                full_symbol, ticker = raw_pos['symbol'], tickers.get(raw_pos['symbol'])
+                info = raw_pos.get('info', {})
+                signed_contracts = float(info.get('positionAmt', 0.0))
+                full_symbol = raw_pos['symbol']
+                ticker = tickers.get(full_symbol)
+
                 if not ticker: continue
-                current_price = float(ticker.get('mark', ticker.get('last', 0.0)))
-                notional = current_price * abs(signed_contracts)
-                # --- 核心修改在这里：使用损益两平价 ---
-                # 原代码: entry_price = float(raw_pos.get('entryPrice', 0.0))
-                # 新代码:
-                entry_price = float(info.get('breakEvenPrice', raw_pos.get('entryPrice', 0.0)))
-                # --- 修改结束 ---
-                pnl = float(raw_pos.get('unrealizedPnl', 0.0))
+
+                # --- 核心修改：在这里重新计算所有收益相关的指标 ---
+
+                # 1. 获取关键价格
+                mark_price = float(ticker.get('mark', ticker.get('last', 0.0)))
+                break_even_price = float(info.get('breakEvenPrice', raw_pos.get('entryPrice', 0.0)))
+
+                # 2. 重新计算 PNL
+                # 公式: (当前标记价格 - 损益两平价) * 合约数量 (带方向)
+                # signed_contracts 对于多头是正数，对于空头是负数，所以这个公式通用
+                pnl = (mark_price - break_even_price) * signed_contracts
+
+                # 3. 获取其他必要数据
+                notional = mark_price * abs(signed_contracts)
                 margin = float(raw_pos.get('initialMargin', 0.0)) or (notional / leverage if leverage > 0 else 0)
+
+                # 4. 重新计算 PNL 百分比
                 pnl_percentage = (pnl / margin) * 100 if margin > 0 else 0.0
+
+                # --- 修改结束 ---
+
                 final_positions.append(Position(
-                    symbol=full_symbol.split('/')[0], full_symbol=full_symbol, side=raw_pos.get('side'),
-                    contracts=abs(signed_contracts), entry_price=entry_price, notional=notional,
-                    mark_price=current_price, pnl=pnl, pnl_percentage=pnl_percentage,
+                    symbol=full_symbol.split('/')[0],
+                    full_symbol=full_symbol,
+                    side=raw_pos.get('side'),
+                    contracts=abs(signed_contracts),
+                    entry_price=break_even_price,  # 页面“开仓均价”列显示损益两平价
+                    notional=notional,
+                    mark_price=mark_price,
+                    pnl=pnl,  # 使用我们自己计算的 PNL
+                    pnl_percentage=pnl_percentage,  # 使用我们自己计算的 PNL 百分比
                 ))
             except (TypeError, ValueError, KeyError) as e:
                 print(f"Error processing position {raw_pos.get('symbol', 'N/A')}: {e}")
@@ -92,7 +111,6 @@ async def close_position_async(exchange: ccxt.binanceusdm, full_symbol_to_close:
             async_logger, stop_event, contracts_to_trade=amount_to_close
         )
 
-        # FINAL FIX: 严格确保在平仓订单成功成交后，并且是全仓关闭时，才清理SL/TP订单。
         if order_result and abs(ratio - 1.0) < 1e-9:
             await async_logger(f"✅ {full_symbol_to_close} 已完全平仓，准备清理其SL/TP挂单...", "info")
             await _cancel_sl_tp_orders_async(exchange, full_symbol_to_close, async_logger)
@@ -206,7 +224,7 @@ async def process_order_with_sl_tp_async(exchange: ccxt.binanceusdm, plan: dict,
 
 
 async def fetch_klines_async(exchange: ccxt.binanceusdm, symbol: str, timeframe: str = '1d', days_ago: int = 61) -> \
-Optional[List]:
+        Optional[List]:
     if not symbol: return None
     try:
         since = exchange.parse8601(
