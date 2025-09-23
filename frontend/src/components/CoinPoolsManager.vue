@@ -1,7 +1,7 @@
-<!-- frontend/src/components/CoinPoolsManager.vue (自动大写修正版) -->
+<!-- frontend/src/components/CoinPoolsManager.vue (最终完美版) -->
 <template>
   <div>
-    <!-- --- 添加新币种UI保持不变，但逻辑已更新 --- -->
+    <!-- 添加新币种UI -->
     <v-card variant="outlined" class="mb-6">
       <v-card-title class="text-subtitle-1 font-weight-medium d-flex align-center">
         <v-icon start>mdi-database-plus-outline</v-icon>
@@ -36,9 +36,9 @@
         </div>
       </v-card-text>
     </v-card>
-    <!-- --- 修改结束 --- -->
 
     <v-row>
+      <!-- 多头币种池 -->
       <v-col cols="12" md="6">
         <v-card variant="tonal" class="pa-4" style="height: 100%">
           <div class="d-flex align-center mb-2">
@@ -64,8 +64,6 @@
             :items="filteredLongPoolItems"
             label="从总池中选择做多备选币种"
             multiple
-            chips
-            closable-chips
             clearable
             variant="outlined"
             hide-details
@@ -75,6 +73,45 @@
             hide-selected
             :close-on-content-click="false"
           >
+            <template v-slot:selection="{ item, index }">
+              <!-- 修正：只在第一个项目渲染时，创建整个自定义区域 -->
+              <div
+                v-if="index === 0"
+                class="selection-wrapper"
+                :class="{ 'is-expanded': isLongPoolExpanded }"
+              >
+                <!-- 内部正确循环v-model -->
+                <v-chip
+                  v-for="(poolItem, chipIndex) in longPool"
+                  :key="`long-${poolItem}`"
+                  v-show="isLongPoolExpanded || chipIndex < MAX_VISIBLE_CHIPS"
+                  class="ma-1"
+                  closable
+                  @click:close="removePoolItemValue('long', poolItem)"
+                >
+                  <span>{{ poolItem }}</span>
+                </v-chip>
+
+                <v-chip
+                  v-if="!isLongPoolExpanded && longPool.length > MAX_VISIBLE_CHIPS"
+                  class="ma-1"
+                  @mousedown.stop="isLongPoolExpanded = true"
+                  size="small"
+                >
+                  +{{ longPool.length - MAX_VISIBLE_CHIPS }}
+                </v-chip>
+
+                <v-btn
+                  v-if="isLongPoolExpanded"
+                  icon="mdi-chevron-up"
+                  variant="text"
+                  size="x-small"
+                  @mousedown.stop="isLongPoolExpanded = false"
+                  class="ml-1"
+                ></v-btn>
+              </div>
+            </template>
+
             <template v-slot:prepend-item>
               <v-text-field
                 v-model="longSearch"
@@ -103,6 +140,7 @@
         </v-card>
       </v-col>
 
+      <!-- 空头币种池 -->
       <v-col cols="12" md="6">
         <v-card variant="tonal" class="pa-4" style="height: 100%">
           <div class="d-flex align-center mb-2">
@@ -128,8 +166,6 @@
             :items="filteredShortPoolItems"
             label="从总池中选择做空备选币种"
             multiple
-            chips
-            closable-chips
             clearable
             variant="outlined"
             hide-details
@@ -139,6 +175,45 @@
             hide-selected
             :close-on-content-click="false"
           >
+            <template v-slot:selection="{ item, index }">
+              <!-- 修正：只在第一个项目渲染时，创建整个自定义区域 -->
+              <div
+                v-if="index === 0"
+                class="selection-wrapper"
+                :class="{ 'is-expanded': isShortPoolExpanded }"
+              >
+                <!-- 内部正确循环v-model -->
+                <v-chip
+                  v-for="(poolItem, chipIndex) in shortPool"
+                  :key="`short-${poolItem}`"
+                  v-show="isShortPoolExpanded || chipIndex < MAX_VISIBLE_CHIPS"
+                  class="ma-1"
+                  closable
+                  @click:close="removePoolItemValue('short', poolItem)"
+                >
+                  <span>{{ poolItem }}</span>
+                </v-chip>
+
+                <v-chip
+                  v-if="!isShortPoolExpanded && shortPool.length > MAX_VISIBLE_CHIPS"
+                  class="ma-1"
+                  @mousedown.stop="isShortPoolExpanded = true"
+                  size="small"
+                >
+                  +{{ shortPool.length - MAX_VISIBLE_CHIPS }}
+                </v-chip>
+
+                <v-btn
+                  v-if="isShortPoolExpanded"
+                  icon="mdi-chevron-up"
+                  variant="text"
+                  size="x-small"
+                  @mousedown.stop="isShortPoolExpanded = false"
+                  class="ml-1"
+                ></v-btn>
+              </div>
+            </template>
+
             <template v-slot:prepend-item>
               <v-text-field
                 v-model="shortSearch"
@@ -179,6 +254,11 @@ import apiClient from '@/services/api'
 const settingsStore = useSettingsStore()
 const snackbarStore = useSnackbarStore()
 
+const MAX_VISIBLE_CHIPS = 3
+
+const isLongPoolExpanded = ref(false)
+const isShortPoolExpanded = ref(false)
+
 const longPool = ref([...settingsStore.availableLongCoins])
 const shortPool = ref([...settingsStore.availableShortCoins])
 const longSearch = ref('')
@@ -186,15 +266,19 @@ const shortSearch = ref('')
 const newCoinSymbol = ref('')
 const isAddingCoin = ref(false)
 
-// --- 核心修改：添加 watch 侦听器 ---
 watch(newCoinSymbol, (newValue) => {
-  // 检查新值是否存在，并且是否与它的大写版本不同
   if (newValue && newValue !== newValue.toUpperCase()) {
-    // 如果不同，则强制将其更新为大写
     newCoinSymbol.value = newValue.toUpperCase()
   }
 })
-// --- 修改结束 ---
+
+const removePoolItemValue = (poolType: 'long' | 'short', value: string) => {
+  const pool = poolType === 'long' ? longPool : shortPool
+  const index = pool.value.indexOf(value)
+  if (index >= 0) {
+    pool.value.splice(index, 1)
+  }
+}
 
 const allAvailableCoins = computed(() => [...new Set(settingsStore.availableCoins)].sort())
 const mapToSelectItems = (coins: string[]) => coins.map((coin) => ({ title: coin, value: coin }))
@@ -246,7 +330,7 @@ const savePools = async () => {
 }
 
 const addCoin = async () => {
-  const symbol = newCoinSymbol.value.trim() // 此处已经是大写了，只需 trim
+  const symbol = newCoinSymbol.value.trim()
   if (!symbol || isAddingCoin.value) return
 
   isAddingCoin.value = true
@@ -275,5 +359,31 @@ watch(
   { deep: true },
 )
 
+watch(longPool, (newVal) => {
+  if (newVal.length <= MAX_VISIBLE_CHIPS) {
+    isLongPoolExpanded.value = false
+  }
+})
+
+watch(shortPool, (newVal) => {
+  if (newVal.length <= MAX_VISIBLE_CHIPS) {
+    isShortPoolExpanded.value = false
+  }
+})
+
 defineExpose({ savePools })
 </script>
+
+<style scoped>
+.selection-wrapper {
+  display: flex;
+  flex-wrap: wrap;
+  width: 100%;
+  align-items: center;
+}
+
+.selection-wrapper.is-expanded {
+  max-height: 150px;
+  overflow-y: auto;
+}
+</style>

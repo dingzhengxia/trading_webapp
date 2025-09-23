@@ -1,4 +1,4 @@
-<!-- frontend/src/components/ControlPanel.vue (最终正确版) -->
+<!-- frontend/src/components/ControlPanel.vue (最终移动端优化版) -->
 <template>
   <v-card v-if="settingsStore.settings">
     <v-card-title class="text-h6">交易参数</v-card-title>
@@ -14,6 +14,7 @@
       <v-window :model-value="modelValue">
         <v-window-item value="general">
           <v-row>
+            <!-- 多头设置 -->
             <v-col cols="12" md="6">
               <v-card variant="outlined" class="d-flex flex-column" style="height: 100%">
                 <v-card-title>多头设置</v-card-title>
@@ -36,12 +37,52 @@
                     :items="filteredLongListItems"
                     label="从备选池中选择做多币种"
                     multiple
-                    chips
-                    closable-chips
                     hide-selected
                     :close-on-content-click="false"
                     :disabled="!settingsStore.settings.enable_long_trades"
                   >
+                    <template v-slot:selection="{ item, index }">
+                      <div
+                        v-if="index === 0"
+                        class="selection-wrapper"
+                        :class="{ 'is-expanded': isLongListExpanded }"
+                      >
+                        <v-chip
+                          v-for="(coin, chipIndex) in settingsStore.settings.long_coin_list"
+                          :key="`long-trade-${coin}`"
+                          v-show="isLongListExpanded || chipIndex < MAX_VISIBLE_CHIPS"
+                          class="ma-1"
+                          closable
+                          @click:close="removeListItemValue('long', coin)"
+                        >
+                          <span>{{ coin }}</span>
+                        </v-chip>
+
+                        <v-chip
+                          v-if="
+                            !isLongListExpanded &&
+                            settingsStore.settings.long_coin_list.length > MAX_VISIBLE_CHIPS
+                          "
+                          class="ma-1"
+                          @mousedown.stop="isLongListExpanded = true"
+                          size="small"
+                        >
+                          +{{
+                            settingsStore.settings.long_coin_list.length - MAX_VISIBLE_CHIPS
+                          }}
+                        </v-chip>
+
+                        <v-btn
+                          v-if="isLongListExpanded"
+                          icon="mdi-chevron-up"
+                          variant="text"
+                          size="x-small"
+                          @mousedown.stop="isLongListExpanded = false"
+                          class="ml-1"
+                        ></v-btn>
+                      </div>
+                    </template>
+
                     <template v-slot:prepend-item>
                       <v-text-field
                         v-model="longListSearch"
@@ -91,6 +132,7 @@
                 </v-card-text>
               </v-card>
             </v-col>
+            <!-- 空头设置 -->
             <v-col cols="12" md="6">
               <v-card variant="outlined" class="d-flex flex-column" style="height: 100%">
                 <v-card-title>空头设置</v-card-title>
@@ -113,12 +155,52 @@
                     :items="filteredShortListItems"
                     label="从备选池中选择空头币种"
                     multiple
-                    chips
-                    closable-chips
                     hide-selected
                     :close-on-content-click="false"
                     :disabled="!settingsStore.settings.enable_short_trades"
                   >
+                    <template v-slot:selection="{ item, index }">
+                      <div
+                        v-if="index === 0"
+                        class="selection-wrapper"
+                        :class="{ 'is-expanded': isShortListExpanded }"
+                      >
+                        <v-chip
+                          v-for="(coin, chipIndex) in settingsStore.settings.short_coin_list"
+                          :key="`short-trade-${coin}`"
+                          v-show="isShortListExpanded || chipIndex < MAX_VISIBLE_CHIPS"
+                          class="ma-1"
+                          closable
+                          @click:close="removeListItemValue('short', coin)"
+                        >
+                          <span>{{ coin }}</span>
+                        </v-chip>
+
+                        <v-chip
+                          v-if="
+                            !isShortListExpanded &&
+                            settingsStore.settings.short_coin_list.length > MAX_VISIBLE_CHIPS
+                          "
+                          class="ma-1"
+                          @mousedown.stop="isShortListExpanded = true"
+                          size="small"
+                        >
+                          +{{
+                            settingsStore.settings.short_coin_list.length - MAX_VISIBLE_CHIPS
+                          }}
+                        </v-chip>
+
+                        <v-btn
+                          v-if="isShortListExpanded"
+                          icon="mdi-chevron-up"
+                          variant="text"
+                          size="x-small"
+                          @mousedown.stop="isShortListExpanded = false"
+                          class="ml-1"
+                        ></v-btn>
+                      </div>
+                    </template>
+
                     <template v-slot:prepend-item>
                       <v-text-field
                         v-model="shortListSearch"
@@ -262,6 +344,10 @@ const uiStore = useUiStore()
 const longListSearch = ref('')
 const shortListSearch = ref('')
 
+const MAX_VISIBLE_CHIPS = 3
+const isLongListExpanded = ref(false)
+const isShortListExpanded = ref(false)
+
 const filteredLongListItems = computed(() => {
   if (!longListSearch.value) return settingsStore.availableLongCoins
   return settingsStore.availableLongCoins.filter((c) =>
@@ -275,6 +361,18 @@ const filteredShortListItems = computed(() => {
     c.toLowerCase().includes(shortListSearch.value.toLowerCase()),
   )
 })
+
+const removeListItemValue = (listType: 'long' | 'short', value: string) => {
+  if (!settingsStore.settings) return
+  const list =
+    listType === 'long'
+      ? settingsStore.settings.long_coin_list
+      : settingsStore.settings.short_coin_list
+  const index = list.indexOf(value)
+  if (index >= 0) {
+    list.splice(index, 1)
+  }
+}
 
 const rebalanceMethods = [
   { value: 'multi_factor_weakest', text: '多因子弱势策略' },
@@ -294,4 +392,38 @@ watch(
   },
   { deep: true },
 )
+
+watch(
+  () => settingsStore.settings?.long_coin_list,
+  (newList) => {
+    if (newList && newList.length <= MAX_VISIBLE_CHIPS) {
+      isLongListExpanded.value = false
+    }
+  },
+  { deep: true },
+)
+
+watch(
+  () => settingsStore.settings?.short_coin_list,
+  (newList) => {
+    if (newList && newList.length <= MAX_VISIBLE_CHIPS) {
+      isShortListExpanded.value = false
+    }
+  },
+  { deep: true },
+)
 </script>
+
+<style scoped>
+.selection-wrapper {
+  display: flex;
+  flex-wrap: wrap;
+  width: 100%;
+  align-items: center;
+}
+
+.selection-wrapper.is-expanded {
+  max-height: 150px; /* 您可以根据需要调整这个高度 */
+  overflow-y: auto;
+}
+</style>
