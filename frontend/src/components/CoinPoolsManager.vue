@@ -1,4 +1,4 @@
-<!-- frontend/src/components/CoinPoolsManager.vue (自动大写修正版) -->
+<!-- frontend/src/components/CoinPoolsManager.vue (已优化) -->
 <template>
   <div>
     <!-- --- 添加新币种UI保持不变，但逻辑已更新 --- -->
@@ -75,6 +75,17 @@
             hide-selected
             :close-on-content-click="false"
           >
+            <!-- --- 新增：折叠显示已选项 --- -->
+            <template v-slot:selection="{ item, index }">
+              <v-chip v-if="index < 5">
+                <span>{{ item.title }}</span>
+              </v-chip>
+              <span v-if="index === 5" class="text-grey text-caption align-self-center ml-1">
+                (+{{ longPool.length - 5 }} 更多)
+              </span>
+            </template>
+            <!-- --- 修改结束 --- -->
+
             <template v-slot:prepend-item>
               <v-text-field
                 v-model="longSearch"
@@ -139,6 +150,17 @@
             hide-selected
             :close-on-content-click="false"
           >
+            <!-- --- 新增：折叠显示已选项 --- -->
+            <template v-slot:selection="{ item, index }">
+              <v-chip v-if="index < 5">
+                <span>{{ item.title }}</span>
+              </v-chip>
+              <span v-if="index === 5" class="text-grey text-caption align-self-center ml-1">
+                (+{{ shortPool.length - 5 }} 更多)
+              </span>
+            </template>
+            <!-- --- 修改结束 --- -->
+
             <template v-slot:prepend-item>
               <v-text-field
                 v-model="shortSearch"

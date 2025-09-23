@@ -1,4 +1,4 @@
-<!-- frontend/src/components/ControlPanel.vue (最终正确版) -->
+<!-- frontend/src/components/ControlPanel.vue (已优化) -->
 <template>
   <v-card v-if="settingsStore.settings">
     <v-card-title class="text-h6">交易参数</v-card-title>
@@ -42,6 +42,20 @@
                     :close-on-content-click="false"
                     :disabled="!settingsStore.settings.enable_long_trades"
                   >
+                    <!-- --- 新增：折叠显示已选项 --- -->
+                    <template v-slot:selection="{ item, index }">
+                      <v-chip v-if="index < 4">
+                        <span>{{ item.title }}</span>
+                      </v-chip>
+                      <span
+                        v-if="index === 4"
+                        class="text-grey text-caption align-self-center ml-1"
+                      >
+                        (+{{ settingsStore.settings.long_coin_list.length - 4 }} 更多)
+                      </span>
+                    </template>
+                    <!-- --- 修改结束 --- -->
+
                     <template v-slot:prepend-item>
                       <v-text-field
                         v-model="longListSearch"
@@ -119,6 +133,20 @@
                     :close-on-content-click="false"
                     :disabled="!settingsStore.settings.enable_short_trades"
                   >
+                    <!-- --- 新增：折叠显示已选项 --- -->
+                    <template v-slot:selection="{ item, index }">
+                      <v-chip v-if="index < 4">
+                        <span>{{ item.title }}</span>
+                      </v-chip>
+                      <span
+                        v-if="index === 4"
+                        class="text-grey text-caption align-self-center ml-1"
+                      >
+                        (+{{ settingsStore.settings.short_coin_list.length - 4 }} 更多)
+                      </span>
+                    </template>
+                    <!-- --- 修改结束 --- -->
+
                     <template v-slot:prepend-item>
                       <v-text-field
                         v-model="shortListSearch"
