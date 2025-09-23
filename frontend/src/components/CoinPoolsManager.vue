@@ -383,7 +383,7 @@ defineExpose({ savePools })
 }
 
 .selection-wrapper.is-expanded {
-  max-height: 150px;
+  max-height: 350px;
   overflow-y: auto;
 }
 </style>

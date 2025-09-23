@@ -423,7 +423,7 @@ watch(
 }
 
 .selection-wrapper.is-expanded {
-  max-height: 150px; /* 您可以根据需要调整这个高度 */
+  max-height: 350px; /* 您可以根据需要调整这个高度 */
   overflow-y: auto;
 }
 </style>
