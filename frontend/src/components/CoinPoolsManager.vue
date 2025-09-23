@@ -1,4 +1,4 @@
-<!-- frontend/src/components/CoinPoolsManager.vue (最终完美版) -->
+<!-- frontend/src/components/CoinPoolsManager.vue (状态同步修正版) -->
 <template>
   <div>
     <!-- 添加新币种UI -->
@@ -74,18 +74,24 @@
             :close-on-content-click="false"
           >
             <template v-slot:selection="{ item, index }">
-                <!-- 修正后的显示逻辑 -->
+              <div
+                v-if="index === 0"
+                class="selection-wrapper"
+                :class="{ 'is-expanded': isLongPoolExpanded }"
+              >
                 <v-chip
-                  v-if="isLongPoolExpanded || index < MAX_VISIBLE_CHIPS"
+                  v-for="(poolItem, chipIndex) in longPool"
+                  :key="`long-${poolItem}`"
+                  v-show="isLongPoolExpanded || chipIndex < MAX_VISIBLE_CHIPS"
                   class="ma-1"
                   closable
-                  @click:close="removePoolItem('long', item)"
+                  @click:close="removePoolItemValue('long', poolItem)"
                 >
-                  <span>{{ item.title }}</span>
+                  <span>{{ poolItem }}</span>
                 </v-chip>
 
                 <v-chip
-                  v-if="!isLongPoolExpanded && index === MAX_VISIBLE_CHIPS"
+                  v-if="!isLongPoolExpanded && longPool.length > MAX_VISIBLE_CHIPS"
                   class="ma-1"
                   @mousedown.stop="isLongPoolExpanded = true"
                   size="small"
@@ -94,13 +100,14 @@
                 </v-chip>
 
                 <v-btn
-                  v-if="isLongPoolExpanded && index === longPool.length - 1"
+                  v-if="isLongPoolExpanded"
                   icon="mdi-chevron-up"
                   variant="text"
                   size="x-small"
                   @mousedown.stop="isLongPoolExpanded = false"
                   class="ml-1"
                 ></v-btn>
+              </div>
             </template>
 
             <template v-slot:prepend-item>
@@ -167,18 +174,24 @@
             :close-on-content-click="false"
           >
             <template v-slot:selection="{ item, index }">
-                <!-- 修正后的显示逻辑 -->
+              <div
+                v-if="index === 0"
+                class="selection-wrapper"
+                :class="{ 'is-expanded': isShortPoolExpanded }"
+              >
                 <v-chip
-                  v-if="isShortPoolExpanded || index < MAX_VISIBLE_CHIPS"
+                  v-for="(poolItem, chipIndex) in shortPool"
+                  :key="`short-${poolItem}`"
+                  v-show="isShortPoolExpanded || chipIndex < MAX_VISIBLE_CHIPS"
                   class="ma-1"
                   closable
-                  @click:close="removePoolItem('short', item)"
+                  @click:close="removePoolItemValue('short', poolItem)"
                 >
-                  <span>{{ item.title }}</span>
+                  <span>{{ poolItem }}</span>
                 </v-chip>
 
                 <v-chip
-                  v-if="!isShortPoolExpanded && index === MAX_VISIBLE_CHIPS"
+                  v-if="!isShortPoolExpanded && shortPool.length > MAX_VISIBLE_CHIPS"
                   class="ma-1"
                   @mousedown.stop="isShortPoolExpanded = true"
                   size="small"
@@ -187,13 +200,14 @@
                 </v-chip>
 
                 <v-btn
-                  v-if="isShortPoolExpanded && index === shortPool.length - 1"
+                  v-if="isShortPoolExpanded"
                   icon="mdi-chevron-up"
                   variant="text"
                   size="x-small"
                   @mousedown.stop="isShortPoolExpanded = false"
                   class="ml-1"
                 ></v-btn>
+              </div>
             </template>
 
             <template v-slot:prepend-item>
@@ -254,10 +268,9 @@ watch(newCoinSymbol, (newValue) => {
   }
 })
 
-// REFACTOR: 修正为使用 item 对象
-const removePoolItem = (poolType: 'long' | 'short', item: { value: string }) => {
+const removePoolItemValue = (poolType: 'long' | 'short', value: string) => {
   const pool = poolType === 'long' ? longPool : shortPool
-  const index = pool.value.indexOf(item.value)
+  const index = pool.value.indexOf(value)
   if (index >= 0) {
     pool.value.splice(index, 1)
   }
@@ -318,12 +331,15 @@ const addCoin = async () => {
 
   isAddingCoin.value = true
   try {
-    const response = await apiClient.post('/api/settings/add-coin', { coin: symbol })
-    settingsStore.availableCoins = response.data
+    // 1. 发送请求到后端
+    await apiClient.post('/api/settings/add-coin', { coin: symbol })
+
+    // 2. 关键修正：调用 fetchSettings() 刷新整个设置状态
+    await settingsStore.fetchSettings()
+
     newCoinSymbol.value = ''
     snackbarStore.show({ message: `币种 '${symbol}' 添加成功！`, color: 'success' })
-  } catch (error: any)
-{
+  } catch (error: any) {
     const errorMsg = error.response?.data?.detail || error.message
     snackbarStore.show({ message: `添加失败: ${errorMsg}`, color: 'error' })
   } finally {
@@ -359,10 +375,6 @@ defineExpose({ savePools })
 </script>
 
 <style scoped>
-/*
-  v-select 的 selection 插槽默认会把所有内容放在一个 flex 容器里，
-  为了让我们的滚动容器能正确工作，需要让它占据全部宽度。
-*/
 .selection-wrapper {
   display: flex;
   flex-wrap: wrap;
@@ -371,7 +383,7 @@ defineExpose({ savePools })
 }
 
 .selection-wrapper.is-expanded {
-  max-height: 350px;
+  max-height: 150px;
   overflow-y: auto;
 }
 </style>
