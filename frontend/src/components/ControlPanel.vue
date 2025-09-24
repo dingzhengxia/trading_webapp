@@ -1,4 +1,4 @@
-<!-- frontend/src/components/ControlPanel.vue (排序和选择行为优化版) -->
+<!-- frontend/src/components/ControlPanel.vue (完整功能最终版) -->
 <template>
   <v-card v-if="settingsStore.settings">
     <v-card-title class="text-h6">交易参数</v-card-title>
@@ -19,7 +19,6 @@
               <v-card variant="outlined" class="d-flex flex-column" style="height: 100%">
                 <v-card-title>多头设置</v-card-title>
                 <v-card-text class="flex-grow-1">
-                  <!-- ... 其他表单项 ... -->
                   <v-switch
                     v-model="settingsStore.settings.enable_long_trades"
                     label="开启多头交易"
@@ -42,9 +41,8 @@
                     :close-on-content-click="false"
                     :disabled="!settingsStore.settings.enable_long_trades"
                   >
-                    <!-- selection 插槽保持不变 -->
                     <template v-slot:selection="{ item, index }">
-                       <div
+                      <div
                         v-if="index === 0"
                         class="selection-wrapper"
                         :class="{ 'is-expanded': isLongListExpanded }"
@@ -83,33 +81,31 @@
                       </div>
                     </template>
 
-                    <!-- prepend-item 插槽增加 v-switch -->
                     <template v-slot:prepend-item>
                       <div class="d-flex align-center px-4 pt-2 pb-1">
                         <v-text-field
-                            v-model="longListSearch"
-                            placeholder="搜索币种..."
-                            variant="underlined"
-                            density="compact"
-                            hide-details
-                            class="mr-2"
-                            @click.stop
+                          v-model="longListSearch"
+                          placeholder="搜索币种..."
+                          variant="underlined"
+                          density="compact"
+                          hide-details
+                          class="mr-2"
+                          @click.stop
                         ></v-text-field>
                         <v-switch
-                            v-model="longListShowAll"
-                            label="显示已选"
-                            density="compact"
-                            color="primary"
-                            hide-details
-                            class="flex-shrink-0"
-                            @click.stop
+                          v-model="longListShowAll"
+                          label="显示已选"
+                          density="compact"
+                          color="primary"
+                          hide-details
+                          class="flex-shrink-0"
+                          @click.stop
                         ></v-switch>
                       </div>
                       <v-divider></v-divider>
                     </template>
                   </v-select>
 
-                  <!-- ... 其他表单项 ... -->
                   <v-btn
                     size="small"
                     @click="uiStore.showWeightDialog = true"
@@ -150,7 +146,6 @@
               <v-card variant="outlined" class="d-flex flex-column" style="height: 100%">
                 <v-card-title>空头设置</v-card-title>
                 <v-card-text class="flex-grow-1">
-                  <!-- ... 其他表单项 ... -->
                   <v-switch
                     v-model="settingsStore.settings.enable_short_trades"
                     label="开启空头交易"
@@ -173,9 +168,8 @@
                     :close-on-content-click="false"
                     :disabled="!settingsStore.settings.enable_short_trades"
                   >
-                    <!-- selection 插槽保持不变 -->
                     <template v-slot:selection="{ item, index }">
-                       <div
+                      <div
                         v-if="index === 0"
                         class="selection-wrapper"
                         :class="{ 'is-expanded': isShortListExpanded }"
@@ -214,33 +208,31 @@
                       </div>
                     </template>
 
-                    <!-- prepend-item 插槽增加 v-switch -->
                     <template v-slot:prepend-item>
                       <div class="d-flex align-center px-4 pt-2 pb-1">
                         <v-text-field
-                            v-model="shortListSearch"
-                            placeholder="搜索币种..."
-                            variant="underlined"
-                            density="compact"
-                            hide-details
-                            class="mr-2"
-                            @click.stop
+                          v-model="shortListSearch"
+                          placeholder="搜索币种..."
+                          variant="underlined"
+                          density="compact"
+                          hide-details
+                          class="mr-2"
+                          @click.stop
                         ></v-text-field>
                         <v-switch
-                            v-model="shortListShowAll"
-                            label="显示已选"
-                            density="compact"
-                            color="primary"
-                            hide-details
-                            class="flex-shrink-0"
-                            @click.stop
+                          v-model="shortListShowAll"
+                          label="显示已选"
+                          density="compact"
+                          color="primary"
+                          hide-details
+                          class="flex-shrink-0"
+                          @click.stop
                         ></v-switch>
                       </div>
                       <v-divider></v-divider>
                     </template>
                   </v-select>
 
-                  <!-- ... 其他表单项 ... -->
                   <v-divider class="my-4"></v-divider>
                   <v-switch
                     v-model="settingsStore.settings.enable_short_sl_tp"
@@ -273,9 +265,81 @@
           </v-row>
         </v-window-item>
 
-        <!-- rebalance tab remains unchanged -->
+        <!-- 恢复的智能再平衡设置 -->
         <v-window-item value="rebalance">
-           <!-- ... -->
+          <p class="mb-4">根据市场指标动态筛选弱势币种，并生成调整空头仓位的交易计划。</p>
+          <v-row>
+            <v-col cols="12" md="6">
+              <v-select
+                v-model="settingsStore.settings.rebalance_method"
+                :items="rebalanceMethods"
+                item-title="text"
+                item-value="value"
+                label="筛选策略"
+                variant="outlined"
+                density="compact"
+              ></v-select>
+              <v-text-field
+                v-model.number="settingsStore.settings.rebalance_top_n"
+                label="目标币种数量 (Top N)"
+                type="number"
+                variant="outlined"
+                density="compact"
+              ></v-text-field>
+              <v-text-field
+                v-model.number="settingsStore.settings.rebalance_min_volume_usd"
+                label="最小24h交易额 (USD)"
+                type="number"
+                variant="outlined"
+                density="compact"
+              ></v-text-field>
+              <v-text-field
+                v-model.number="settingsStore.settings.rebalance_volume_ma_days"
+                label="成交量均线天数 (MA)"
+                type="number"
+                hint="用于计算平均成交量"
+                persistent-hint
+                variant="outlined"
+                density="compact"
+              ></v-text-field>
+            </v-col>
+            <v-col cols="12" md="6">
+              <div v-if="settingsStore.settings.rebalance_method === 'multi_factor_weakest'">
+                <v-text-field
+                  v-model.number="settingsStore.settings.rebalance_abs_momentum_days"
+                  label="绝对动量天数"
+                  type="number"
+                  variant="outlined"
+                  density="compact"
+                ></v-text-field>
+                <v-text-field
+                  v-model.number="settingsStore.settings.rebalance_rel_strength_days"
+                  label="相对强度天数 (vs BTC)"
+                  type="number"
+                  variant="outlined"
+                  density="compact"
+                ></v-text-field>
+              </div>
+              <div v-if="settingsStore.settings.rebalance_method === 'foam'">
+                <v-text-field
+                  v-model.number="settingsStore.settings.rebalance_foam_days"
+                  label="FOAM动量天数"
+                  type="number"
+                  variant="outlined"
+                  density="compact"
+                ></v-text-field>
+              </div>
+              <v-text-field
+                v-model.number="settingsStore.settings.rebalance_volume_spike_ratio"
+                label="成交量放大过滤倍数"
+                type="number"
+                hint="最近成交量 > N倍均量则过滤"
+                persistent-hint
+                variant="outlined"
+                density="compact"
+              ></v-text-field>
+            </v-col>
+          </v-row>
         </v-window-item>
       </v-window>
     </v-card-text>
@@ -291,7 +355,6 @@ import { useUiStore } from '@/stores/uiStore'
 import WeightConfigDialog from './WeightConfigDialog.vue'
 import { debounce } from 'lodash-es'
 
-// ... script setup ...
 const modelValue = defineModel<string>()
 
 const settingsStore = useSettingsStore()
@@ -304,10 +367,8 @@ const MAX_VISIBLE_CHIPS = 3
 const isLongListExpanded = ref(false)
 const isShortListExpanded = ref(false)
 
-// 关键修改：新增状态
 const longListShowAll = ref(false)
 const shortListShowAll = ref(false)
-
 
 const sortedLongListItems = computed(() => [...settingsStore.availableLongCoins].sort())
 const sortedShortListItems = computed(() => [...settingsStore.availableShortCoins].sort())
@@ -363,10 +424,10 @@ watch(
   () => settingsStore.settings?.long_coin_list,
   (newList) => {
     if (newList) {
-        if (newList.length <= MAX_VISIBLE_CHIPS) {
-            isLongListExpanded.value = false
-        }
-        newList.sort()
+      if (newList.length <= MAX_VISIBLE_CHIPS) {
+        isLongListExpanded.value = false
+      }
+      newList.sort()
     }
   },
   { deep: true },
@@ -376,10 +437,10 @@ watch(
   () => settingsStore.settings?.short_coin_list,
   (newList) => {
     if (newList) {
-        if (newList.length <= MAX_VISIBLE_CHIPS) {
-            isShortListExpanded.value = false
-        }
-        newList.sort()
+      if (newList.length <= MAX_VISIBLE_CHIPS) {
+        isShortListExpanded.value = false
+      }
+      newList.sort()
     }
   },
   { deep: true },
@@ -395,7 +456,7 @@ watch(
 }
 
 .selection-wrapper.is-expanded {
-  max-height: 150px;
+  max-height: 350px;
   overflow-y: auto;
 }
 </style>
