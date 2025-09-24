@@ -1,4 +1,4 @@
-<!-- frontend/src/components/CoinPoolsManager.vue (排序和选择行为优化版) -->
+<!-- frontend/src/components/CoinPoolsManager.vue (最终版) -->
 <template>
   <div>
     <!-- 添加新币种UI -->
@@ -70,9 +70,10 @@
             item-title="title"
             item-value="value"
             :menu-props="{ maxHeight: '300px' }"
-            hide-selected <!-- 关键修改 -->
+            :hide-selected="!longPoolShowAll"
             :close-on-content-click="false"
           >
+            <!-- selection 插槽保持不变 -->
             <template v-slot:selection="{ item, index }">
               <div
                 v-if="index === 0"
@@ -89,7 +90,6 @@
                 >
                   <span>{{ poolItem }}</span>
                 </v-chip>
-
                 <v-chip
                   v-if="!isLongPoolExpanded && longPool.length > MAX_VISIBLE_CHIPS"
                   class="ma-1"
@@ -98,7 +98,6 @@
                 >
                   +{{ longPool.length - MAX_VISIBLE_CHIPS }}
                 </v-chip>
-
                 <v-btn
                   v-if="isLongPoolExpanded"
                   icon="mdi-chevron-up"
@@ -110,16 +109,28 @@
               </div>
             </template>
 
+            <!-- prepend-item 插槽增加 v-switch -->
             <template v-slot:prepend-item>
-              <v-text-field
-                v-model="longSearch"
-                placeholder="搜索币种..."
-                variant="underlined"
-                density="compact"
-                hide-details
-                class="px-4 mb-2"
-                @click.stop
-              ></v-text-field>
+              <div class="d-flex align-center px-4 pt-2 pb-1">
+                <v-text-field
+                  v-model="longSearch"
+                  placeholder="搜索币种..."
+                  variant="underlined"
+                  density="compact"
+                  hide-details
+                  class="mr-2"
+                  @click.stop
+                ></v-text-field>
+                <v-switch
+                  v-model="longPoolShowAll"
+                  label="显示已选"
+                  density="compact"
+                  color="primary"
+                  hide-details
+                  class="flex-shrink-0"
+                  @click.stop
+                ></v-switch>
+              </div>
               <v-divider></v-divider>
             </template>
 
@@ -170,9 +181,10 @@
             item-title="title"
             item-value="value"
             :menu-props="{ maxHeight: '300px' }"
-            hide-selected <!-- 关键修改 -->
+            :hide-selected="!shortPoolShowAll"
             :close-on-content-click="false"
           >
+            <!-- selection 插槽保持不变 -->
             <template v-slot:selection="{ item, index }">
               <div
                 v-if="index === 0"
@@ -189,7 +201,6 @@
                 >
                   <span>{{ poolItem }}</span>
                 </v-chip>
-
                 <v-chip
                   v-if="!isShortPoolExpanded && shortPool.length > MAX_VISIBLE_CHIPS"
                   class="ma-1"
@@ -198,7 +209,6 @@
                 >
                   +{{ shortPool.length - MAX_VISIBLE_CHIPS }}
                 </v-chip>
-
                 <v-btn
                   v-if="isShortPoolExpanded"
                   icon="mdi-chevron-up"
@@ -210,16 +220,28 @@
               </div>
             </template>
 
+            <!-- prepend-item 插槽增加 v-switch -->
             <template v-slot:prepend-item>
-              <v-text-field
-                v-model="shortSearch"
-                placeholder="搜索币种..."
-                variant="underlined"
-                density="compact"
-                hide-details
-                class="px-4 mb-2"
-                @click.stop
-              ></v-text-field>
+                <div class="d-flex align-center px-4 pt-2 pb-1">
+                    <v-text-field
+                    v-model="shortSearch"
+                    placeholder="搜索币种..."
+                    variant="underlined"
+                    density="compact"
+                    hide-details
+                    class="mr-2"
+                    @click.stop
+                    ></v-text-field>
+                    <v-switch
+                    v-model="shortPoolShowAll"
+                    label="显示已选"
+                    density="compact"
+                    color="primary"
+                    hide-details
+                    class="flex-shrink-0"
+                    @click.stop
+                    ></v-switch>
+                </div>
               <v-divider></v-divider>
             </template>
 
@@ -247,6 +269,7 @@ import { useSettingsStore } from '@/stores/settingsStore'
 import { useSnackbarStore } from '@/stores/snackbar'
 import apiClient from '@/services/api'
 
+// ... script setup ...
 const settingsStore = useSettingsStore()
 const snackbarStore = useSnackbarStore()
 
@@ -254,6 +277,11 @@ const MAX_VISIBLE_CHIPS = 3
 
 const isLongPoolExpanded = ref(false)
 const isShortPoolExpanded = ref(false)
+
+// 关键修改：新增状态
+const longPoolShowAll = ref(false)
+const shortPoolShowAll = ref(false)
+
 
 const longPool = ref([...settingsStore.availableLongCoins])
 const shortPool = ref([...settingsStore.availableShortCoins])
@@ -276,9 +304,7 @@ const removePoolItemValue = (poolType: 'long' | 'short', value: string) => {
   }
 }
 
-// 关键修改：确保源数据已排序
 const allAvailableCoins = computed(() => [...new Set(settingsStore.availableCoins)].sort())
-
 const mapToSelectItems = (coins: string[]) => coins.map((coin) => ({ title: coin, value: coin }))
 
 const availableForLongPool = computed(() => {
@@ -347,13 +373,13 @@ const addCoin = async () => {
 
 watch(
   () => settingsStore.availableLongCoins,
-  (newVal) => (longPool.value = [...newVal].sort()), // 关键修改：同时排序
+  (newVal) => (longPool.value = [...newVal].sort()),
   { deep: true },
 )
 
 watch(
   () => settingsStore.availableShortCoins,
-  (newVal) => (shortPool.value = [...newVal].sort()), // 关键修改：同时排序
+  (newVal) => (shortPool.value = [...newVal].sort()),
   { deep: true },
 )
 
@@ -361,14 +387,14 @@ watch(longPool, (newVal) => {
   if (newVal.length <= MAX_VISIBLE_CHIPS) {
     isLongPoolExpanded.value = false
   }
-  newVal.sort() // 关键修改：确保v-model数组本身也是有序的
+  newVal.sort()
 })
 
 watch(shortPool, (newVal) => {
   if (newVal.length <= MAX_VISIBLE_CHIPS) {
     isShortPoolExpanded.value = false
   }
-  newVal.sort() // 关键修改：确保v-model数组本身也是有序的
+  newVal.sort()
 })
 
 defineExpose({ savePools })

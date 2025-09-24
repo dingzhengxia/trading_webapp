@@ -19,6 +19,7 @@
               <v-card variant="outlined" class="d-flex flex-column" style="height: 100%">
                 <v-card-title>多头设置</v-card-title>
                 <v-card-text class="flex-grow-1">
+                  <!-- ... 其他表单项 ... -->
                   <v-switch
                     v-model="settingsStore.settings.enable_long_trades"
                     label="开启多头交易"
@@ -37,12 +38,13 @@
                     :items="filteredLongListItems"
                     label="从备选池中选择做多币种"
                     multiple
-                    hide-selected <!-- 关键修改 -->
+                    :hide-selected="!longListShowAll"
                     :close-on-content-click="false"
                     :disabled="!settingsStore.settings.enable_long_trades"
                   >
+                    <!-- selection 插槽保持不变 -->
                     <template v-slot:selection="{ item, index }">
-                      <div
+                       <div
                         v-if="index === 0"
                         class="selection-wrapper"
                         :class="{ 'is-expanded': isLongListExpanded }"
@@ -57,7 +59,6 @@
                         >
                           <span>{{ coin }}</span>
                         </v-chip>
-
                         <v-chip
                           v-if="
                             !isLongListExpanded &&
@@ -71,7 +72,6 @@
                             settingsStore.settings.long_coin_list.length - MAX_VISIBLE_CHIPS
                           }}
                         </v-chip>
-
                         <v-btn
                           v-if="isLongListExpanded"
                           icon="mdi-chevron-up"
@@ -83,20 +83,33 @@
                       </div>
                     </template>
 
+                    <!-- prepend-item 插槽增加 v-switch -->
                     <template v-slot:prepend-item>
-                      <v-text-field
-                        v-model="longListSearch"
-                        placeholder="搜索币种..."
-                        variant="underlined"
-                        density="compact"
-                        hide-details
-                        class="px-4 mb-2"
-                        @click.stop
-                      ></v-text-field>
+                      <div class="d-flex align-center px-4 pt-2 pb-1">
+                        <v-text-field
+                            v-model="longListSearch"
+                            placeholder="搜索币种..."
+                            variant="underlined"
+                            density="compact"
+                            hide-details
+                            class="mr-2"
+                            @click.stop
+                        ></v-text-field>
+                        <v-switch
+                            v-model="longListShowAll"
+                            label="显示已选"
+                            density="compact"
+                            color="primary"
+                            hide-details
+                            class="flex-shrink-0"
+                            @click.stop
+                        ></v-switch>
+                      </div>
                       <v-divider></v-divider>
                     </template>
                   </v-select>
 
+                  <!-- ... 其他表单项 ... -->
                   <v-btn
                     size="small"
                     @click="uiStore.showWeightDialog = true"
@@ -137,6 +150,7 @@
               <v-card variant="outlined" class="d-flex flex-column" style="height: 100%">
                 <v-card-title>空头设置</v-card-title>
                 <v-card-text class="flex-grow-1">
+                  <!-- ... 其他表单项 ... -->
                   <v-switch
                     v-model="settingsStore.settings.enable_short_trades"
                     label="开启空头交易"
@@ -155,12 +169,13 @@
                     :items="filteredShortListItems"
                     label="从备选池中选择空头币种"
                     multiple
-                    hide-selected <!-- 关键修改 -->
+                    :hide-selected="!shortListShowAll"
                     :close-on-content-click="false"
                     :disabled="!settingsStore.settings.enable_short_trades"
                   >
+                    <!-- selection 插槽保持不变 -->
                     <template v-slot:selection="{ item, index }">
-                      <div
+                       <div
                         v-if="index === 0"
                         class="selection-wrapper"
                         :class="{ 'is-expanded': isShortListExpanded }"
@@ -175,7 +190,6 @@
                         >
                           <span>{{ coin }}</span>
                         </v-chip>
-
                         <v-chip
                           v-if="
                             !isShortListExpanded &&
@@ -189,7 +203,6 @@
                             settingsStore.settings.short_coin_list.length - MAX_VISIBLE_CHIPS
                           }}
                         </v-chip>
-
                         <v-btn
                           v-if="isShortListExpanded"
                           icon="mdi-chevron-up"
@@ -201,20 +214,33 @@
                       </div>
                     </template>
 
+                    <!-- prepend-item 插槽增加 v-switch -->
                     <template v-slot:prepend-item>
-                      <v-text-field
-                        v-model="shortListSearch"
-                        placeholder="搜索币种..."
-                        variant="underlined"
-                        density="compact"
-                        hide-details
-                        class="px-4 mb-2"
-                        @click.stop
-                      ></v-text-field>
+                      <div class="d-flex align-center px-4 pt-2 pb-1">
+                        <v-text-field
+                            v-model="shortListSearch"
+                            placeholder="搜索币种..."
+                            variant="underlined"
+                            density="compact"
+                            hide-details
+                            class="mr-2"
+                            @click.stop
+                        ></v-text-field>
+                        <v-switch
+                            v-model="shortListShowAll"
+                            label="显示已选"
+                            density="compact"
+                            color="primary"
+                            hide-details
+                            class="flex-shrink-0"
+                            @click.stop
+                        ></v-switch>
+                      </div>
                       <v-divider></v-divider>
                     </template>
                   </v-select>
 
+                  <!-- ... 其他表单项 ... -->
                   <v-divider class="my-4"></v-divider>
                   <v-switch
                     v-model="settingsStore.settings.enable_short_sl_tp"
@@ -247,8 +273,9 @@
           </v-row>
         </v-window-item>
 
+        <!-- rebalance tab remains unchanged -->
         <v-window-item value="rebalance">
-          <!-- Rebalance settings UI remains unchanged -->
+           <!-- ... -->
         </v-window-item>
       </v-window>
     </v-card-text>
@@ -264,6 +291,7 @@ import { useUiStore } from '@/stores/uiStore'
 import WeightConfigDialog from './WeightConfigDialog.vue'
 import { debounce } from 'lodash-es'
 
+// ... script setup ...
 const modelValue = defineModel<string>()
 
 const settingsStore = useSettingsStore()
@@ -276,10 +304,13 @@ const MAX_VISIBLE_CHIPS = 3
 const isLongListExpanded = ref(false)
 const isShortListExpanded = ref(false)
 
-// 关键修改：确保下拉列表源数据是排序的
+// 关键修改：新增状态
+const longListShowAll = ref(false)
+const shortListShowAll = ref(false)
+
+
 const sortedLongListItems = computed(() => [...settingsStore.availableLongCoins].sort())
 const sortedShortListItems = computed(() => [...settingsStore.availableShortCoins].sort())
-
 
 const filteredLongListItems = computed(() => {
   const source = sortedLongListItems.value
@@ -335,7 +366,7 @@ watch(
         if (newList.length <= MAX_VISIBLE_CHIPS) {
             isLongListExpanded.value = false
         }
-        newList.sort() // 关键修改：确保v-model数组本身也是有序的
+        newList.sort()
     }
   },
   { deep: true },
@@ -348,7 +379,7 @@ watch(
         if (newList.length <= MAX_VISIBLE_CHIPS) {
             isShortListExpanded.value = false
         }
-        newList.sort() // 关键修改：确保v-model数组本身也是有序的
+        newList.sort()
     }
   },
   { deep: true },
