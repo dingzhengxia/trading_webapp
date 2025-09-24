@@ -1,4 +1,4 @@
-<!-- frontend/src/components/CoinPoolsManager.vue (状态同步修正版) -->
+<!-- frontend/src/components/CoinPoolsManager.vue (排序和选择行为优化版) -->
 <template>
   <div>
     <!-- 添加新币种UI -->
@@ -70,7 +70,7 @@
             item-title="title"
             item-value="value"
             :menu-props="{ maxHeight: '300px' }"
-            hide-selected
+            hide-selected <!-- 关键修改 -->
             :close-on-content-click="false"
           >
             <template v-slot:selection="{ item, index }">
@@ -170,7 +170,7 @@
             item-title="title"
             item-value="value"
             :menu-props="{ maxHeight: '300px' }"
-            hide-selected
+            hide-selected <!-- 关键修改 -->
             :close-on-content-click="false"
           >
             <template v-slot:selection="{ item, index }">
@@ -276,7 +276,9 @@ const removePoolItemValue = (poolType: 'long' | 'short', value: string) => {
   }
 }
 
+// 关键修改：确保源数据已排序
 const allAvailableCoins = computed(() => [...new Set(settingsStore.availableCoins)].sort())
+
 const mapToSelectItems = (coins: string[]) => coins.map((coin) => ({ title: coin, value: coin }))
 
 const availableForLongPool = computed(() => {
@@ -331,12 +333,8 @@ const addCoin = async () => {
 
   isAddingCoin.value = true
   try {
-    // 1. 发送请求到后端
     await apiClient.post('/api/settings/add-coin', { coin: symbol })
-
-    // 2. 关键修正：调用 fetchSettings() 刷新整个设置状态
     await settingsStore.fetchSettings()
-
     newCoinSymbol.value = ''
     snackbarStore.show({ message: `币种 '${symbol}' 添加成功！`, color: 'success' })
   } catch (error: any) {
@@ -349,13 +347,13 @@ const addCoin = async () => {
 
 watch(
   () => settingsStore.availableLongCoins,
-  (newVal) => (longPool.value = [...newVal]),
+  (newVal) => (longPool.value = [...newVal].sort()), // 关键修改：同时排序
   { deep: true },
 )
 
 watch(
   () => settingsStore.availableShortCoins,
-  (newVal) => (shortPool.value = [...newVal]),
+  (newVal) => (shortPool.value = [...newVal].sort()), // 关键修改：同时排序
   { deep: true },
 )
 
@@ -363,12 +361,14 @@ watch(longPool, (newVal) => {
   if (newVal.length <= MAX_VISIBLE_CHIPS) {
     isLongPoolExpanded.value = false
   }
+  newVal.sort() // 关键修改：确保v-model数组本身也是有序的
 })
 
 watch(shortPool, (newVal) => {
   if (newVal.length <= MAX_VISIBLE_CHIPS) {
     isShortPoolExpanded.value = false
   }
+  newVal.sort() // 关键修改：确保v-model数组本身也是有序的
 })
 
 defineExpose({ savePools })
