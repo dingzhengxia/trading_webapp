@@ -1,4 +1,4 @@
-<!-- frontend/src/components/CoinPoolsManager.vue (最终版) -->
+<!-- frontend/src/components/CoinPoolsManager.vue (最终完美修复版) -->
 <template>
   <div>
     <!-- 添加新币种UI -->
@@ -73,7 +73,6 @@
             :hide-selected="!longPoolShowAll"
             :close-on-content-click="false"
           >
-            <!-- selection 插槽保持不变 -->
             <template v-slot:selection="{ item, index }">
               <div
                 v-if="index === 0"
@@ -109,7 +108,6 @@
               </div>
             </template>
 
-            <!-- prepend-item 插槽增加 v-switch -->
             <template v-slot:prepend-item>
               <div class="d-flex align-center px-4 pt-2 pb-1">
                 <v-text-field
@@ -184,7 +182,6 @@
             :hide-selected="!shortPoolShowAll"
             :close-on-content-click="false"
           >
-            <!-- selection 插槽保持不变 -->
             <template v-slot:selection="{ item, index }">
               <div
                 v-if="index === 0"
@@ -220,28 +217,27 @@
               </div>
             </template>
 
-            <!-- prepend-item 插槽增加 v-switch -->
             <template v-slot:prepend-item>
-                <div class="d-flex align-center px-4 pt-2 pb-1">
-                    <v-text-field
-                    v-model="shortSearch"
-                    placeholder="搜索币种..."
-                    variant="underlined"
-                    density="compact"
-                    hide-details
-                    class="mr-2"
-                    @click.stop
-                    ></v-text-field>
-                    <v-switch
-                    v-model="shortPoolShowAll"
-                    label="显示已选"
-                    density="compact"
-                    color="primary"
-                    hide-details
-                    class="flex-shrink-0"
-                    @click.stop
-                    ></v-switch>
-                </div>
+              <div class="d-flex align-center px-4 pt-2 pb-1">
+                <v-text-field
+                  v-model="shortSearch"
+                  placeholder="搜索币种..."
+                  variant="underlined"
+                  density="compact"
+                  hide-details
+                  class="mr-2"
+                  @click.stop
+                ></v-text-field>
+                <v-switch
+                  v-model="shortPoolShowAll"
+                  label="显示已选"
+                  density="compact"
+                  color="primary"
+                  hide-details
+                  class="flex-shrink-0"
+                  @click.stop
+                ></v-switch>
+              </div>
               <v-divider></v-divider>
             </template>
 
@@ -269,19 +265,14 @@ import { useSettingsStore } from '@/stores/settingsStore'
 import { useSnackbarStore } from '@/stores/snackbar'
 import apiClient from '@/services/api'
 
-// ... script setup ...
 const settingsStore = useSettingsStore()
 const snackbarStore = useSnackbarStore()
 
 const MAX_VISIBLE_CHIPS = 3
-
 const isLongPoolExpanded = ref(false)
 const isShortPoolExpanded = ref(false)
-
-// 关键修改：新增状态
 const longPoolShowAll = ref(false)
 const shortPoolShowAll = ref(false)
-
 
 const longPool = ref([...settingsStore.availableLongCoins])
 const shortPool = ref([...settingsStore.availableShortCoins])
@@ -360,6 +351,7 @@ const addCoin = async () => {
   isAddingCoin.value = true
   try {
     await apiClient.post('/api/settings/add-coin', { coin: symbol })
+    // 关键修正：调用 fetchSettings() 刷新整个设置状态
     await settingsStore.fetchSettings()
     newCoinSymbol.value = ''
     snackbarStore.show({ message: `币种 '${symbol}' 添加成功！`, color: 'success' })
