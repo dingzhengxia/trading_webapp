@@ -1,4 +1,4 @@
-<!-- frontend/src/components/CoinPoolsManager.vue (单一数据源最终版) -->
+<!-- frontend/src/components/CoinPoolsManager.vue (最终响应式修复版) -->
 <template>
   <div>
     <!-- 添加新币种UI -->
@@ -356,8 +356,12 @@ const addCoin = async () => {
 
   isAddingCoin.value = true
   try {
-    await apiClient.post('/api/settings/add-coin', { coin: symbol })
-    await settingsStore.fetchSettings()
+    const response = await apiClient.post('/api/settings/add-coin', { coin: symbol })
+
+    // --- 最终修正：使用 splice 就地更新数组，强制触发响应式更新 ---
+    const updatedPool = response.data
+    settingsStore.availableCoins.splice(0, settingsStore.availableCoins.length, ...updatedPool)
+
     newCoinSymbol.value = ''
     snackbarStore.show({ message: `币种 '${symbol}' 添加成功！`, color: 'success' })
   } catch (error: any) {
