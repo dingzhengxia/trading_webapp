@@ -1,4 +1,4 @@
-<!-- frontend/src/components/CoinPoolsManager.vue (最终完美修复版) -->
+<!-- frontend/src/components/CoinPoolsManager.vue (单一数据源最终版) -->
 <template>
   <div>
     <!-- 添加新币种UI -->
@@ -43,7 +43,7 @@
         <v-card variant="tonal" class="pa-4" style="height: 100%">
           <div class="d-flex align-center mb-2">
             <span class="text-subtitle-1 font-weight-medium"
-              >做多币种备选池 ({{ longPool.length }})</span
+              >做多币种备选池 ({{ settingsStore.availableLongCoins.length }})</span
             >
             <v-tooltip location="top">
               <template v-slot:activator="{ props }">
@@ -60,7 +60,7 @@
           </div>
 
           <v-select
-            v-model="longPool"
+            v-model="settingsStore.availableLongCoins"
             :items="filteredLongPoolItems"
             label="从总池中选择做多备选币种"
             multiple
@@ -80,7 +80,7 @@
                 :class="{ 'is-expanded': isLongPoolExpanded }"
               >
                 <v-chip
-                  v-for="(poolItem, chipIndex) in longPool"
+                  v-for="(poolItem, chipIndex) in settingsStore.availableLongCoins"
                   :key="`long-${poolItem}`"
                   v-show="isLongPoolExpanded || chipIndex < MAX_VISIBLE_CHIPS"
                   class="ma-1"
@@ -90,12 +90,15 @@
                   <span>{{ poolItem }}</span>
                 </v-chip>
                 <v-chip
-                  v-if="!isLongPoolExpanded && longPool.length > MAX_VISIBLE_CHIPS"
+                  v-if="
+                    !isLongPoolExpanded &&
+                    settingsStore.availableLongCoins.length > MAX_VISIBLE_CHIPS
+                  "
                   class="ma-1"
                   @mousedown.stop="isLongPoolExpanded = true"
                   size="small"
                 >
-                  +{{ longPool.length - MAX_VISIBLE_CHIPS }}
+                  +{{ settingsStore.availableLongCoins.length - MAX_VISIBLE_CHIPS }}
                 </v-chip>
                 <v-btn
                   v-if="isLongPoolExpanded"
@@ -136,7 +139,7 @@
               <v-list-item v-bind="props" class="pl-0">
                 <template v-slot:prepend>
                   <v-checkbox-btn
-                    :model-value="longPool.includes(item.value)"
+                    :model-value="settingsStore.availableLongCoins.includes(item.value)"
                     readonly
                     class="mr-2"
                   ></v-checkbox-btn>
@@ -152,7 +155,7 @@
         <v-card variant="tonal" class="pa-4" style="height: 100%">
           <div class="d-flex align-center mb-2">
             <span class="text-subtitle-1 font-weight-medium"
-              >做空币种备选池 ({{ shortPool.length }})</span
+              >做空币种备选池 ({{ settingsStore.availableShortCoins.length }})</span
             >
             <v-tooltip location="top">
               <template v-slot:activator="{ props }">
@@ -169,7 +172,7 @@
           </div>
 
           <v-select
-            v-model="shortPool"
+            v-model="settingsStore.availableShortCoins"
             :items="filteredShortPoolItems"
             label="从总池中选择做空备选币种"
             multiple
@@ -189,7 +192,7 @@
                 :class="{ 'is-expanded': isShortPoolExpanded }"
               >
                 <v-chip
-                  v-for="(poolItem, chipIndex) in shortPool"
+                  v-for="(poolItem, chipIndex) in settingsStore.availableShortCoins"
                   :key="`short-${poolItem}`"
                   v-show="isShortPoolExpanded || chipIndex < MAX_VISIBLE_CHIPS"
                   class="ma-1"
@@ -199,12 +202,15 @@
                   <span>{{ poolItem }}</span>
                 </v-chip>
                 <v-chip
-                  v-if="!isShortPoolExpanded && shortPool.length > MAX_VISIBLE_CHIPS"
+                  v-if="
+                    !isShortPoolExpanded &&
+                    settingsStore.availableShortCoins.length > MAX_VISIBLE_CHIPS
+                  "
                   class="ma-1"
                   @mousedown.stop="isShortPoolExpanded = true"
                   size="small"
                 >
-                  +{{ shortPool.length - MAX_VISIBLE_CHIPS }}
+                  +{{ settingsStore.availableShortCoins.length - MAX_VISIBLE_CHIPS }}
                 </v-chip>
                 <v-btn
                   v-if="isShortPoolExpanded"
@@ -245,7 +251,7 @@
               <v-list-item v-bind="props" class="pl-0">
                 <template v-slot:prepend>
                   <v-checkbox-btn
-                    :model-value="shortPool.includes(item.value)"
+                    :model-value="settingsStore.availableShortCoins.includes(item.value)"
                     readonly
                     class="mr-2"
                   ></v-checkbox-btn>
@@ -274,8 +280,6 @@ const isShortPoolExpanded = ref(false)
 const longPoolShowAll = ref(false)
 const shortPoolShowAll = ref(false)
 
-const longPool = ref([...settingsStore.availableLongCoins])
-const shortPool = ref([...settingsStore.availableShortCoins])
 const longSearch = ref('')
 const shortSearch = ref('')
 const newCoinSymbol = ref('')
@@ -288,10 +292,13 @@ watch(newCoinSymbol, (newValue) => {
 })
 
 const removePoolItemValue = (poolType: 'long' | 'short', value: string) => {
-  const pool = poolType === 'long' ? longPool : shortPool
-  const index = pool.value.indexOf(value)
+  const pool =
+    poolType === 'long'
+      ? settingsStore.availableLongCoins
+      : settingsStore.availableShortCoins
+  const index = pool.indexOf(value)
   if (index >= 0) {
-    pool.value.splice(index, 1)
+    pool.splice(index, 1)
   }
 }
 
@@ -299,12 +306,12 @@ const allAvailableCoins = computed(() => [...new Set(settingsStore.availableCoin
 const mapToSelectItems = (coins: string[]) => coins.map((coin) => ({ title: coin, value: coin }))
 
 const availableForLongPool = computed(() => {
-  const shortSet = new Set(shortPool.value)
+  const shortSet = new Set(settingsStore.availableShortCoins)
   return mapToSelectItems(allAvailableCoins.value.filter((coin) => !shortSet.has(coin)))
 })
 
 const availableForShortPool = computed(() => {
-  const longSet = new Set(longPool.value)
+  const longSet = new Set(settingsStore.availableLongCoins)
   return mapToSelectItems(allAvailableCoins.value.filter((coin) => !longSet.has(coin)))
 })
 
@@ -324,19 +331,19 @@ const filteredShortPoolItems = computed(() => {
 
 const selectAllCoins = (poolType: 'long' | 'short') => {
   if (poolType === 'long') {
-    longPool.value = availableForLongPool.value.map((item) => item.value)
+    settingsStore.availableLongCoins = availableForLongPool.value.map((item) => item.value)
   } else if (poolType === 'short') {
-    shortPool.value = availableForShortPool.value.map((item) => item.value)
+    settingsStore.availableShortCoins = availableForShortPool.value.map((item) => item.value)
   }
 }
 
 const savePools = async () => {
   try {
     await apiClient.post('/api/settings/update-coin-pools', {
-      long_coins_pool: longPool.value,
-      short_coins_pool: shortPool.value,
+      long_coins_pool: settingsStore.availableLongCoins,
+      short_coins_pool: settingsStore.availableShortCoins,
     })
-    settingsStore.updateAvailablePools(longPool.value, shortPool.value)
+    // No need to call updateAvailablePools, as we are directly modifying the store state
     snackbarStore.show({ message: '币种备选池已成功保存。', color: 'success' })
   } catch (error: any) {
     const errorMsg = error.response?.data?.detail || error.message
@@ -351,7 +358,6 @@ const addCoin = async () => {
   isAddingCoin.value = true
   try {
     await apiClient.post('/api/settings/add-coin', { coin: symbol })
-    // 关键修正：调用 fetchSettings() 刷新整个设置状态
     await settingsStore.fetchSettings()
     newCoinSymbol.value = ''
     snackbarStore.show({ message: `币种 '${symbol}' 添加成功！`, color: 'success' })
@@ -365,29 +371,29 @@ const addCoin = async () => {
 
 watch(
   () => settingsStore.availableLongCoins,
-  (newVal) => (longPool.value = [...newVal].sort()),
+  (newList) => {
+    if (newList) {
+        if (newList.length <= MAX_VISIBLE_CHIPS) {
+            isLongPoolExpanded.value = false
+        }
+        newList.sort()
+    }
+  },
   { deep: true },
 )
 
 watch(
   () => settingsStore.availableShortCoins,
-  (newVal) => (shortPool.value = [...newVal].sort()),
+  (newList) => {
+    if (newList) {
+        if (newList.length <= MAX_VISIBLE_CHIPS) {
+            isShortPoolExpanded.value = false
+        }
+        newList.sort()
+    }
+  },
   { deep: true },
 )
-
-watch(longPool, (newVal) => {
-  if (newVal.length <= MAX_VISIBLE_CHIPS) {
-    isLongPoolExpanded.value = false
-  }
-  newVal.sort()
-})
-
-watch(shortPool, (newVal) => {
-  if (newVal.length <= MAX_VISIBLE_CHIPS) {
-    isShortPoolExpanded.value = false
-  }
-  newVal.sort()
-})
 
 defineExpose({ savePools })
 </script>
