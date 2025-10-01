@@ -70,6 +70,7 @@ echo -e "${YELLOW}===== [STEP 5/6] Starting new container with volume mounts... 
 # --- 核心修改：从固定的配置目录挂载数据卷 ---
 sudo docker run -d \
     -p 8000:8000 \
+    --restart unless-stopped \
     --name $CONTAINER_NAME \
     -v "$CONFIG_DIR/user_settings.json":/app/user_settings.json:rw \
     -v "$CONFIG_DIR/coin_lists.json":/app/coin_lists.json:rw \
