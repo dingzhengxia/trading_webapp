@@ -343,7 +343,6 @@ const savePools = async () => {
       long_coins_pool: settingsStore.availableLongCoins,
       short_coins_pool: settingsStore.availableShortCoins,
     })
-    // No need to call updateAvailablePools, as we are directly modifying the store state
     snackbarStore.show({ message: '币种备选池已成功保存。', color: 'success' })
   } catch (error: any) {
     const errorMsg = error.response?.data?.detail || error.message
@@ -373,10 +372,10 @@ watch(
   () => settingsStore.availableLongCoins,
   (newList) => {
     if (newList) {
-        if (newList.length <= MAX_VISIBLE_CHIPS) {
-            isLongPoolExpanded.value = false
-        }
-        newList.sort()
+      if (newList.length <= MAX_VISIBLE_CHIPS) {
+        isLongPoolExpanded.value = false
+      }
+      newList.sort()
     }
   },
   { deep: true },
@@ -386,10 +385,10 @@ watch(
   () => settingsStore.availableShortCoins,
   (newList) => {
     if (newList) {
-        if (newList.length <= MAX_VISIBLE_CHIPS) {
-            isShortPoolExpanded.value = false
-        }
-        newList.sort()
+      if (newList.length <= MAX_VISIBLE_CHIPS) {
+        isShortPoolExpanded.value = false
+      }
+      newList.sort()
     }
   },
   { deep: true },
