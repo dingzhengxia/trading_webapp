@@ -127,6 +127,8 @@
                         label="止损 (%)"
                         type="number"
                         :disabled="!settingsStore.settings.enable_long_sl_tp"
+                         hint="设为0则不设置止损"
+                        persistent-hint
                       ></v-text-field
                     ></v-col>
                     <v-col cols="6"
@@ -135,6 +137,8 @@
                         label="止盈 (%)"
                         type="number"
                         :disabled="!settingsStore.settings.enable_long_sl_tp"
+                        hint="设为0则不设置止盈"
+                        persistent-hint
                       ></v-text-field
                     ></v-col>
                   </v-row>
@@ -248,6 +252,8 @@
                         label="止损 (%)"
                         type="number"
                         :disabled="!settingsStore.settings.enable_short_sl_tp"
+                        hint="设为0则不设置止损"
+                        persistent-hint
                       ></v-text-field
                     ></v-col>
                     <v-col cols="6"
@@ -256,6 +262,8 @@
                         label="止盈 (%)"
                         type="number"
                         :disabled="!settingsStore.settings.enable_short_sl_tp"
+                        hint="设为0则不设置止盈"
+                        persistent-hint
                       ></v-text-field
                     ></v-col>
                   </v-row>
@@ -263,9 +271,51 @@
               </v-card>
             </v-col>
           </v-row>
+
+          <!-- 恢复的高级执行参数 -->
+          <v-card variant="outlined" class="mt-4">
+              <v-card-title>高级执行参数</v-card-title>
+              <v-card-text>
+                  <v-row>
+                      <v-col cols="12" sm="6">
+                          <v-text-field
+                            v-model.number="settingsStore.settings.open_maker_retries"
+                            label="开仓重试次数"
+                            type="number"
+                            hint="挂单失败或超时后重试的次数"
+                            persistent-hint
+                          ></v-text-field>
+                      </v-col>
+                      <v-col cols="12" sm="6">
+                          <v-text-field
+                            v-model.number="settingsStore.settings.open_order_fill_timeout_seconds"
+                            label="开仓订单超时 (秒)"
+                            type="number"
+                            hint="挂单后等待成交的最大时间"
+                            persistent-hint
+                          ></v-text-field>
+                      </v-col>
+                      <v-col cols="12" sm="6">
+                          <v-text-field
+                            v-model.number="settingsStore.settings.close_maker_retries"
+                            label="平仓重试次数"
+                            type="number"
+                          ></v-text-field>
+                      </v-col>
+                      <v-col cols="12" sm="6">
+                          <v-text-field
+                            v-model.number="settingsStore.settings.close_order_fill_timeout_seconds"
+                            label="平仓订单超时 (秒)"
+                            type="number"
+                          ></v-text-field>
+                      </v-col>
+                  </v-row>
+              </v-card-text>
+          </v-card>
+
         </v-window-item>
 
-        <!-- 恢复的智能再平衡设置 -->
+        <!-- 智能再平衡设置 (保持不变) -->
         <v-window-item value="rebalance">
           <p class="mb-4">根据市场指标动态筛选弱势币种，并生成调整空头仓位的交易计划。</p>
           <v-row>
@@ -456,7 +506,7 @@ watch(
 }
 
 .selection-wrapper.is-expanded {
-  max-height: 350px;
+  max-height: 150px;
   overflow-y: auto;
 }
 </style>

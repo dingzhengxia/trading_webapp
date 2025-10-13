@@ -1,6 +1,6 @@
-# backend/app/logic/sl_tp_logic_async.py (最终修复版)
+# backend/app/logic/sl_tp_logic_async.py (精细化SL/TP控制)
 import asyncio
-from typing import Set
+from typing import Set, List
 
 import ccxt.async_support as ccxt
 
@@ -33,7 +33,6 @@ async def set_tp_sl_for_position_async(exchange: ccxt.binanceusdm, position: Pos
     if stop_event.is_set(): raise InterruptedError()
 
     try:
-        # --- 核心修改：换回使用 fetch_positions (复数)，这是经过验证的正确方法 ---
         live_positions_raw = await exchange.fetch_positions([full_symbol])
         live_pos = next(
             (p for p in live_positions_raw if p['symbol'] == full_symbol and float(p.get('contracts', 0)) != 0), None)
@@ -41,60 +40,86 @@ async def set_tp_sl_for_position_async(exchange: ccxt.binanceusdm, position: Pos
         if not live_pos:
             await async_logger(f"⚠️ 为 {position.symbol} 校准前检查发现仓位已不存在，将仅执行清理操作。", "warning")
             await _cancel_sl_tp_orders_async(exchange, full_symbol, async_logger)
-            return True  # 视为成功
-        # --- 修改结束 ---
+            return True
 
-        is_long = position.side == i18n.SIDE_LONG
+        # --- 核心逻辑修改：精细化控制 SL 和 TP ---
 
-        sl_perc = config.get('long_stop_loss_percentage' if is_long else 'short_stop_loss_percentage', 0)
-        tp_perc = config.get('long_take_profit_percentage' if is_long else 'short_take_profit_percentage', 0)
-
-        if (is_long and not config.get('enable_long_sl_tp', False)) or (
-                not is_long and not config.get('enable_short_sl_tp', False)) or sl_perc <= 0 or tp_perc <= 0:
-            await async_logger(f"{position.symbol} 的SL/TP已禁用或参数无效，将清理现有挂单。", "info")
-            return await _cancel_sl_tp_orders_async(exchange, full_symbol, async_logger)
-
-        leverage = config.get('leverage', 1)
-        sl_ratio = float(sl_perc) / 100 / leverage
-        tp_ratio = float(tp_perc) / 100 / leverage
-        entry_price = position.entry_price
-        target_sl_price = float(
-            exchange.price_to_precision(full_symbol, entry_price * (1 - (sl_ratio if is_long else -sl_ratio))))
-        target_tp_price = float(
-            exchange.price_to_precision(full_symbol, entry_price * (1 + (tp_ratio if is_long else -tp_ratio))))
-
+        # 1. 总是先清理旧订单，确保状态干净
         await _cancel_sl_tp_orders_async(exchange, full_symbol, async_logger)
         if stop_event.is_set(): raise InterruptedError()
 
-        sl_side = i18n.ORDER_SIDE_SELL if is_long else i18n.ORDER_SIDE_BUY
-        sl_params = {'stopPrice': target_sl_price, 'reduceOnly': True}
-        tp_params = {'stopPrice': target_tp_price, 'reduceOnly': True}
+        is_long = position.side == i18n.SIDE_LONG
+        side_key = "long" if is_long else "short"
 
-        await async_logger(
-            f"  > 正在为 {position.symbol} 提交新的 SL ({target_sl_price}) / TP ({target_tp_price}) 订单...")
+        # 2. 检查总开关是否开启
+        sl_tp_enabled = config.get(f'enable_{side_key}_sl_tp', False)
+        if not sl_tp_enabled:
+            await async_logger(f"{position.symbol} 的SL/TP功能已禁用，仅执行清理。", "info")
+            return True
 
-        sl_task = exchange.create_order(full_symbol, 'STOP_MARKET', sl_side, position.contracts, None, sl_params)
-        tp_task = exchange.create_order(full_symbol, 'TAKE_PROFIT_MARKET', sl_side, position.contracts, None, tp_params)
+        sl_perc = config.get(f'{side_key}_stop_loss_percentage', 0)
+        tp_perc = config.get(f'{side_key}_take_profit_percentage', 0)
 
-        results = await asyncio.gather(sl_task, tp_task, return_exceptions=True)
+        tasks: List[asyncio.Task] = []
+
+        # 3. 如果止损百分比 > 0，则创建止损任务
+        if sl_perc > 0:
+            leverage = config.get('leverage', 1)
+            sl_ratio = float(sl_perc) / 100 / leverage
+            entry_price = position.entry_price
+            target_sl_price = float(
+                exchange.price_to_precision(full_symbol, entry_price * (1 - (sl_ratio if is_long else -sl_ratio))))
+
+            sl_side = i18n.ORDER_SIDE_SELL if is_long else i18n.ORDER_SIDE_BUY
+            sl_params = {'stopPrice': target_sl_price, 'reduceOnly': True}
+
+            await async_logger(f"  > 准备为 {position.symbol} 提交 SL ({target_sl_price}) 订单...")
+            sl_task = exchange.create_order(full_symbol, 'STOP_MARKET', sl_side, position.contracts, None, sl_params)
+            tasks.append(sl_task)
+
+        # 4. 如果止盈百分比 > 0，则创建止盈任务
+        if tp_perc > 0:
+            leverage = config.get('leverage', 1)
+            tp_ratio = float(tp_perc) / 100 / leverage
+            entry_price = position.entry_price
+            target_tp_price = float(
+                exchange.price_to_precision(full_symbol, entry_price * (1 + (tp_ratio if is_long else -tp_ratio))))
+
+            tp_side = i18n.ORDER_SIDE_SELL if is_long else i18n.ORDER_SIDE_BUY
+            tp_params = {'stopPrice': target_tp_price, 'reduceOnly': True}
+
+            await async_logger(f"  > 准备为 {position.symbol} 提交 TP ({target_tp_price}) 订单...")
+            tp_task = exchange.create_order(full_symbol, 'TAKE_PROFIT_MARKET', tp_side, position.contracts, None,
+                                            tp_params)
+            tasks.append(tp_task)
+
+        # 5. 如果没有任何任务，记录并返回成功
+        if not tasks:
+            await async_logger(f"  > {position.symbol} 的SL和TP百分比均未设置(>0)，不创建新订单。", "info")
+            return True
+
+        # 6. 执行创建的任务
+        results = await asyncio.gather(*tasks, return_exceptions=True)
 
         success_count = sum(1 for res in results if isinstance(res, dict) and res.get('id'))
+        total_tasks = len(tasks)
 
-        if success_count < 2:
+        if success_count < total_tasks:
             for res in results:
                 if isinstance(res, Exception):
                     await async_logger(f"  > ❌ {position.symbol} 订单提交失败: {res}", "error")
             await async_logger(f"⚠️ {position.symbol} SL/TP未能完全设置，请检查！", "warning")
         else:
-            await async_logger(f"✅ {position.symbol} 止盈和止损均已校准！", "success")
+            await async_logger(f"✅ {position.symbol} 止盈和/或止损均已校准！", "success")
 
-        return success_count == 2
+        return success_count == total_tasks
+        # --- 修改结束 ---
 
     except InterruptedError:
         await async_logger(f"为 {position.symbol} 设置SL/TP的操作被中断。", "warning")
         return False
     except ccxt.ExchangeError as e:
-        if '-1106' in str(e):
+        if '-1106' in str(e):  # 'Parameter "XXX" is not valid.' Usually means position closed.
             await async_logger(f"⚠️ 为 {position.symbol} 设置SL/TP失败 (仓位可能已关闭): {e.args[0]}", "warning")
             return True
         await async_logger(f"❌ 设置 {position.symbol} SL/TP时发生未处理的交易所错误: {e}", "error")
