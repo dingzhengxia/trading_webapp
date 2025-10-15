@@ -1,4 +1,4 @@
-# backend/app/config/config.py (最终修正版)
+# backend/app/config/config.py (最终持久化版)
 import json
 import os
 from pathlib import Path
@@ -48,8 +48,17 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     'long_custom_weights': {},
     'rebalance_volume_ma_days': 20,
     'rebalance_volume_spike_ratio': 3.0,
-    # --- 核心修正：添加基准币种的默认值 ---
     'rebalance_benchmark_coin': ['BTC'],
+
+    # --- 核心修正：添加所有新的防反弹过滤参数到默认配置 ---
+    'enable_rebalance_filters': True,
+    'rebalance_rsi_period': 14,
+    'rebalance_rsi_threshold': 25.0,
+    'rebalance_short_term_momentum_days': 3,
+    'rebalance_short_term_momentum_threshold': 15.0,
+    'rebalance_bollinger_period': 20,
+    'rebalance_bollinger_std_dev': 2,
+    'rebalance_bollinger_width_spike_ratio': 2.0,
 }
 
 # 内存中全局变量

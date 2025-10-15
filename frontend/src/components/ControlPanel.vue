@@ -1,4 +1,4 @@
-<!-- frontend/src/components/ControlPanel.vue (最终版) -->
+<!-- frontend/src/components/ControlPanel.vue (最终完整版) -->
 <template>
   <v-card v-if="settingsStore.settings">
     <v-card-title class="text-h6">交易参数</v-card-title>
@@ -400,6 +400,82 @@
               ></v-text-field>
             </v-col>
           </v-row>
+
+          <v-card variant="outlined" class="mt-4">
+            <v-card-title class="d-flex align-center">
+              <span>防反弹过滤参数</span>
+              <v-spacer></v-spacer>
+              <v-switch
+                v-model="settingsStore.settings.enable_rebalance_filters"
+                label="启用"
+                color="primary"
+                hide-details
+                inset
+              ></v-switch>
+            </v-card-title>
+            <v-divider></v-divider>
+            <v-card-text :class="{ 'disabled-overlay': !settingsStore.settings.enable_rebalance_filters }">
+              <v-row>
+                <v-col cols="12" sm="6" md="4">
+                  <div class="text-subtitle-2 mb-1">RSI超卖过滤</div>
+                  <v-text-field
+                    v-model.number="settingsStore.settings.rebalance_rsi_period"
+                    label="RSI 周期"
+                    type="number"
+                    density="compact"
+                  ></v-text-field>
+                  <v-text-field
+                    v-model.number="settingsStore.settings.rebalance_rsi_threshold"
+                    label="RSI 最低门槛"
+                    type="number"
+                    hint="低于此值将被剔除"
+                    persistent-hint
+                    density="compact"
+                  ></v-text-field>
+                </v-col>
+                <v-col cols="12" sm="6" md="4">
+                   <div class="text-subtitle-2 mb-1">短期反弹过滤</div>
+                  <v-text-field
+                    v-model.number="settingsStore.settings.rebalance_short_term_momentum_days"
+                    label="考察天数"
+                    type="number"
+                    density="compact"
+                  ></v-text-field>
+                  <v-text-field
+                    v-model.number="settingsStore.settings.rebalance_short_term_momentum_threshold"
+                    label="最大涨幅 (%)"
+                    type="number"
+                    hint="短期涨幅过高将剔除"
+                    persistent-hint
+                    density="compact"
+                  ></v-text-field>
+                </v-col>
+                <v-col cols="12" sm="6" md="4">
+                  <div class="text-subtitle-2 mb-1">波动率放大过滤</div>
+                   <v-text-field
+                    v-model.number="settingsStore.settings.rebalance_bollinger_period"
+                    label="布林带周期"
+                    type="number"
+                    density="compact"
+                  ></v-text-field>
+                   <v-text-field
+                    v-model.number="settingsStore.settings.rebalance_bollinger_std_dev"
+                    label="布林带标准差"
+                    type="number"
+                    density="compact"
+                  ></v-text-field>
+                  <v-text-field
+                    v-model.number="settingsStore.settings.rebalance_bollinger_width_spike_ratio"
+                    label="宽度放大倍数"
+                    type="number"
+                    hint="当前宽度/均值 > 此值则剔除"
+                    persistent-hint
+                    density="compact"
+                  ></v-text-field>
+                </v-col>
+              </v-row>
+            </v-card-text>
+          </v-card>
         </v-window-item>
       </v-window>
     </v-card-text>
@@ -518,5 +594,9 @@ watch(
 .selection-wrapper.is-expanded {
   max-height: 150px;
   overflow-y: auto;
+}
+.disabled-overlay {
+  opacity: 0.5;
+  pointer-events: none;
 }
 </style>

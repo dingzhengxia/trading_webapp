@@ -1,8 +1,9 @@
-import {defineStore} from 'pinia'
-import {ref} from 'vue'
-import type {UserSettings} from '@/models/types'
+// frontend/src/stores/settingsStore.ts (最终版)
+import { defineStore } from 'pinia'
+import { ref } from 'vue'
+import type { UserSettings } from '@/models/types'
 import api from '@/services/api'
-import {useUiStore} from './uiStore'
+import { useUiStore } from './uiStore'
 
 const defaultSettings: UserSettings = {
   api_key: '',
@@ -36,8 +37,17 @@ const defaultSettings: UserSettings = {
   rebalance_foam_days: 1,
   rebalance_volume_ma_days: 20,
   rebalance_volume_spike_ratio: 3.0,
-  rebalance_benchmark_coin: ['BTC'], // 修改此处
-}
+  rebalance_benchmark_coin: ['BTC'],
+
+  enable_rebalance_filters: true,
+  rebalance_rsi_period: 14,
+  rebalance_rsi_threshold: 25.0,
+  rebalance_short_term_momentum_days: 3,
+  rebalance_short_term_momentum_threshold: 15.0,
+  rebalance_bollinger_period: 20,
+  rebalance_bollinger_std_dev: 2,
+  rebalance_bollinger_width_spike_ratio: 2.0,
+};
 
 export const useSettingsStore = defineStore('settings', () => {
   const settings = ref<UserSettings | null>(null)

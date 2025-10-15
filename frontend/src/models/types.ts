@@ -75,8 +75,16 @@ export interface UserSettings {
   rebalance_foam_days: number
   rebalance_volume_ma_days: number
   rebalance_volume_spike_ratio: number
-  // --- 修改字段类型 ---
-  rebalance_benchmark_coin: string[] // 相对强度基准币种 (支持多个)
+  rebalance_benchmark_coin: string[]
+
+  enable_rebalance_filters: boolean;
+  rebalance_rsi_period: number;
+  rebalance_rsi_threshold: number;
+  rebalance_short_term_momentum_days: number;
+  rebalance_short_term_momentum_threshold: number;
+  rebalance_bollinger_period: number;
+  rebalance_bollinger_std_dev: number;
+  rebalance_bollinger_width_spike_ratio: number;
 }
 
 export interface RebalanceCriteria {
@@ -88,6 +96,14 @@ export interface RebalanceCriteria {
   foam_days: number
   rebalance_volume_ma_days: number
   rebalance_volume_spike_ratio: number
-  // --- 修改字段类型 ---
-  rebalance_benchmark_coin: string[] // 相对强度基准币种 (支持多个)
+  rebalance_benchmark_coin: string[]
+
+  enable_rebalance_filters: boolean;
+  rebalance_rsi_period: number;
+  rebalance_rsi_threshold: number;
+  rebalance_short_term_momentum_days: number;
+  rebalance_short_term_momentum_threshold: number;
+  rebalance_bollinger_period: number;
+  rebalance_bollinger_std_dev: number;
+  rebalance_bollinger_width_spike_ratio: number;
 }
