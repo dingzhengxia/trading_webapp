@@ -1,4 +1,4 @@
-# backend/app/models/schemas.py (修改版)
+# backend/app/models/schemas.py (最终修正版)
 from typing import List, Dict, Any, Optional
 
 from pydantic import BaseModel, Field
@@ -10,14 +10,15 @@ class SettingsResponse(BaseModel):
     available_long_coins: List[str]
     available_short_coins: List[str]
 
+
 class CoinPoolsUpdate(BaseModel):
     long_coins_pool: List[str]
     short_coins_pool: List[str]
 
-# --- 新增模型 ---
+
 class AddCoinRequest(BaseModel):
     coin: str
-# --- 修改结束 ---
+
 
 class Position(BaseModel):
     symbol: str
@@ -27,14 +28,15 @@ class Position(BaseModel):
     notional: float
     pnl: float
     pnl_percentage: float
-    entry_price: float # 这个字段现在将填充为损益两平价
+    entry_price: float
     mark_price: float
+
 
 class BaseTaskRequest(BaseModel):
     request_id: Optional[str] = None
 
+
 class TradePlanRequest(BaseTaskRequest):
-    # ... (内容不变)
     leverage: int
     total_long_position_value: float
     total_short_position_value: float
@@ -61,6 +63,16 @@ class TradePlanRequest(BaseTaskRequest):
     short_take_profit_percentage: float
     rebalance_volume_ma_days: int
     rebalance_volume_spike_ratio: float
+    rebalance_benchmark_coin: List[str]
+
+    enable_rebalance_filters: bool
+    rebalance_rsi_period: int
+    rebalance_rsi_threshold: float
+    rebalance_short_term_momentum_days: int
+    rebalance_short_term_momentum_threshold: float
+    rebalance_bollinger_period: int
+    rebalance_bollinger_std_dev: int
+    rebalance_bollinger_width_spike_ratio: float
 
 
 class SyncSltpRequest(BaseTaskRequest):
@@ -72,17 +84,21 @@ class SyncSltpRequest(BaseTaskRequest):
     short_take_profit_percentage: float
     leverage: int
 
+
 class ClosePositionRequest(BaseTaskRequest):
     full_symbol: str
     ratio: float = Field(..., gt=0, le=1.0)
+
 
 class CloseBySideRequest(BaseTaskRequest):
     side: str
     ratio: float = Field(..., gt=0, le=1.0)
 
+
 class CloseMultipleRequest(BaseTaskRequest):
     full_symbols: List[str]
     ratio: float = Field(..., gt=0, le=1.0)
+
 
 class ExecutionOrderItem(BaseModel):
     symbol: str
@@ -91,9 +107,12 @@ class ExecutionOrderItem(BaseModel):
     value_to_trade: Optional[float] = None
     close_ratio: Optional[float] = None
 
+
 class ExecutionPlanRequest(BaseTaskRequest):
     orders: List[ExecutionOrderItem]
 
+
+# --- 核心修正：将所有新参数添加到 RebalanceCriteria 模型 ---
 class RebalanceCriteria(BaseModel):
     method: str = "multi_factor_weakest"
     top_n: int = 50
@@ -103,6 +122,17 @@ class RebalanceCriteria(BaseModel):
     foam_days: int = 1
     rebalance_volume_ma_days: int = 20
     rebalance_volume_spike_ratio: float = 3.0
+    rebalance_benchmark_coin: List[str] = ['BTC']
+
+    enable_rebalance_filters: bool = True
+    rebalance_rsi_period: int = 14
+    rebalance_rsi_threshold: float = 25.0
+    rebalance_short_term_momentum_days: int = 3
+    rebalance_short_term_momentum_threshold: float = 15.0
+    rebalance_bollinger_period: int = 20
+    rebalance_bollinger_std_dev: int = 2
+    rebalance_bollinger_width_spike_ratio: float = 2.0
+
 
 class RebalancePlanResponse(BaseModel):
     target_ratio_perc: float
