@@ -1,4 +1,4 @@
-<!-- frontend/src/components/CoinPoolsManager.vue (最终响应式修复版) -->
+<!-- frontend/src/components/CoinPoolsManager.vue (持久化修复版) -->
 <template>
   <div>
     <!-- 添加新币种UI -->
@@ -270,6 +270,7 @@ import { ref, computed, watch } from 'vue'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { useSnackbarStore } from '@/stores/snackbar'
 import apiClient from '@/services/api'
+import { debounce } from 'lodash-es' // 导入 debounce
 
 const settingsStore = useSettingsStore()
 const snackbarStore = useSnackbarStore()
@@ -284,6 +285,29 @@ const longSearch = ref('')
 const shortSearch = ref('')
 const newCoinSymbol = ref('')
 const isAddingCoin = ref(false)
+
+// --- 核心修正：创建一个带防抖的保存函数 ---
+const savePoolsDebounced = debounce(() => {
+  savePools(true) // 传入一个参数标记为自动保存
+}, 1500)
+
+// --- 核心修正：增加 watch 侦听器来触发自动保存 ---
+watch(
+  () => settingsStore.availableLongCoins,
+  () => {
+    savePoolsDebounced()
+  },
+  { deep: true },
+)
+
+watch(
+  () => settingsStore.availableShortCoins,
+  () => {
+    savePoolsDebounced()
+  },
+  { deep: true },
+)
+
 
 watch(newCoinSymbol, (newValue) => {
   if (newValue && newValue !== newValue.toUpperCase()) {
@@ -337,13 +361,17 @@ const selectAllCoins = (poolType: 'long' | 'short') => {
   }
 }
 
-const savePools = async () => {
+const savePools = async (isAutoSave = false) => {
   try {
     await apiClient.post('/api/settings/update-coin-pools', {
       long_coins_pool: settingsStore.availableLongCoins,
       short_coins_pool: settingsStore.availableShortCoins,
     })
-    snackbarStore.show({ message: '币种备选池已成功保存。', color: 'success' })
+    if (!isAutoSave) {
+        snackbarStore.show({ message: '币种备选池已成功保存。', color: 'success' })
+    } else {
+        console.log("Coin pools auto-saved successfully.")
+    }
   } catch (error: any) {
     const errorMsg = error.response?.data?.detail || error.message
     snackbarStore.show({ message: `保存币种备选池失败: ${errorMsg}`, color: 'error' })
@@ -357,11 +385,7 @@ const addCoin = async () => {
   isAddingCoin.value = true
   try {
     const response = await apiClient.post('/api/settings/add-coin', { coin: symbol })
-
-    // --- 最终修正：使用 splice 就地更新数组，强制触发响应式更新 ---
-    const updatedPool = response.data
-    settingsStore.availableCoins.splice(0, settingsStore.availableCoins.length, ...updatedPool)
-
+    settingsStore.availableCoins.splice(0, settingsStore.availableCoins.length, ...response.data)
     newCoinSymbol.value = ''
     snackbarStore.show({ message: `币种 '${symbol}' 添加成功！`, color: 'success' })
   } catch (error: any) {
@@ -398,6 +422,7 @@ watch(
   { deep: true },
 )
 
+// 让父组件可以通过 ref 调用手动保存
 defineExpose({ savePools })
 </script>
 

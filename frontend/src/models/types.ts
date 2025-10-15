@@ -1,4 +1,4 @@
-// frontend/src/models/types.ts (完整代码)
+// frontend/src/models/types.ts (最终版)
 export interface Position {
   symbol: string
   full_symbol: string
@@ -73,9 +73,10 @@ export interface UserSettings {
   rebalance_abs_momentum_days: number
   rebalance_rel_strength_days: number
   rebalance_foam_days: number
-  // --- 新增字段 ---
   rebalance_volume_ma_days: number
   rebalance_volume_spike_ratio: number
+  // --- 修改字段类型 ---
+  rebalance_benchmark_coin: string[] // 相对强度基准币种 (支持多个)
 }
 
 export interface RebalanceCriteria {
@@ -85,7 +86,8 @@ export interface RebalanceCriteria {
   abs_momentum_days: number
   rel_strength_days: number
   foam_days: number
-  // --- 新增字段 ---
   rebalance_volume_ma_days: number
   rebalance_volume_spike_ratio: number
+  // --- 修改字段类型 ---
+  rebalance_benchmark_coin: string[] // 相对强度基准币种 (支持多个)
 }

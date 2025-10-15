@@ -1,4 +1,4 @@
-<!-- frontend/src/components/ControlPanel.vue (完整功能最终版) -->
+<!-- frontend/src/components/ControlPanel.vue (最终版) -->
 <template>
   <v-card v-if="settingsStore.settings">
     <v-card-title class="text-h6">交易参数</v-card-title>
@@ -272,7 +272,6 @@
             </v-col>
           </v-row>
 
-          <!-- 恢复的高级执行参数 -->
           <v-card variant="outlined" class="mt-4">
               <v-card-title>高级执行参数</v-card-title>
               <v-card-text>
@@ -315,7 +314,6 @@
 
         </v-window-item>
 
-        <!-- 智能再平衡设置 (保持不变) -->
         <v-window-item value="rebalance">
           <p class="mb-4">根据市场指标动态筛选弱势币种，并生成调整空头仓位的交易计划。</p>
           <v-row>
@@ -355,6 +353,18 @@
             </v-col>
             <v-col cols="12" md="6">
               <div v-if="settingsStore.settings.rebalance_method === 'multi_factor_weakest'">
+                <v-select
+                  v-model="settingsStore.settings.rebalance_benchmark_coin"
+                  :items="sortedLongListItems"
+                  label="相对强度基准币种"
+                  multiple
+                  chips
+                  closable-chips
+                  hint="可选择多个币种作为综合基准"
+                  persistent-hint
+                  variant="outlined"
+                  density="compact"
+                ></v-select>
                 <v-text-field
                   v-model.number="settingsStore.settings.rebalance_abs_momentum_days"
                   label="绝对动量天数"
@@ -364,7 +374,7 @@
                 ></v-text-field>
                 <v-text-field
                   v-model.number="settingsStore.settings.rebalance_rel_strength_days"
-                  label="相对强度天数 (vs BTC)"
+                  label="相对强度天数"
                   type="number"
                   variant="outlined"
                   density="compact"

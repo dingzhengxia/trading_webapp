@@ -5,7 +5,6 @@ from typing import List, Dict, Any
 import ccxt.async_support as ccxt
 from fastapi import APIRouter, Depends, BackgroundTasks
 
-# 核心修正：不再从 config 导入 AVAILABLE_SHORT_COINS
 from ..config.config import AVAILABLE_LONG_COINS, STABLECOIN_PREFERENCE
 from ..core.dependencies import get_settings_dependency
 from ..core.exchange_manager import get_exchange_dependency
@@ -19,12 +18,10 @@ from ..models.schemas import RebalanceCriteria, RebalancePlanResponse, Execution
 router = APIRouter(prefix="/api/rebalance", tags=["Rebalance"], dependencies=[Depends(verify_api_key)])
 
 
-# 核心修正：将 settings 对象传递给 screen_coins_task
 async def screen_coins_task(exchange: ccxt.binanceusdm, criteria: RebalanceCriteria, settings: Dict[str, Any]) -> List[
     str]:
     await log_message(f"开始筛选，策略: {criteria.method}, 目标数量: {criteria.top_n}", "info")
 
-    # 核心修正：使用从 settings 传入的、用户精选的 short_coin_list
     short_pool = set(settings.get('short_coin_list', []))
     if not short_pool:
         raise ValueError("做空交易列表为空，无法进行智能再平衡筛选。请先在'通用开仓设置'中配置。")
@@ -43,7 +40,6 @@ async def screen_coins_task(exchange: ccxt.binanceusdm, criteria: RebalanceCrite
         quote = quote.split(':')[0]
         if base in processed_bases: continue
 
-        # 核心修正：严格使用从 settings 中获取的 short_pool 进行判断
         if (quote in stablecoins and
                 base in short_pool and
                 ticker.get('quoteVolume', 0) is not None and
@@ -79,42 +75,57 @@ async def screen_coins_task(exchange: ccxt.binanceusdm, criteria: RebalanceCrite
     coin_data = []
 
     if criteria.method == 'multi_factor_weakest':
-        await log_message("正在获取 BTC/USDT K线作为相对强度基准...", "info")
-        btc_usdt_symbol = ex_async.resolve_full_symbol(exchange, "BTC")
-        if not btc_usdt_symbol:
-            raise ValueError("在交易所中找不到 BTC/USDT 交易对。")
+        benchmark_coins = criteria.rebalance_benchmark_coin
+        if not benchmark_coins:
+            raise ValueError("多因子策略需要至少指定一个基准币种 (如 BTC)。")
 
-        btc_usdt_klines = await ex_async.fetch_klines_async(exchange, btc_usdt_symbol, '1d', fetch_limit)
-        if not btc_usdt_klines or len(btc_usdt_klines) < days_to_fetch:
-            raise ValueError("获取 BTC/USDT K线数据失败，无法计算相对强度。")
+        await log_message(f"正在获取 {', '.join(benchmark_coins)} 作为相对强度基准K线...", "info")
 
-        btc_klines_map = {kline[0]: kline for kline in btc_usdt_klines}
-        await log_message("BTC 基准数据准备完毕，开始合成各币种的相对强度K线...", "info")
+        benchmark_kline_tasks = [
+            ex_async.fetch_klines_async(exchange, ex_async.resolve_full_symbol(exchange, coin), '1d', fetch_limit)
+            for coin in benchmark_coins
+        ]
+        benchmark_results = await asyncio.gather(*benchmark_kline_tasks, return_exceptions=True)
+
+        benchmark_klines_maps = {}
+        for i, klines in enumerate(benchmark_results):
+            coin = benchmark_coins[i]
+            if isinstance(klines, list) and len(klines) >= days_to_fetch:
+                benchmark_klines_maps[coin] = {kline[0]: kline for kline in klines}
+            else:
+                raise ValueError(f"获取基准币种 {coin} 的K线数据失败，无法计算相对强度。")
+
+        await log_message("基准数据准备完毕，开始合成各币种的相对强度K线...", "info")
 
         for i, coin_usdt_klines in enumerate(usdt_results):
             if isinstance(coin_usdt_klines, list) and len(coin_usdt_klines) >= days_to_fetch:
                 symbol = valid_symbols_for_kline[i]
-                synthetic_btc_klines = []
 
-                for coin_kline in coin_usdt_klines:
-                    timestamp = coin_kline[0]
-                    btc_kline = btc_klines_map.get(timestamp)
+                synthetic_klines_dict = {}
 
-                    if btc_kline and all(p > 1e-8 for p in btc_kline[1:5]):
-                        synthetic_kline = [
-                            timestamp,
-                            coin_kline[1] / btc_kline[1],
-                            coin_kline[2] / btc_kline[2],
-                            coin_kline[3] / btc_kline[3],
-                            coin_kline[4] / btc_kline[4],
-                            coin_kline[5]
-                        ]
-                        synthetic_btc_klines.append(synthetic_kline)
+                for bench_coin, bench_klines_map in benchmark_klines_maps.items():
+                    synthetic_bench_klines = []
+                    for coin_kline in coin_usdt_klines:
+                        timestamp = coin_kline[0]
+                        base_kline = bench_klines_map.get(timestamp)
+
+                        if base_kline and all(p > 1e-8 for p in base_kline[1:5]):
+                            synthetic_kline = [
+                                timestamp,
+                                coin_kline[1] / base_kline[1],
+                                coin_kline[2] / base_kline[2],
+                                coin_kline[3] / base_kline[3],
+                                coin_kline[4] / base_kline[4],
+                                coin_kline[5]
+                            ]
+                            synthetic_bench_klines.append(synthetic_kline)
+
+                    synthetic_klines_dict[bench_coin] = synthetic_bench_klines
 
                 coin_data.append({
                     'symbol': symbol,
                     'usdt_klines': coin_usdt_klines,
-                    'btc_klines': synthetic_btc_klines
+                    'synthetic_klines': synthetic_klines_dict
                 })
     else:  # foam
         for i, klines in enumerate(usdt_results):

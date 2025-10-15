@@ -1,11 +1,9 @@
-// frontend/src/stores/settingsStore.ts (修正版)
-import { defineStore } from 'pinia'
-import { ref } from 'vue'
-import type { UserSettings } from '@/models/types'
+import {defineStore} from 'pinia'
+import {ref} from 'vue'
+import type {UserSettings} from '@/models/types'
 import api from '@/services/api'
-import { useUiStore } from './uiStore'
+import {useUiStore} from './uiStore'
 
-// 默认设置保持不变
 const defaultSettings: UserSettings = {
   api_key: '',
   api_secret: '',
@@ -36,6 +34,9 @@ const defaultSettings: UserSettings = {
   rebalance_abs_momentum_days: 30,
   rebalance_rel_strength_days: 60,
   rebalance_foam_days: 1,
+  rebalance_volume_ma_days: 20,
+  rebalance_volume_spike_ratio: 3.0,
+  rebalance_benchmark_coin: ['BTC'], // 修改此处
 }
 
 export const useSettingsStore = defineStore('settings', () => {
@@ -47,22 +48,17 @@ export const useSettingsStore = defineStore('settings', () => {
   const uiStore = useUiStore()
 
   async function fetchSettings() {
-    // REFACTOR: 只有在 settings 为 null 的首次加载时，才将 loading 设为 true
     if (settings.value === null) {
       loading.value = true
     }
 
     try {
       const response = await api.get('/api/settings')
-      const fetchedSettings = { ...defaultSettings, ...response.data.user_settings }
+      const fetchedSettings = {...defaultSettings, ...response.data.user_settings}
 
-      // REFACTOR: 不直接替换整个对象，而是更新内部属性。
-      // 这样可以避免 v-if="settingsStore.settings" 导致整个组件重新渲染。
       if (settings.value) {
-        // 如果 settings 已存在，逐字段更新
         Object.assign(settings.value, fetchedSettings)
       } else {
-        // 如果是首次加载，则直接赋值
         settings.value = fetchedSettings
       }
 
@@ -81,7 +77,6 @@ export const useSettingsStore = defineStore('settings', () => {
     }
   }
 
-  // REFACTOR: 新增一个只更新币种池列表的 action
   function updateAvailablePools(longPool: string[], shortPool: string[]) {
     availableLongCoins.value = longPool
     availableShortCoins.value = shortPool
@@ -109,7 +104,6 @@ export const useSettingsStore = defineStore('settings', () => {
   async function saveSelectedCoinLists(longList: string[], shortList: string[]) {
     if (!settings.value) return
     try {
-      // 保持 settings.value 的其他部分不变，只更新列表
       const payload = {
         ...settings.value,
         long_coin_list: longList,
@@ -144,6 +138,6 @@ export const useSettingsStore = defineStore('settings', () => {
     fetchSettings,
     saveGeneralSettings,
     saveSelectedCoinLists,
-    updateAvailablePools, // 导出新 action
+    updateAvailablePools,
   }
 })

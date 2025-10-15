@@ -1,4 +1,4 @@
-# backend/app/config/config.py (修改版)
+# backend/app/config/config.py (最终修正版)
 import json
 import os
 from pathlib import Path
@@ -46,9 +46,10 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     'long_coin_list': [],
     'short_coin_list': [],
     'long_custom_weights': {},
-    # --- 新增配置项 ---
-    'rebalance_volume_ma_days': 20,  # 计算成交量均线的天数
-    'rebalance_volume_spike_ratio': 3.0,  # 成交量放大过滤倍数
+    'rebalance_volume_ma_days': 20,
+    'rebalance_volume_spike_ratio': 3.0,
+    # --- 核心修正：添加基准币种的默认值 ---
+    'rebalance_benchmark_coin': ['BTC'],
 }
 
 # 内存中全局变量
@@ -67,7 +68,6 @@ def load_coin_lists() -> None:
     with _coin_list_lock:
         if not COIN_LISTS_FILE.exists():
             print(f"--- [WARNING] {COIN_LISTS_FILE} not found. Creating a new one.")
-            # 如果文件不存在，创建一个空的结构
             with open(COIN_LISTS_FILE, 'w', encoding='utf-8') as f:
                 json.dump({"coins_pool": [], "long_coins_pool": [], "short_coins_pool": []}, f, indent=4)
             AVAILABLE_COINS, AVAILABLE_LONG_COINS, AVAILABLE_SHORT_COINS = [], [], []
@@ -132,7 +132,6 @@ def save_settings(current_config: Dict[str, Any]) -> bool:
         return False
 
 
-# --- 新增函数 ---
 def add_coin_to_pool(coin_symbol: str) -> List[str]:
     """
     添加新币种到总池中，并保存到文件。
@@ -146,7 +145,6 @@ def add_coin_to_pool(coin_symbol: str) -> List[str]:
         raise ValueError("Coin symbol cannot be empty.")
 
     with _coin_list_lock:
-        # 重新从文件读取以获取最新状态
         try:
             with open(COIN_LISTS_FILE, 'r', encoding='utf-8') as f:
                 data = json.load(f)
@@ -163,12 +161,9 @@ def add_coin_to_pool(coin_symbol: str) -> List[str]:
         with open(COIN_LISTS_FILE, 'w', encoding='utf-8') as f:
             json.dump(data, f, indent=4, ensure_ascii=False)
 
-        # 更新内存中的全局变量
         AVAILABLE_COINS = data['coins_pool']
         print(f"--- [INFO] Added '{symbol_upper}' to coin pool. Total now: {len(AVAILABLE_COINS)} ---")
         return AVAILABLE_COINS
-# --- 修改结束 ---
-
 
 # 首次加载
 load_coin_lists()
