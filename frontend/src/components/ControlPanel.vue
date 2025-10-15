@@ -360,7 +360,6 @@
                   multiple
                   chips
                   closable-chips
-                  hint="可选择多个币种作为综合基准"
                   persistent-hint
                   variant="outlined"
                   density="compact"
