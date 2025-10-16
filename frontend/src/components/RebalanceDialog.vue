@@ -4,7 +4,7 @@
     <v-card v-if="internalPlan">
       <v-card-title class="text-h5">
         再平衡计划 (目标比例: {{ manualRatio.toFixed(1) }}%)
-      </-card-title>
+      </v-card-title>
       <v-card-text>
         <!-- 核心修改：新增显示预计总仓位价值的区域 -->
         <div class="text-center mb-6">
