@@ -1,4 +1,4 @@
-<!-- frontend/src/views/TradingView.vue (最终完整版) -->
+<!-- frontend/src/views/TradingView.vue (最终参数同步修正版) -->
 <template>
   <div :style="{ paddingBottom: $vuetify.display.smAndDown ? '128px' : '80px' }">
     <v-container fluid>
@@ -133,6 +133,7 @@ const handleSyncSlTp = () => {
 
 const onGenerateRebalancePlan = () => {
   if (settingsStore.settings) {
+    // --- 核心修正：确保所有相关参数都被完整地包含在 criteria 对象中 ---
     const criteria: RebalanceCriteria = {
       method: settingsStore.settings.rebalance_method,
       top_n: settingsStore.settings.rebalance_top_n,
@@ -143,6 +144,8 @@ const onGenerateRebalancePlan = () => {
       rebalance_volume_ma_days: settingsStore.settings.rebalance_volume_ma_days,
       rebalance_volume_spike_ratio: settingsStore.settings.rebalance_volume_spike_ratio,
       rebalance_benchmark_coin: settingsStore.settings.rebalance_benchmark_coin,
+
+      // 添加所有缺失的防反弹过滤参数
       enable_rebalance_filters: settingsStore.settings.enable_rebalance_filters,
       rebalance_rsi_period: settingsStore.settings.rebalance_rsi_period,
       rebalance_rsi_threshold: settingsStore.settings.rebalance_rsi_threshold,
@@ -165,9 +168,7 @@ const handleGenerateRebalancePlan = async (criteria: RebalanceCriteria) => {
     timestamp: new Date().toLocaleTimeString(),
   })
   try {
-    // --- 核心修改：使用新的请求体结构，将 criteria 对象包装起来 ---
     const response = await apiClient.post('/api/rebalance/plan', { criteria: criteria })
-    // --- 修改结束 ---
     const planData = response.data
     if (planData.error) {
       uiStore.logStore.addLog({
