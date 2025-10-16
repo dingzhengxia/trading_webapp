@@ -43,7 +43,7 @@
         </div>
         <v-alert type="warning" variant="tonal" class="mt-4 text-caption">
           警告：此操作将自动执行交易！
-        </alert>
+        </v-alert>
       </v-card-text>
       <v-card-actions>
         <v-spacer></v-spacer>
