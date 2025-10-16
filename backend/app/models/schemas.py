@@ -1,4 +1,4 @@
-# backend/app/models/schemas.py (最终完整正确版)
+# backend/app/models/schemas.py (最终修正版)
 from typing import List, Dict, Any, Optional
 
 from pydantic import BaseModel, Field
@@ -43,6 +43,12 @@ class TradePlanRequest(BaseTaskRequest):
     long_coin_list: List[str]
     short_coin_list: List[str]
     long_custom_weights: Dict[str, float]
+    rebalance_method: str
+    rebalance_top_n: int
+    rebalance_min_volume_usd: float
+    rebalance_abs_momentum_days: int
+    rebalance_rel_strength_days: int
+    rebalance_foam_days: int
     open_maker_retries: int
     open_order_fill_timeout_seconds: int
     close_maker_retries: int
@@ -55,6 +61,18 @@ class TradePlanRequest(BaseTaskRequest):
     enable_short_sl_tp: bool
     short_stop_loss_percentage: float
     short_take_profit_percentage: float
+    rebalance_volume_ma_days: int
+    rebalance_volume_spike_ratio: float
+    rebalance_benchmark_coin: List[str]
+
+    enable_rebalance_filters: bool
+    rebalance_rsi_period: int
+    rebalance_rsi_threshold: float
+    rebalance_short_term_momentum_days: int
+    rebalance_short_term_momentum_threshold: float
+    rebalance_bollinger_period: int
+    rebalance_bollinger_std_dev: int
+    rebalance_bollinger_width_spike_ratio: float
 
 
 class SyncSltpRequest(BaseTaskRequest):
@@ -72,7 +90,7 @@ class ClosePositionRequest(BaseTaskRequest):
     ratio: float = Field(..., gt=0, le=1.0)
 
 
-class CloseBySideRequest(BaseModel):
+class CloseBySideRequest(BaseTaskRequest):
     side: str
     ratio: float = Field(..., gt=0, le=1.0)
 
@@ -94,33 +112,26 @@ class ExecutionPlanRequest(BaseTaskRequest):
     orders: List[ExecutionOrderItem]
 
 
-# --- 核心修正：恢复并包含了所有字段，并加上默认值 ---
+# --- 核心修正：将所有新参数添加到 RebalanceCriteria 模型 ---
 class RebalanceCriteria(BaseModel):
-    method: str
-    top_n: int
-    # --- ！！！确保这个字段存在 ！！！ ---
-    min_volume_usd: float
-    # --- ！！！ ---
-    abs_momentum_days: int
-    rel_strength_days: int
-    foam_days: int
-    rebalance_volume_ma_days: int
-    rebalance_volume_spike_ratio: float
-    rebalance_benchmark_coin: List[str]
+    method: str = "multi_factor_weakest"
+    top_n: int = 50
+    min_volume_usd: float = 20000000.0
+    abs_momentum_days: int = 30
+    rel_strength_days: int = 60
+    foam_days: int = 1
+    rebalance_volume_ma_days: int = 20
+    rebalance_volume_spike_ratio: float = 3.0
+    rebalance_benchmark_coin: List[str] = ['BTC']
 
-    enable_rebalance_filters: bool
-    rebalance_rsi_period: int
-    rebalance_rsi_threshold: float
-    rebalance_short_term_momentum_days: int
-    rebalance_short_term_momentum_threshold: float
-    rebalance_bollinger_period: int
-    rebalance_bollinger_std_dev: int
-    rebalance_bollinger_width_spike_ratio: float
-
-
-class RebalancePlanRequest(BaseModel):
-    criteria: RebalanceCriteria
-    custom_target_short_value: Optional[float] = None
+    enable_rebalance_filters: bool = True
+    rebalance_rsi_period: int = 14
+    rebalance_rsi_threshold: float = 25.0
+    rebalance_short_term_momentum_days: int = 3
+    rebalance_short_term_momentum_threshold: float = 15.0
+    rebalance_bollinger_period: int = 20
+    rebalance_bollinger_std_dev: int = 2
+    rebalance_bollinger_width_spike_ratio: float = 2.0
 
 
 class RebalancePlanResponse(BaseModel):
