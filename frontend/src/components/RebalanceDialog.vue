@@ -1,11 +1,25 @@
-<!-- frontend/src/components/RebalanceDialog.vue (本地实时计算最终版) -->
+<!-- frontend/src/components/RebalanceDialog.vue (显示总仓位的最终版) -->
 <template>
   <v-dialog v-model="uiStore.showRebalanceDialog" max-width="600px" persistent>
     <v-card v-if="internalPlan">
       <v-card-title class="text-h5">
         再平衡计划 (目标比例: {{ manualRatio.toFixed(1) }}%)
-      </v-card-title>
+      </-card-title>
       <v-card-text>
+        <!-- 核心修改：新增显示预计总仓位价值的区域 -->
+        <div class="text-center mb-6">
+          <div class="text-caption text-grey">预计空头总价值</div>
+          <div class="text-h4 font-weight-bold text-amber-accent-3 my-1">
+            ${{
+              targetShortValue.toLocaleString('en-US', {
+                minimumFractionDigits: 2,
+                maximumFractionDigits: 2,
+              })
+            }}
+          </div>
+        </div>
+        <!-- 修改结束 -->
+
         <!-- 手动调整滑块 -->
         <div class="mb-6">
           <v-slider
@@ -62,32 +76,34 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { ref, watch, computed } from 'vue' // <-- 引入 computed
 import { useUiStore } from '@/stores/uiStore'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { usePositionStore } from '@/stores/positionStore'
-import type { RebalancePlan, Position } from '@/models/types'
+import type { RebalancePlan } from '@/models/types'
 
 const uiStore = useUiStore()
 const settingsStore = useSettingsStore()
 const positionStore = usePositionStore()
 
-// --- 核心修改：使用内部状态来驱动UI ---
 const manualRatio = ref(0)
 const internalPlan = ref<RebalancePlan | null>(null)
 
-// 纯前端的计划重新计算函数
+// --- 核心修改：新增一个计算属性来实时计算目标空头总价值 ---
+const targetShortValue = computed(() => {
+  // 目标空头总价值 = 当前多头总价值 * 手动调整的目标比例
+  return positionStore.longNotional * (manualRatio.value / 100)
+})
+// --- 修改结束 ---
+
 const recalculatePlanLocally = () => {
   if (!uiStore.rebalancePlan) return
 
-  const targetRatio = manualRatio.value / 100
+  // 使用 computed 属性 targetShortValue 来获取目标价值
+  const targetShortValueVal = targetShortValue.value
   const targetCoinList = uiStore.rebalancePlan.target_coin_list
   const currentShortPositions = positionStore.shortPositions
-  const currentLongValue = positionStore.longNotional
 
-  const targetShortValue = currentLongValue * targetRatio
-
-  // --- JS/TS 版本的 rebalance_logic.generate_rebalance_plan ---
   const currentPositionsMap = new Map(currentShortPositions.map((p) => [p.symbol, p]))
   const currentSymbols = new Set(currentPositionsMap.keys())
   const targetSymbols = new Set(targetCoinList)
@@ -106,7 +122,7 @@ const recalculatePlanLocally = () => {
       })
     }
   } else {
-    const valuePerCoinIdeal = targetShortValue / targetSymbols.size
+    const valuePerCoinIdeal = targetShortValueVal / targetSymbols.size
 
     for (const [symbol, position] of currentPositionsMap.entries()) {
       if (!targetSymbols.has(symbol)) {
@@ -142,15 +158,13 @@ const recalculatePlanLocally = () => {
 
   const newOpenPlan: RebalancePlan['positions_to_open'] = []
   if (targetCoinList.length > 0) {
-      const valuePerCoinIdeal = targetShortValue / targetCoinList.length;
-      for (const [symbol, value] of Object.entries(newOpenPlanData)) {
-          const percentage = valuePerCoinIdeal > 0.01 ? (value / valuePerCoinIdeal) * 100 : 100;
-          newOpenPlan.push({ symbol, open_value: value, percentage });
-      }
+    const valuePerCoinIdeal = targetShortValueVal / targetCoinList.length
+    for (const [symbol, value] of Object.entries(newOpenPlanData)) {
+      const percentage = valuePerCoinIdeal > 0.01 ? (value / valuePerCoinIdeal) * 100 : 100
+      newOpenPlan.push({ symbol, open_value: value, percentage })
+    }
   }
-  // --- 计算结束 ---
 
-  // 更新内部的、驱动UI的plan对象
   internalPlan.value = {
     target_ratio_perc: manualRatio.value,
     positions_to_close: newClosePlan,
@@ -159,11 +173,9 @@ const recalculatePlanLocally = () => {
   }
 }
 
-// 监听 uiStore.rebalancePlan，这是从后端来的初始计划
 watch(
   () => uiStore.rebalancePlan,
   (newPlan) => {
-    // 当初始计划到达时，用它来设置我们的本地状态
     if (newPlan) {
       manualRatio.value = newPlan.target_ratio_perc
       internalPlan.value = newPlan
@@ -173,9 +185,7 @@ watch(
   },
 )
 
-// 监听手动调整的比例，并触发本地重新计算
 watch(manualRatio, () => {
-  // 增加一个保护，确保只在dialog打开且有初始计划时才重新计算
   if (uiStore.showRebalanceDialog && uiStore.rebalancePlan) {
     recalculatePlanLocally()
   }
@@ -187,7 +197,6 @@ const close = () => {
 
 const applyList = () => {
   if (!internalPlan.value || !settingsStore.settings) return
-  // 使用 internalPlan.value 来获取最新的币种列表
   const openSymbols = new Set(internalPlan.value.positions_to_open.map((p) => p.symbol))
   const symbolsToKeep = new Set(
     internalPlan.value.positions_to_close
@@ -206,8 +215,6 @@ const applyList = () => {
 
 const executePlan = async () => {
   if (!internalPlan.value || uiStore.isRunning) return
-
-  // 使用最终确认的 internalPlan.value 来构建执行命令
   const executionOrders = []
   for (const item of internalPlan.value.positions_to_close) {
     executionOrders.push({
