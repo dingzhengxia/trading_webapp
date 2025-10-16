@@ -1,4 +1,4 @@
-<!-- frontend/src/views/TradingView.vue (最终参数同步修正版) -->
+<!-- frontend/src/views/TradingView.vue (最终修正版) -->
 <template>
   <div :style="{ paddingBottom: $vuetify.display.smAndDown ? '128px' : '80px' }">
     <v-container fluid>
@@ -133,7 +133,7 @@ const handleSyncSlTp = () => {
 
 const onGenerateRebalancePlan = () => {
   if (settingsStore.settings) {
-    // --- 核心修正：确保所有相关参数都被完整地包含在 criteria 对象中 ---
+    // --- FINAL FIX: 确保将所有需要的参数都包含在 criteria 对象中 ---
     const criteria: RebalanceCriteria = {
       method: settingsStore.settings.rebalance_method,
       top_n: settingsStore.settings.rebalance_top_n,
@@ -141,19 +141,9 @@ const onGenerateRebalancePlan = () => {
       abs_momentum_days: settingsStore.settings.rebalance_abs_momentum_days,
       rel_strength_days: settingsStore.settings.rebalance_rel_strength_days,
       foam_days: settingsStore.settings.rebalance_foam_days,
+      // 将新添加的成交量过滤参数也加入请求体
       rebalance_volume_ma_days: settingsStore.settings.rebalance_volume_ma_days,
       rebalance_volume_spike_ratio: settingsStore.settings.rebalance_volume_spike_ratio,
-      rebalance_benchmark_coin: settingsStore.settings.rebalance_benchmark_coin,
-
-      // 添加所有缺失的防反弹过滤参数
-      enable_rebalance_filters: settingsStore.settings.enable_rebalance_filters,
-      rebalance_rsi_period: settingsStore.settings.rebalance_rsi_period,
-      rebalance_rsi_threshold: settingsStore.settings.rebalance_rsi_threshold,
-      rebalance_short_term_momentum_days: settingsStore.settings.rebalance_short_term_momentum_days,
-      rebalance_short_term_momentum_threshold: settingsStore.settings.rebalance_short_term_momentum_threshold,
-      rebalance_bollinger_period: settingsStore.settings.rebalance_bollinger_period,
-      rebalance_bollinger_std_dev: settingsStore.settings.rebalance_bollinger_std_dev,
-      rebalance_bollinger_width_spike_ratio: settingsStore.settings.rebalance_bollinger_width_spike_ratio,
     }
     handleGenerateRebalancePlan(criteria)
   }
@@ -168,7 +158,7 @@ const handleGenerateRebalancePlan = async (criteria: RebalanceCriteria) => {
     timestamp: new Date().toLocaleTimeString(),
   })
   try {
-    const response = await apiClient.post('/api/rebalance/plan', { criteria: criteria })
+    const response = await apiClient.post('/api/rebalance/plan', criteria)
     const planData = response.data
     if (planData.error) {
       uiStore.logStore.addLog({

@@ -4,8 +4,8 @@ from typing import List, Dict, Any
 
 import ccxt.async_support as ccxt
 from fastapi import APIRouter, Depends, BackgroundTasks
-import pandas as pd
 
+# --- 核心修正：重新从 config 导入 AVAILABLE_SHORT_COINS ---
 from ..config.config import AVAILABLE_LONG_COINS, STABLECOIN_PREFERENCE, AVAILABLE_SHORT_COINS
 from ..core.dependencies import get_settings_dependency
 from ..core.exchange_manager import get_exchange_dependency
@@ -14,7 +14,7 @@ from ..core.trading_service import trading_service
 from ..core.websocket_manager import log_message
 from ..logic import exchange_logic_async as ex_async
 from ..logic import rebalance_logic
-from ..models.schemas import RebalanceCriteria, RebalancePlanResponse, ExecutionPlanRequest, RebalancePlanRequest
+from ..models.schemas import RebalanceCriteria, RebalancePlanResponse, ExecutionPlanRequest
 
 router = APIRouter(prefix="/api/rebalance", tags=["Rebalance"], dependencies=[Depends(verify_api_key)])
 
@@ -23,10 +23,37 @@ async def screen_coins_task(exchange: ccxt.binanceusdm, criteria: RebalanceCrite
     str]:
     await log_message(f"开始筛选，策略: {criteria.method}, 目标数量: {criteria.top_n}", "info")
 
+    # --- 核心修正：使用“做空币种备选池”而不是“做空交易列表” ---
     short_pool = set(AVAILABLE_SHORT_COINS)
     if not short_pool:
         raise ValueError("做空币种备选池为空，无法进行智能再平衡筛选。请先在'币种列表管理'中配置。")
     await log_message(f"将使用您配置的 {len(short_pool)} 个币种的做空备选池进行筛选。", "info")
+    # --- 修正结束 ---
+
+    await log_message("正在获取全市场行情以进行流动性筛选...", "info")
+    all_tickers = await exchange.fetch_tickers()
+
+    stablecoins = set(STABLECOIN_PREFERENCE)
+    liquid_coins_symbols = []
+    processed_bases = set()
+
+    for symbol, ticker in all_tickers.items():
+        if '/' not in symbol: continue
+        base, quote = symbol.split('/')[:2]
+        quote = quote.split(':')[0]
+        if base in processed_bases: continue
+
+        if (quote in stablecoins and
+                base in short_pool and  # 使用 short_pool 进行判断
+                ticker.get('quoteVolume', 0) is not None and
+                ticker['quoteVolume'] > criteria.min_volume_usd):
+            liquid_coins_symbols.append(base)
+            processed_bases.add(base)
+
+    if not liquid_coins_symbols:
+        raise ValueError("您选择的做空币种中，没有币种通过流动性筛选。请检查或降低交易额门槛。")
+
+    await log_message(f"通过流动性筛选的币种数量: {len(liquid_coins_symbols)}", "info")
 
     days_to_fetch = max(
         criteria.abs_momentum_days,
@@ -39,44 +66,17 @@ async def screen_coins_task(exchange: ccxt.binanceusdm, criteria: RebalanceCrite
         2
     )
     fetch_limit = days_to_fetch + 30
-    await log_message(f"准备并发获取 {len(short_pool)} 个币种过去 {fetch_limit} 天的K线...", "info")
+    await log_message(f"准备并发获取 {len(liquid_coins_symbols)} 个币种过去 {fetch_limit} 天的K线...", "info")
 
     kline_tasks = []
-    symbols_for_kline = []
-    for symbol in short_pool:
+    valid_symbols_for_kline = []
+    for symbol in liquid_coins_symbols:
         full_usdt_symbol = ex_async.resolve_full_symbol(exchange, symbol)
         if full_usdt_symbol:
             kline_tasks.append(ex_async.fetch_klines_async(exchange, full_usdt_symbol, '1d', fetch_limit))
-            symbols_for_kline.append(symbol)
+            valid_symbols_for_kline.append(symbol)
 
-    kline_results = await asyncio.gather(*kline_tasks, return_exceptions=True)
-
-    await log_message("K线数据获取完毕，开始进行流动性筛选...", "info")
-    coin_data_pre_filter = []
-    min_volume_usd = criteria.rebalance_min_volume_usd
-    volume_ma_days = criteria.rebalance_volume_ma_days
-
-    for i, klines in enumerate(kline_results):
-        symbol = symbols_for_kline[i]
-        if isinstance(klines, list) and len(klines) >= volume_ma_days:
-            df = pd.DataFrame(klines, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-            df['quoteVolume'] = df['volume'] * df['close']
-            avg_quote_volume = df['quoteVolume'].rolling(window=volume_ma_days).mean().iloc[-1]
-
-            if pd.notna(avg_quote_volume) and avg_quote_volume >= min_volume_usd:
-                coin_data_pre_filter.append({
-                    'symbol': symbol,
-                    'usdt_klines': klines
-                })
-            else:
-                if pd.notna(avg_quote_volume):
-                    print(
-                        f"--- [REBALANCE_FILTER] 剔除币种 {symbol}: 平均交易额({avg_quote_volume:,.0f})过低，低于门槛 {min_volume_usd:,.0f} ---")
-
-    if not coin_data_pre_filter:
-        raise ValueError("您选择的做空币种中，没有币种通过流动性筛选。请检查或降低交易额门槛。")
-
-    await log_message(f"通过流动性筛选的币种数量: {len(coin_data_pre_filter)}", "info")
+    usdt_results = await asyncio.gather(*kline_tasks, return_exceptions=True)
     coin_data = []
 
     if criteria.method == 'multi_factor_weakest':
@@ -85,11 +85,13 @@ async def screen_coins_task(exchange: ccxt.binanceusdm, criteria: RebalanceCrite
             raise ValueError("多因子策略需要至少指定一个基准币种 (如 BTC)。")
 
         await log_message(f"正在获取 {', '.join(benchmark_coins)} 作为相对强度基准K线...", "info")
+
         benchmark_kline_tasks = [
             ex_async.fetch_klines_async(exchange, ex_async.resolve_full_symbol(exchange, coin), '1d', fetch_limit)
             for coin in benchmark_coins
         ]
         benchmark_results = await asyncio.gather(*benchmark_kline_tasks, return_exceptions=True)
+
         benchmark_klines_maps = {}
         for i, klines in enumerate(benchmark_results):
             coin = benchmark_coins[i]
@@ -100,41 +102,52 @@ async def screen_coins_task(exchange: ccxt.binanceusdm, criteria: RebalanceCrite
 
         await log_message("基准数据准备完毕，开始合成各币种的相对强度K线...", "info")
 
-        for item in coin_data_pre_filter:
-            symbol = item['symbol']
-            coin_usdt_klines = item['usdt_klines']
-            synthetic_klines_dict = {}
+        for i, coin_usdt_klines in enumerate(usdt_results):
+            if isinstance(coin_usdt_klines, list) and len(coin_usdt_klines) >= days_to_fetch:
+                symbol = valid_symbols_for_kline[i]
 
-            for bench_coin, bench_klines_map in benchmark_klines_maps.items():
-                synthetic_bench_klines = []
-                for coin_kline in coin_usdt_klines:
-                    timestamp = coin_kline[0]
-                    base_kline = bench_klines_map.get(timestamp)
-                    if base_kline and all(p > 1e-8 for p in base_kline[1:5]):
-                        synthetic_kline = [
-                            timestamp, coin_kline[1] / base_kline[1], coin_kline[2] / base_kline[2],
-                                       coin_kline[3] / base_kline[3], coin_kline[4] / base_kline[4], coin_kline[5]
-                        ]
-                        synthetic_bench_klines.append(synthetic_kline)
-                synthetic_klines_dict[bench_coin] = synthetic_bench_klines
+                synthetic_klines_dict = {}
 
-            item['synthetic_klines'] = synthetic_klines_dict
-            coin_data.append(item)
+                for bench_coin, bench_klines_map in benchmark_klines_maps.items():
+                    synthetic_bench_klines = []
+                    for coin_kline in coin_usdt_klines:
+                        timestamp = coin_kline[0]
+                        base_kline = bench_klines_map.get(timestamp)
 
-    else:
-        coin_data = coin_data_pre_filter
+                        if base_kline and all(p > 1e-8 for p in base_kline[1:5]):
+                            synthetic_kline = [
+                                timestamp,
+                                coin_kline[1] / base_kline[1],
+                                coin_kline[2] / base_kline[2],
+                                coin_kline[3] / base_kline[3],
+                                coin_kline[4] / base_kline[4],
+                                coin_kline[5]
+                            ]
+                            synthetic_bench_klines.append(synthetic_kline)
+
+                    synthetic_klines_dict[bench_coin] = synthetic_bench_klines
+
+                coin_data.append({
+                    'symbol': symbol,
+                    'usdt_klines': coin_usdt_klines,
+                    'synthetic_klines': synthetic_klines_dict
+                })
+    else:  # foam
+        for i, klines in enumerate(usdt_results):
+            if isinstance(klines, list) and len(klines) >= days_to_fetch:
+                coin_data.append({'symbol': valid_symbols_for_kline[i], 'usdt_klines': klines})
 
     if not coin_data:
-        raise ValueError("成功获取并处理K线数据的币种为0，无法进行下一步计算。")
+        raise ValueError("成功获取K线数据的币种为0，无法进行下一步计算。")
 
-    await log_message(f"数据准备完毕，将对 {len(coin_data)} 个币种进行最终排名计算...", "info")
+    await log_message(f"成功获取并处理了 {len(coin_data)} 个币种的K线数据，开始计算最终排名...", "info")
 
     loop = asyncio.get_running_loop()
     target_coin_list = await loop.run_in_executor(
         None,
         rebalance_logic.screen_coins_advanced,
         coin_data,
-        criteria,
+        criteria.model_dump(),
         AVAILABLE_LONG_COINS
     )
 
@@ -143,14 +156,14 @@ async def screen_coins_task(exchange: ccxt.binanceusdm, criteria: RebalanceCrite
 
 @router.post("/plan", response_model=RebalancePlanResponse)
 async def generate_rebalance_plan(
-        request: RebalancePlanRequest,
+        criteria: RebalanceCriteria,
         exchange: ccxt.binanceusdm = Depends(get_exchange_dependency),
         config: Dict[str, Any] = Depends(get_settings_dependency)
 ):
     print("--- 📢 API HIT: /api/rebalance/plan ---")
 
     positions_task = ex_async.fetch_positions_with_pnl_async(exchange, config.get('leverage', 1))
-    screening_task = screen_coins_task(exchange, request.criteria, config)
+    screening_task = screen_coins_task(exchange, criteria, config)
 
     all_positions, target_coin_list = await asyncio.gather(positions_task, screening_task)
 
@@ -163,17 +176,13 @@ async def generate_rebalance_plan(
     if current_long_value <= 0:
         raise ValueError("多头仓位价值为零，无法再平衡。")
 
-    if request.custom_target_short_value is not None and request.custom_target_short_value >= 0:
-        target_short_value = request.custom_target_short_value
-        target_ratio = target_short_value / current_long_value if current_long_value > 0 else 0
-        await log_message(f"使用用户自定义的目标空头总价值: ${target_short_value:,.2f}", "info")
-    else:
-        alt_season_index = 50
-        target_ratio = rebalance_logic.calculate_target_ratio_by_alt_index(alt_season_index, config)
-        target_short_value = current_long_value * target_ratio
-        await log_message(
-            f"当前多头价值: ${current_long_value:,.2f}, 目标空头比例: {target_ratio:.1%}, 目标空头总价值: ${target_short_value:,.2f}",
-            "info")
+    alt_season_index = 50
+    target_ratio = rebalance_logic.calculate_target_ratio_by_alt_index(alt_season_index, config)
+    target_short_value = current_long_value * target_ratio
+
+    await log_message(
+        f"当前多头价值: ${current_long_value:,.2f}, 目标空头比例: {target_ratio:.1%}, 目标空头总价值: ${target_short_value:,.2f}",
+        "info")
 
     close_plan_data, open_plan_data = rebalance_logic.generate_rebalance_plan(
         current_short_positions, target_coin_list, target_short_value
@@ -190,7 +199,7 @@ async def generate_rebalance_plan(
 
     open_plan_formatted = []
     if target_coin_list:
-        value_per_coin_ideal = target_short_value / len(target_coin_list) if len(target_coin_list) > 0 else 0
+        value_per_coin_ideal = target_short_value / len(target_coin_list)
         for symbol, value in open_plan_data.items():
             percentage = (value / value_per_coin_ideal) * 100 if value_per_coin_ideal > 0.01 else 100
             open_plan_formatted.append({
