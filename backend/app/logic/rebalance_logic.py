@@ -214,36 +214,89 @@ def screen_coins_advanced(
     top_n = criteria.get('top_n')
     blacklist_upper = [b.upper() for b in blacklist]
 
-    volume_ma_days = criteria.get('rebalance_volume_ma_days', 20)
+    # 步骤1: 应用成交量激增过滤器和黑名单
     volume_spike_ratio = criteria.get('rebalance_volume_spike_ratio', 3.0)
+    volume_ma_days = criteria.get('rebalance_volume_ma_days', 20)
 
-    pre_filtered_coin_data = []
+    initial_filtered_data = []
     for data in coin_data:
+        symbol = data['symbol']
+        if symbol.upper() in blacklist_upper:
+            continue
+
         if 'usdt_klines' not in data or len(data['usdt_klines']) < volume_ma_days + 1:
             continue
-        volumes = [kline[5] for kline in data['usdt_klines'][-(volume_ma_days + 1):-1]]
-        if not volumes:
-            continue
-        avg_volume = np.mean(volumes)
-        latest_volume = data['usdt_klines'][-1][5]
-        if avg_volume < 1e-6:
-            continue
-        if (latest_volume / avg_volume) <= volume_spike_ratio:
-            pre_filtered_coin_data.append(data)
-        else:
-            print(
-                f"--- [REBALANCE_FILTER] 剔除币种 {data['symbol']}: 成交量异常放大 ({latest_volume:,.0f} vs 均量 {avg_volume:,.0f}, 超过 {volume_spike_ratio}x) ---")
 
-    filtered_coin_data = [d for d in pre_filtered_coin_data if d['symbol'].upper() not in blacklist_upper]
-    if not filtered_coin_data:
+        df = pd.DataFrame(data['usdt_klines'], columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+
+        # 计算成交量均线 (不包括今天)
+        avg_volume = df['volume'].iloc[-(volume_ma_days + 1):-1].mean()
+        latest_volume = df['volume'].iloc[-1]
+
+        if avg_volume > 1e-9 and (latest_volume / avg_volume) > volume_spike_ratio:
+            print(
+                f"--- [REBALANCE_FILTER] 剔除币种 {symbol}: 成交量异常放大 ({latest_volume:,.0f} vs 均量 {avg_volume:,.0f}, 超过 {volume_spike_ratio}x) ---")
+            continue
+
+        initial_filtered_data.append(data)
+
+    if not initial_filtered_data:
         return []
 
+    # 步骤2: 计算技术指标并应用防反弹过滤器
+    final_filtered_data = []
+    enable_filters = criteria.get('enable_rebalance_filters', False)
+
+    for data in initial_filtered_data:
+        symbol = data['symbol']
+
+        if 'usdt_klines' not in data or not data['usdt_klines']:
+            continue
+
+        klines_df = pd.DataFrame(data['usdt_klines'], columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+        if klines_df.empty:
+            continue
+
+        indicators = calculate_indicators(klines_df, criteria)
+        data.update(indicators)  # 将指标附加到data字典
+
+        if enable_filters:
+            # 过滤器A: RSI
+            rsi_threshold = criteria.get('rebalance_rsi_threshold', 0)
+            if 'rsi' in data and data['rsi'] < rsi_threshold:
+                print(
+                    f"--- [REBALANCE_FILTER] 剔除币种 {symbol}: RSI({data['rsi']:.2f}) 过低，低于门槛 {rsi_threshold} ---")
+                continue
+
+            # 过滤器B: 短期动量
+            short_mom_threshold = criteria.get('rebalance_short_term_momentum_threshold', 100)
+            if 'short_term_momentum' in data and data['short_term_momentum'] > short_mom_threshold:
+                print(
+                    f"--- [REBALANCE_FILTER] 剔除币种 {symbol}: 短期动量({data['short_term_momentum']:.2f}%) 过高，高于门槛 {short_mom_threshold}% ---")
+                continue
+
+            # 过滤器C: 波动率
+            bb_spike_ratio = criteria.get('rebalance_bollinger_width_spike_ratio', 100)
+            if 'bb_width' in data and 'bb_width_sma' in data and data['bb_width_sma'] > 1e-9:
+                current_ratio = data['bb_width'] / data['bb_width_sma']
+                if current_ratio > bb_spike_ratio:
+                    print(
+                        f"--- [REBALANCE_FILTER] 剔除币种 {symbol}: 波动率异常放大({current_ratio:.2f}x)，高于门槛 {bb_spike_ratio}x ---")
+                    continue
+
+        final_filtered_data.append(data)
+
+    if not final_filtered_data:
+        print("--- [REBALANCE_INFO] 所有通过流动性筛选的币种均被防反弹过滤器剔除。---")
+        return []
+
+    # 步骤3: 对通过所有过滤的币种进行评分和排名
     qualified_coins = []
     abs_days = criteria.get('abs_momentum_days', 30)
     rel_days = criteria.get('rel_strength_days', 60)
     foam_days = criteria.get('foam_days', 1)
 
-    for data in filtered_coin_data:
+    for data in final_filtered_data:
         coin_info = {'symbol': data['symbol']}
         foam_momentum = calculate_change_percent(data.get('usdt_klines'), foam_days)
         abs_momentum = calculate_change_percent(data.get('usdt_klines'), abs_days)
@@ -261,11 +314,11 @@ def screen_coins_advanced(
                     if strength is not None:
                         rel_strengths[bench_coin] = strength
             coin_info['rel_strengths'] = rel_strengths
-
             qualified_coins.append(coin_info)
 
     if not qualified_coins: return []
 
+    # 步骤4: 最终排序
     if method == 'foam':
         qualified_coins.sort(key=lambda x: x['foam_momentum'], reverse=True)
     elif method == 'multi_factor_weakest':
