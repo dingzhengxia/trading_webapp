@@ -7,6 +7,7 @@
         <v-text-field
           v-model.number="editableTargetRatio"
           type="number"
+          step="0.1"
           suffix="%"
           density="compact"
           variant="outlined"
@@ -28,32 +29,10 @@
         <div v-if="uiStore.rebalancePlan.positions_to_open.length" class="mt-4">
           <p class="font-weight-bold">将要开仓/加仓:</p>
           <v-list density="compact">
-            <v-list-item v-for="(p, index) in uiStore.rebalancePlan.positions_to_open"
-                         :key="p.symbol">
-              <v-row align="center">
-                <v-col cols="6">
-                  {{ p.symbol }} (+${{ p.open_value.toFixed(2) }}, {{ p.percentage.toFixed(0) }}%)
-                </v-col>
-                <v-col cols="6">
-                  <v-text-field
-                    v-model.number="p.percentage"
-                    type="number"
-                    suffix="%"
-                    density="compact"
-                    variant="outlined"
-                    hide-details
-                    @update:model-value="onPercentageChange(index, $event)"
-                  ></v-text-field>
-                </v-col>
-              </v-row>
+            <v-list-item v-for="p in uiStore.rebalancePlan.positions_to_open" :key="p.symbol">
+              {{ p.symbol }} (+${{ p.open_value.toFixed(2) }}, {{ p.percentage.toFixed(0) }}%)
             </v-list-item>
           </v-list>
-          <div class="d-flex justify-space-between mt-2">
-            <span>总权重:</span>
-            <span :class="totalOpenPercentage === 100 ? 'text-success' : 'text-error'">
-              {{ totalOpenPercentage.toFixed(2) }}%
-            </span>
-          </div>
         </div>
         <v-alert type="warning" variant="tonal" class="mt-4 text-caption">
           警告：此操作将自动执行交易！
@@ -66,7 +45,7 @@
           color="red-darken-1"
           variant="tonal"
           @click="executePlan"
-          :disabled="totalOpenPercentage !== 100 || uiStore.isRunning"
+          :disabled="uiStore.isRunning"
         >
           执行计划
         </v-btn>
@@ -76,8 +55,8 @@
 </template>
 
 <script setup lang="ts">
-import {ref, computed, watch} from 'vue'
-import {useUiStore} from '@/stores/uiStore'
+import { ref, watch } from 'vue'
+import { useUiStore } from '@/stores/uiStore'
 import apiClient from '@/services/api'
 
 const uiStore = useUiStore()
@@ -91,32 +70,13 @@ watch(
       editableTargetRatio.value = newPlan.target_ratio_perc
     }
   },
-  {immediate: true}
+  { immediate: true }
 )
-
-const totalOpenPercentage = computed(() => {
-  if (!uiStore.rebalancePlan || !uiStore.rebalancePlan.positions_to_open) return 0
-  return uiStore.rebalancePlan.positions_to_open.reduce((sum, item) => sum + (item.percentage || 0), 0)
-})
 
 const onTargetRatioChange = (newValue: number | undefined) => {
   if (!uiStore.rebalancePlan || newValue === undefined) return
+  // 只更新显示的目标比例，不改变实际的开仓/平仓计划
   uiStore.rebalancePlan.target_ratio_perc = newValue
-}
-
-const onPercentageChange = (index: number, newValue: number | undefined) => {
-  if (!uiStore.rebalancePlan || !uiStore.rebalancePlan.positions_to_open || newValue === undefined) return
-
-  const position = uiStore.rebalancePlan.positions_to_open[index]
-  position.percentage = newValue
-
-  // 重新计算对应的价值
-  const totalValue = uiStore.rebalancePlan.positions_to_open.reduce((sum, item) =>
-    sum + (item.open_value || 0), 0)
-
-  if (totalOpenPercentage.value > 0) {
-    position.open_value = (totalValue * newValue) / totalOpenPercentage.value
-  }
 }
 
 const executePlan = async () => {
@@ -160,7 +120,7 @@ const executePlan = async () => {
   })
 
   try {
-    const response = await apiClient.post('/api/rebalance/execute', {orders: executionOrders})
+    const response = await apiClient.post('/api/rebalance/execute', { orders: executionOrders })
     uiStore.logStore.addLog({
       message: `[后端] ✅ 已确认接收任务: ${response.data.message}`,
       level: 'success',
