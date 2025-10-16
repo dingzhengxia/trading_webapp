@@ -106,4 +106,7 @@ export interface RebalanceCriteria {
   rebalance_bollinger_period: number;
   rebalance_bollinger_std_dev: number;
   rebalance_bollinger_width_spike_ratio: number;
+
+  // 新增字段
+  manual_target_ratio_perc?: number;
 }

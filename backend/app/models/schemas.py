@@ -133,6 +133,8 @@ class RebalanceCriteria(BaseModel):
     rebalance_bollinger_std_dev: int = 2
     rebalance_bollinger_width_spike_ratio: float = 2.0
 
+    # 新增字段：允许前端传入手动设置的目标比例
+    manual_target_ratio_perc: Optional[float] = Field(None, ge=0, le=200)
 
 class RebalancePlanResponse(BaseModel):
     target_ratio_perc: float

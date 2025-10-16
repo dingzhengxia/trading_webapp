@@ -176,8 +176,17 @@ async def generate_rebalance_plan(
     if current_long_value <= 0:
         raise ValueError("多头仓位价值为零，无法再平衡。")
 
-    alt_season_index = 50
-    target_ratio = rebalance_logic.calculate_target_ratio_by_alt_index(alt_season_index, config)
+    # --- 核心修改：优先使用手动比例 ---
+    if criteria.manual_target_ratio_perc is not None:
+        # 如果前端传入了手动比例，直接使用它
+        await log_message(f"使用手动设置的目标比例: {criteria.manual_target_ratio_perc:.1f}%", "info")
+        target_ratio = criteria.manual_target_ratio_perc / 100.0
+    else:
+        # 否则，按原逻辑自动计算
+        alt_season_index = 50  # 这里的逻辑可以未来扩展
+        target_ratio = rebalance_logic.calculate_target_ratio_by_alt_index(alt_season_index, config)
+    # --- 修改结束 ---
+
     target_short_value = current_long_value * target_ratio
 
     await log_message(

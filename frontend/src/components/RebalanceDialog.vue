@@ -1,28 +1,56 @@
-<!-- frontend/src/components/RebalanceDialog.vue (最终完整版) -->
+<!-- frontend/src/components/RebalanceDialog.vue (可交互的最终版) -->
 <template>
   <v-dialog v-model="uiStore.showRebalanceDialog" max-width="600px" persistent>
     <v-card v-if="uiStore.rebalancePlan">
       <v-card-title class="text-h5">
-        再平衡计划 (目标比例: {{ uiStore.rebalancePlan.target_ratio_perc.toFixed(1) }}%)
+        再平衡计划
+        <!-- 核心修改：标题中的比例现在是可变的 -->
+        (目标比例: {{ manualRatio.toFixed(1) }}%)
       </v-card-title>
       <v-card-text>
-        <div v-if="uiStore.rebalancePlan.positions_to_close.length">
-          <p class="font-weight-bold">将要平仓/减仓:</p>
-          <v-list density="compact">
-            <v-list-item v-for="p in uiStore.rebalancePlan.positions_to_close" :key="p.symbol">
-              {{ p.symbol }} (-${{ p.close_value.toFixed(2) }},
-              {{ p.close_ratio_perc.toFixed(0) }}%)
-            </v-list-item>
-          </v-list>
+        <!-- 核心修改：新增滑块和输入框用于手动调整 -->
+        <div class="mb-6">
+          <v-slider
+            v-model="manualRatio"
+            :step="0.5"
+            color="primary"
+            label="手动调整目标比例"
+            class="my-4 align-center"
+            hide-details
+            min="0"
+            max="150"
+          >
+            <template v-slot:thumb-label="{ modelValue }">
+              <span class="font-weight-bold">{{ modelValue.toFixed(1) }}%</span>
+            </template>
+          </v-slider>
         </div>
-        <div v-if="uiStore.rebalancePlan.positions_to_open.length" class="mt-4">
-          <p class="font-weight-bold">将要开仓/加仓:</p>
-          <v-list density="compact">
-            <v-list-item v-for="p in uiStore.rebalancePlan.positions_to_open" :key="p.symbol">
-              {{ p.symbol }} (+${{ p.open_value.toFixed(2) }}, {{ p.percentage.toFixed(0) }}%)
-            </v-list-item>
-          </v-list>
+
+        <!-- 计划展示区域 -->
+        <div v-if="isRecalculating" class="text-center">
+          <v-progress-circular indeterminate color="primary"></v-progress-circular>
+          <p class="text-caption mt-2">正在重新计算计划...</p>
         </div>
+        <div v-else>
+          <div v-if="uiStore.rebalancePlan.positions_to_close.length">
+            <p class="font-weight-bold">将要平仓/减仓:</p>
+            <v-list density="compact">
+              <v-list-item v-for="p in uiStore.rebalancePlan.positions_to_close" :key="p.symbol">
+                {{ p.symbol }} (-${{ p.close_value.toFixed(2) }},
+                {{ p.close_ratio_perc.toFixed(0) }}%)
+              </v-list-item>
+            </v-list>
+          </div>
+          <div v-if="uiStore.rebalancePlan.positions_to_open.length" class="mt-4">
+            <p class="font-weight-bold">将要开仓/加仓:</p>
+            <v-list density="compact">
+              <v-list-item v-for="p in uiStore.rebalancePlan.positions_to_open" :key="p.symbol">
+                {{ p.symbol }} (+${{ p.open_value.toFixed(2) }}, {{ p.percentage.toFixed(0) }}%)
+              </v-list-item>
+            </v-list>
+          </div>
+        </div>
+
         <v-alert type="warning" variant="tonal" class="mt-4 text-caption">
           警告：此操作将自动执行交易！
         </v-alert>
@@ -35,7 +63,7 @@
           color="red-darken-1"
           variant="tonal"
           @click="executePlan"
-          :disabled="uiStore.isRunning"
+          :disabled="uiStore.isRunning || isRecalculating"
           >确认执行</v-btn
         >
       </v-card-actions>
@@ -44,12 +72,79 @@
 </template>
 
 <script setup lang="ts">
+import { ref, watch } from 'vue'
 import { useUiStore } from '@/stores/uiStore'
 import { useSettingsStore } from '@/stores/settingsStore'
 import apiClient from '@/services/api'
+import { debounce } from 'lodash-es'
 
 const uiStore = useUiStore()
 const settingsStore = useSettingsStore()
+
+// --- 核心修改：新增状态 ---
+const manualRatio = ref(0)
+const isRecalculating = ref(false)
+
+// 当对话框打开时，用后端建议的比例初始化滑块
+watch(
+  () => uiStore.rebalancePlan,
+  (newPlan) => {
+    if (newPlan) {
+      manualRatio.value = newPlan.target_ratio_perc
+    }
+  },
+)
+
+// 创建一个带防抖的函数，避免用户拖动滑块时频繁请求后端
+const debouncedRecalculatePlan = debounce(async () => {
+  if (!settingsStore.settings) return
+  isRecalculating.value = true
+  try {
+    // 复用 TradingView 中用于生成计划的所有参数
+    const criteria = {
+        method: settingsStore.settings.rebalance_method,
+        top_n: settingsStore.settings.rebalance_top_n,
+        min_volume_usd: settingsStore.settings.rebalance_min_volume_usd,
+        abs_momentum_days: settingsStore.settings.rebalance_abs_momentum_days,
+        rel_strength_days: settingsStore.settings.rebalance_rel_strength_days,
+        foam_days: settingsStore.settings.rebalance_foam_days,
+        rebalance_volume_ma_days: settingsStore.settings.rebalance_volume_ma_days,
+        rebalance_volume_spike_ratio: settingsStore.settings.rebalance_volume_spike_ratio,
+        rebalance_benchmark_coin: settingsStore.settings.rebalance_benchmark_coin,
+        enable_rebalance_filters: settingsStore.settings.enable_rebalance_filters,
+        rebalance_rsi_period: settingsStore.settings.rebalance_rsi_period,
+        rebalance_rsi_threshold: settingsStore.settings.rebalance_rsi_threshold,
+        rebalance_short_term_momentum_days: settingsStore.settings.rebalance_short_term_momentum_days,
+        rebalance_short_term_momentum_threshold: settingsStore.settings.rebalance_short_term_momentum_threshold,
+        rebalance_bollinger_period: settingsStore.settings.rebalance_bollinger_period,
+        rebalance_bollinger_std_dev: settingsStore.settings.rebalance_bollinger_std_dev,
+        rebalance_bollinger_width_spike_ratio: settingsStore.settings.rebalance_bollinger_width_spike_ratio,
+        // 关键：带上用户手动修改的比例
+        manual_target_ratio_perc: manualRatio.value
+    };
+    const response = await apiClient.post('/api/rebalance/plan', criteria)
+    // 更新 UI store 中的计划，界面会自动响应变化
+    uiStore.rebalancePlan = response.data
+  } catch (error: any) {
+     const errorMsg = error.response?.data?.detail || error.message;
+     uiStore.logStore.addLog({
+        message: `重新计算计划失败: ${errorMsg}`,
+        level: 'error',
+        timestamp: new Date().toLocaleTimeString(),
+      })
+  } finally {
+    isRecalculating.value = false
+  }
+}, 500) // 500毫秒的延迟，用户停止拖动后才会触发
+
+// 监听滑块值的变化，并调用防抖函数
+watch(manualRatio, (newValue, oldValue) => {
+  // 仅在值真正改变时才触发，避免初始化时就调用
+  if (newValue !== oldValue) {
+    debouncedRecalculatePlan()
+  }
+})
+// --- 修改结束 ---
 
 const close = () => {
   uiStore.showRebalanceDialog = false
@@ -99,35 +194,6 @@ const executePlan = async () => {
   const taskName = '执行再平衡'
   const totalTasks = executionOrders.length
 
-  uiStore.logStore.addLog({
-    message: `[前端] 正在准备提交 '${taskName}' 任务...`,
-    level: 'info',
-    timestamp: new Date().toLocaleTimeString(),
-  })
-  uiStore.setStatus(`正在提交: ${taskName}...`, true)
-  uiStore.updateProgress({
-    success_count: 0,
-    failed_count: 0,
-    total: totalTasks,
-    task_name: taskName,
-    is_final: false,
-  })
-
-  try {
-    const response = await apiClient.post('/api/rebalance/execute', { orders: executionOrders })
-    uiStore.logStore.addLog({
-      message: `[后端] ✅ 已确认接收任务: ${response.data.message}`,
-      level: 'success',
-      timestamp: new Date().toLocaleTimeString(),
-    })
-  } catch (e: any) {
-    const errorMsg = e.response?.data?.detail || e.message
-    uiStore.logStore.addLog({
-      message: `[后端] ❌ 提交再平衡计划失败: ${errorMsg}`,
-      level: 'error',
-      timestamp: new Date().toLocaleTimeString(),
-    })
-    uiStore.setStatus('任务启动失败', false)
-  }
+  uiStore.launchTask('/api/rebalance/execute', { orders: executionOrders }, taskName, totalTasks)
 }
 </script>
