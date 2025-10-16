@@ -1,45 +1,47 @@
 # backend/app/logic/rebalance_logic.py (最终完整版)
-# backend/app/logic/rebalance_logic.py (简化并修正)
 from typing import List, Dict, Optional, Any, Tuple
 import numpy as np
 import pandas as pd
 
-from ..models.schemas import Position, RebalanceCriteria  # 新增导入 RebalanceCriteria
+from ..models.schemas import Position
 
 
 def calculate_change_percent(klines: Optional[List], days: int) -> Optional[float]:
+    """计算指定天数的价格变化百分比"""
     if days <= 0: return None
     if not klines or len(klines) < days + 1:
         return None
 
-    end_price = klines[-1][4]
-    start_price = klines[-1 - days][1]
+    end_price = klines[-1][4]  # 最新收盘价
+    start_price = klines[-1 - days][1]  # N天前的开盘价
 
     if start_price > 0:
         return ((end_price - start_price) / start_price) * 100
     return 0.0
 
 
-def calculate_indicators(klines_df: pd.DataFrame, criteria: RebalanceCriteria) -> Dict[str, Any]:
+def calculate_indicators(klines_df: pd.DataFrame, criteria: Dict[str, Any]) -> Dict[str, Any]:
     """为一个币种的K线数据计算所有需要的技术指标"""
     indicators = {}
     close_prices = klines_df['close']
 
     # 1. RSI
-    rsi_period = criteria.rebalance_rsi_period
+    rsi_period = criteria.get('rebalance_rsi_period', 14)
     if len(close_prices) > rsi_period:
         delta = close_prices.diff()
         gain = (delta.where(delta > 0, 0)).rolling(window=rsi_period).mean()
         loss = (-delta.where(delta < 0, 0)).rolling(window=rsi_period).mean()
-        if loss.iloc[-1] > 1e-9:
-            rs = gain.iloc[-1] / loss.iloc[-1]
+        # 检查 loss.iloc[-1] 是否为 NaN 或 0
+        last_loss = loss.iloc[-1]
+        if pd.notna(last_loss) and last_loss > 1e-9:
+            rs = gain.iloc[-1] / last_loss
             indicators['rsi'] = 100 - (100 / (1 + rs))
         else:
-            indicators['rsi'] = 100
+            indicators['rsi'] = 100  # 如果没有下跌，RSI为100
 
     # 2. Bollinger Bands Width
-    bb_period = criteria.rebalance_bollinger_period
-    bb_std = criteria.rebalance_bollinger_std_dev
+    bb_period = criteria.get('rebalance_bollinger_period', 20)
+    bb_std = criteria.get('rebalance_bollinger_std_dev', 2)
     if len(close_prices) > bb_period:
         sma = close_prices.rolling(window=bb_period).mean()
         std = close_prices.rolling(window=bb_period).std()
@@ -49,11 +51,11 @@ def calculate_indicators(klines_df: pd.DataFrame, criteria: RebalanceCriteria) -
         bb_width = ((upper_band - lower_band) / sma) * 100
         if not bb_width.empty and pd.notna(bb_width.iloc[-1]):
             indicators['bb_width'] = bb_width.iloc[-1]
-            if len(bb_width) >= 5:
+            if len(bb_width.dropna()) >= 5:
                 indicators['bb_width_sma'] = bb_width.rolling(window=5).mean().iloc[-1]
 
     # 3. 短期动量
-    short_term_days = criteria.rebalance_short_term_momentum_days
+    short_term_days = criteria.get('rebalance_short_term_momentum_days', 3)
     if len(klines_df) > short_term_days:
         short_term_start_price = klines_df['open'].iloc[-short_term_days]
         short_term_end_price = klines_df['close'].iloc[-1]
@@ -66,16 +68,16 @@ def calculate_indicators(klines_df: pd.DataFrame, criteria: RebalanceCriteria) -
 
 def screen_coins_advanced(
         coin_data: List[Dict[str, Any]],
-        criteria: RebalanceCriteria,  # --- 核心修正：接收 RebalanceCriteria 对象 ---
+        criteria: Dict[str, Any],
         blacklist: List[str]
 ) -> List[str]:
-    method = criteria.method
-    top_n = criteria.top_n
+    method = criteria.get('method')
+    top_n = criteria.get('top_n')
     blacklist_upper = [b.upper() for b in blacklist]
 
     # 步骤1: 应用成交量激增过滤器和黑名单
-    volume_spike_ratio = criteria.rebalance_volume_spike_ratio
-    volume_ma_days = criteria.rebalance_volume_ma_days
+    volume_spike_ratio = criteria.get('rebalance_volume_spike_ratio', 3.0)
+    volume_ma_days = criteria.get('rebalance_volume_ma_days', 20)
 
     initial_filtered_data = []
     for data in coin_data:
@@ -103,7 +105,7 @@ def screen_coins_advanced(
 
     # 步骤2: 计算技术指标并应用防反弹过滤器
     final_filtered_data = []
-    enable_filters = criteria.enable_rebalance_filters
+    enable_filters = criteria.get('enable_rebalance_filters', False)
 
     for data in initial_filtered_data:
         symbol = data['symbol']
@@ -117,20 +119,22 @@ def screen_coins_advanced(
         data.update(indicators)
 
         if enable_filters:
-            rsi_threshold = criteria.rebalance_rsi_threshold
-            if 'rsi' in data and data['rsi'] < rsi_threshold:
+            rsi_threshold = criteria.get('rebalance_rsi_threshold', 0)
+            if 'rsi' in data and pd.notna(data['rsi']) and data['rsi'] < rsi_threshold:
                 print(
                     f"--- [REBALANCE_FILTER] 剔除币种 {symbol}: RSI({data['rsi']:.2f}) 过低，低于门槛 {rsi_threshold} ---")
                 continue
 
-            short_mom_threshold = criteria.rebalance_short_term_momentum_threshold
-            if 'short_term_momentum' in data and data['short_term_momentum'] > short_mom_threshold:
+            short_mom_threshold = criteria.get('rebalance_short_term_momentum_threshold', 100)
+            if 'short_term_momentum' in data and pd.notna(data['short_term_momentum']) and data[
+                'short_term_momentum'] > short_mom_threshold:
                 print(
                     f"--- [REBALANCE_FILTER] 剔除币种 {symbol}: 短期动量({data['short_term_momentum']:.2f}%) 过高，高于门槛 {short_mom_threshold}% ---")
                 continue
 
-            bb_spike_ratio = criteria.rebalance_bollinger_width_spike_ratio
-            if 'bb_width' in data and 'bb_width_sma' in data and data['bb_width_sma'] > 1e-9:
+            bb_spike_ratio = criteria.get('rebalance_bollinger_width_spike_ratio', 100)
+            if 'bb_width' in data and 'bb_width_sma' in data and pd.notna(data['bb_width']) and pd.notna(
+                    data['bb_width_sma']) and data['bb_width_sma'] > 1e-9:
                 current_ratio = data['bb_width'] / data['bb_width_sma']
                 if current_ratio > bb_spike_ratio:
                     print(
@@ -145,9 +149,9 @@ def screen_coins_advanced(
 
     # 步骤3: 对通过所有过滤的币种进行评分和排名
     qualified_coins = []
-    abs_days = criteria.abs_momentum_days
-    rel_days = criteria.rel_strength_days
-    foam_days = criteria.foam_days
+    abs_days = criteria.get('abs_momentum_days', 30)
+    rel_days = criteria.get('rel_strength_days', 60)
+    foam_days = criteria.get('foam_days', 1)
 
     for data in final_filtered_data:
         coin_info = {'symbol': data['symbol']}
@@ -175,7 +179,7 @@ def screen_coins_advanced(
     if method == 'foam':
         qualified_coins.sort(key=lambda x: x['foam_momentum'], reverse=True)
     elif method == 'multi_factor_weakest':
-        benchmark_coins = criteria.rebalance_benchmark_coin
+        benchmark_coins = criteria.get('rebalance_benchmark_coin', ['BTC'])
 
         abs_sorted = sorted(qualified_coins, key=lambda x: x['abs_momentum'])
         abs_rank_map = {coin['symbol']: i for i, coin in enumerate(abs_sorted)}
@@ -206,6 +210,7 @@ def screen_coins_advanced(
 
     return [coin['symbol'] for coin in qualified_coins[:top_n]]
 
+
 def calculate_target_ratio_by_alt_index(alt_index: float, config: dict) -> float:
     max_ratio = config.get('rebalance_short_ratio_max', 0.70)
     min_ratio = config.get('rebalance_short_ratio_min', 0.35)
@@ -235,7 +240,7 @@ def generate_rebalance_plan(
             })
         return close_plan, {}
 
-    value_per_coin_ideal = target_short_value / len(target_symbols)
+    value_per_coin_ideal = target_short_value / len(target_symbols) if target_symbols else 0
 
     for symbol, position in current_positions_map.items():
         if symbol not in target_symbols:
