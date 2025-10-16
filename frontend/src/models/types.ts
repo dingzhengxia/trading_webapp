@@ -31,6 +31,7 @@ export interface RebalancePlan {
     open_value: number
     percentage: number
   }[]
+  target_coin_list: string[] // <--- 新增此字段
   error?: string
 }
 

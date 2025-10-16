@@ -140,4 +140,5 @@ class RebalancePlanResponse(BaseModel):
     target_ratio_perc: float
     positions_to_close: List[Dict[str, Any]]
     positions_to_open: List[Dict[str, Any]]
+    target_coin_list: List[str]  # <--- 新增此字段
     error: Optional[str] = None

@@ -220,7 +220,8 @@ async def generate_rebalance_plan(
     return RebalancePlanResponse(
         target_ratio_perc=target_ratio * 100,
         positions_to_close=close_plan_formatted,
-        positions_to_open=open_plan_formatted
+        positions_to_open=open_plan_formatted,
+        target_coin_list=target_coin_list  # <--- 新增：在响应中返回目标币种列表
     )
 
 
