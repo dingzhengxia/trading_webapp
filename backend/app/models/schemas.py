@@ -100,12 +100,15 @@ class CloseMultipleRequest(BaseTaskRequest):
     ratio: float = Field(..., gt=0, le=1.0)
 
 
+# backend/app/models/schemas.py
 class ExecutionOrderItem(BaseModel):
     symbol: str
     action: str
     side: str
     value_to_trade: Optional[float] = None
     close_ratio: Optional[float] = None
+    target_ratio: Optional[float] = None  # 新增字段，用于传递修改后的目标比例
+
 
 
 class ExecutionPlanRequest(BaseTaskRequest):

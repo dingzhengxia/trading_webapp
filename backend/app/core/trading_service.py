@@ -185,40 +185,42 @@ class TradingService:
         return self._start_task("执行仓位再平衡", self._rebalance_execution_task(plan), background_tasks,
                                 plan.request_id)
 
-    async def _rebalance_execution_task(self, plan: ExecutionPlanRequest):
-        config = load_settings()
-        task_name = "执行再平衡"
+    # backend/app/core/trading_service.py
+async def _rebalance_execution_task(self, plan: ExecutionPlanRequest):
+    config = load_settings()
+    task_name = "执行再平衡"
 
-        # 获取一次持仓快照，用于查找平仓的全名
-        async with get_exchange_for_task() as exchange_for_snapshot:
-            all_positions = await fetch_positions_with_pnl_async(exchange_for_snapshot, config.get('leverage', 1))
-            position_map = {p.symbol: p.full_symbol for p in all_positions}
+    # 获取一次持仓快照，用于查找平仓的全名
+    async with get_exchange_for_task() as exchange_for_snapshot:
+        all_positions = await fetch_positions_with_pnl_async(exchange_for_snapshot, config.get('leverage', 1))
+        position_map = {p.symbol: p.full_symbol for p in all_positions}
 
-        async def worker(order_item):
-            if self._stop_event.is_set(): return False
-            async with get_exchange_for_task() as exchange:
-                if order_item.action == 'CLOSE':
-                    base_symbol = order_item.symbol
-                    full_symbol = position_map.get(base_symbol)
+    async def worker(order_item):
+        if self._stop_event.is_set(): return False
+        async with get_exchange_for_task() as exchange:
+            if order_item.action == 'CLOSE':
+                base_symbol = order_item.symbol
+                full_symbol = position_map.get(base_symbol)
 
-                    if not full_symbol:
-                        await log_message(f"⚠️ 无法为 {base_symbol} 找到当前持仓的完整交易对名称，跳过平仓。", "warning")
-                        return False
+                if not full_symbol:
+                    await log_message(f"⚠️ 无法为 {base_symbol} 找到当前持仓的完整交易对名称，跳过平仓。", "warning")
+                    return False
 
-                    is_success = await close_position_async(exchange, full_symbol, order_item.close_ratio, log_message,
+                is_success = await close_position_async(exchange, full_symbol, order_item.close_ratio, log_message,
+                                                        self._stop_event)
+                if is_success:
+                    await ws_manager.broadcast({"type": "position_closed", "payload": {"full_symbol": full_symbol,
+                                                                                       "ratio": order_item.close_ratio}})
+                return is_success
+            elif order_item.action == 'OPEN':
+                order_plan_item = {'coin': order_item.symbol, 'value': order_item.value_to_trade,
+                                   'side': order_item.side}
+                return await process_order_with_sl_tp_async(exchange, order_plan_item, config, log_message,
                                                             self._stop_event)
-                    if is_success:
-                        await ws_manager.broadcast({"type": "position_closed", "payload": {"full_symbol": full_symbol,
-                                                                                           "ratio": order_item.close_ratio}})
-                    return is_success
-                elif order_item.action == 'OPEN':
-                    order_plan_item = {'coin': order_item.symbol, 'value': order_item.value_to_trade,
-                                       'side': order_item.side}
-                    return await process_order_with_sl_tp_async(exchange, order_plan_item, config, log_message,
-                                                                self._stop_event)
-            return False
+        return False
 
-        await self._run_task_loop(plan.orders, worker, self.CONCURRENT_OPEN_TASKS, task_name)
+    await self._run_task_loop(plan.orders, worker, self.CONCURRENT_OPEN_TASKS, task_name)
+
 
 
 trading_service = TradingService()

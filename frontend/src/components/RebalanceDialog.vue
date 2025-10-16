@@ -3,7 +3,17 @@
   <v-dialog v-model="uiStore.showRebalanceDialog" max-width="800px" persistent>
     <v-card v-if="uiStore.rebalancePlan">
       <v-card-title class="text-h5">
-        再平衡计划 (目标比例: {{ uiStore.rebalancePlan.target_ratio_perc.toFixed(1) }}%)
+        再平衡计划
+        <v-text-field
+          v-model.number="editableTargetRatio"
+          type="number"
+          suffix="%"
+          density="compact"
+          variant="outlined"
+          hide-details
+          style="width: 120px; display: inline-block; margin-left: 10px;"
+          @update:model-value="onTargetRatioChange"
+        ></v-text-field>
       </v-card-title>
       <v-card-text>
         <div v-if="uiStore.rebalancePlan.positions_to_close.length">
@@ -18,7 +28,8 @@
         <div v-if="uiStore.rebalancePlan.positions_to_open.length" class="mt-4">
           <p class="font-weight-bold">将要开仓/加仓:</p>
           <v-list density="compact">
-            <v-list-item v-for="(p, index) in uiStore.rebalancePlan.positions_to_open" :key="p.symbol">
+            <v-list-item v-for="(p, index) in uiStore.rebalancePlan.positions_to_open"
+                         :key="p.symbol">
               <v-row align="center">
                 <v-col cols="6">
                   {{ p.symbol }} (+${{ p.open_value.toFixed(2) }}, {{ p.percentage.toFixed(0) }}%)
@@ -65,32 +76,44 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
-import { useUiStore } from '@/stores/uiStore'
+import {ref, computed, watch} from 'vue'
+import {useUiStore} from '@/stores/uiStore'
 import apiClient from '@/services/api'
 
 const uiStore = useUiStore()
+const editableTargetRatio = ref(uiStore.rebalancePlan?.target_ratio_perc || 50)
+
+// 监听 rebalancePlan 的变化，同步 editableTargetRatio
+watch(
+  () => uiStore.rebalancePlan,
+  (newPlan) => {
+    if (newPlan) {
+      editableTargetRatio.value = newPlan.target_ratio_perc
+    }
+  },
+  {immediate: true}
+)
 
 const totalOpenPercentage = computed(() => {
   if (!uiStore.rebalancePlan || !uiStore.rebalancePlan.positions_to_open) return 0
   return uiStore.rebalancePlan.positions_to_open.reduce((sum, item) => sum + (item.percentage || 0), 0)
 })
 
+const onTargetRatioChange = (newValue: number | undefined) => {
+  if (!uiStore.rebalancePlan || newValue === undefined) return
+  uiStore.rebalancePlan.target_ratio_perc = newValue
+}
+
 const onPercentageChange = (index: number, newValue: number | undefined) => {
-  // 当用户修改百分比时，自动重新计算对应的价值
   if (!uiStore.rebalancePlan || !uiStore.rebalancePlan.positions_to_open || newValue === undefined) return
 
   const position = uiStore.rebalancePlan.positions_to_open[index]
-  const oldValue = position.percentage
-
-  // 更新百分比值
   position.percentage = newValue
 
-  // 保存原始总价值
+  // 重新计算对应的价值
   const totalValue = uiStore.rebalancePlan.positions_to_open.reduce((sum, item) =>
     sum + (item.open_value || 0), 0)
 
-  // 根据新的百分比重新计算价值
   if (totalOpenPercentage.value > 0) {
     position.open_value = (totalValue * newValue) / totalOpenPercentage.value
   }
@@ -137,7 +160,7 @@ const executePlan = async () => {
   })
 
   try {
-    const response = await apiClient.post('/api/rebalance/execute', { orders: executionOrders })
+    const response = await apiClient.post('/api/rebalance/execute', {orders: executionOrders})
     uiStore.logStore.addLog({
       message: `[后端] ✅ 已确认接收任务: ${response.data.message}`,
       level: 'success',

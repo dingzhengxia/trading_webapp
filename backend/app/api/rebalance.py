@@ -215,6 +215,7 @@ async def generate_rebalance_plan(
     )
 
 
+# backend/app/api/rebalance.py
 @router.post("/execute")
 def execute_rebalance_plan(plan: ExecutionPlanRequest, background_tasks: BackgroundTasks):
     print("--- 📢 API HIT: /api/rebalance/execute ---")
