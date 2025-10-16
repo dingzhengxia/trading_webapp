@@ -17,23 +17,22 @@ export interface Log {
   timestamp: string
 }
 
-// frontend/src/models/types.ts
 export interface RebalancePlan {
   target_ratio_perc: number
-  positions_to_close: Array<{
+  positions_to_close: {
     symbol: string
     notional: number
     close_value: number
     close_ratio_perc: number
-  }>
-  positions_to_open: Array<{
+    close_ratio: number
+  }[]
+  positions_to_open: {
     symbol: string
     open_value: number
-    percentage: number // 新增字段，用于手动修改百分比
-  }>
+    percentage: number
+  }[]
   error?: string
 }
-
 
 export interface ProgressState {
   success_count: number

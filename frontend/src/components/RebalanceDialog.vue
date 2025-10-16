@@ -1,20 +1,9 @@
-<!-- frontend/src/components/RebalanceDialog.vue -->
+<!-- frontend/src/components/RebalanceDialog.vue (最终完整版) -->
 <template>
-  <v-dialog v-model="uiStore.showRebalanceDialog" max-width="800px" persistent>
+  <v-dialog v-model="uiStore.showRebalanceDialog" max-width="600px" persistent>
     <v-card v-if="uiStore.rebalancePlan">
       <v-card-title class="text-h5">
-        再平衡计划
-        <v-text-field
-          v-model.number="editableTargetRatio"
-          type="number"
-          step="0.1"
-          suffix="%"
-          density="compact"
-          variant="outlined"
-          hide-details
-          style="width: 120px; display: inline-block; margin-left: 10px;"
-          @update:model-value="onTargetRatioChange"
-        ></v-text-field>
+        再平衡计划 (目标比例: {{ uiStore.rebalancePlan.target_ratio_perc.toFixed(1) }}%)
       </v-card-title>
       <v-card-text>
         <div v-if="uiStore.rebalancePlan.positions_to_close.length">
@@ -41,42 +30,47 @@
       <v-card-actions>
         <v-spacer></v-spacer>
         <v-btn color="blue-darken-1" variant="text" @click="close">取消</v-btn>
+        <v-btn color="primary" variant="text" @click="applyList">应用列表到配置</v-btn>
         <v-btn
           color="red-darken-1"
           variant="tonal"
           @click="executePlan"
           :disabled="uiStore.isRunning"
+          >确认执行</v-btn
         >
-          执行计划
-        </v-btn>
       </v-card-actions>
     </v-card>
   </v-dialog>
 </template>
 
 <script setup lang="ts">
-import { ref, watch } from 'vue'
 import { useUiStore } from '@/stores/uiStore'
+import { useSettingsStore } from '@/stores/settingsStore'
 import apiClient from '@/services/api'
 
 const uiStore = useUiStore()
-const editableTargetRatio = ref(uiStore.rebalancePlan?.target_ratio_perc || 50)
+const settingsStore = useSettingsStore()
 
-// 监听 rebalancePlan 的变化，同步 editableTargetRatio
-watch(
-  () => uiStore.rebalancePlan,
-  (newPlan) => {
-    if (newPlan) {
-      editableTargetRatio.value = newPlan.target_ratio_perc
-    }
-  },
-  { immediate: true }
-)
+const close = () => {
+  uiStore.showRebalanceDialog = false
+}
 
-const onTargetRatioChange = (newValue: number | undefined) => {
-  if (!uiStore.rebalancePlan || newValue === undefined) return
-  // 只更新显示的目标比例，不改变实际的开仓/平仓计划
-  uiStore.rebalancePlan.target_ratio_perc = newValue
+const applyList = () => {
+  if (!uiStore.rebalancePlan || !settingsStore.settings) return
+  const openSymbols = new Set(uiStore.rebalancePlan.positions_to_open.map((p) => p.symbol))
+  const symbolsToKeep = new Set(
+    uiStore.rebalancePlan.positions_to_close
+      .filter((p) => p.close_ratio_perc < 100)
+      .map((p) => p.symbol),
+  )
+  const newShortList = Array.from(new Set([...openSymbols, ...symbolsToKeep])).sort()
+  settingsStore.settings.short_coin_list = newShortList
+  uiStore.logStore.addLog({
+    message: `空头币种列表已更新为 ${newShortList.length} 个币种并自动保存。`,
+    level: 'success',
+    timestamp: new Date().toLocaleTimeString(),
+  })
+  close()
 }
 
 const executePlan = async () => {
@@ -135,9 +129,5 @@ const executePlan = async () => {
     })
     uiStore.setStatus('任务启动失败', false)
   }
-}
-
-const close = () => {
-  uiStore.showRebalanceDialog = false
 }
 </script>
