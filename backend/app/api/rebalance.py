@@ -60,6 +60,7 @@ async def screen_coins_task(exchange: ccxt.binanceusdm, criteria: RebalanceCrite
         symbol = symbols_for_kline[i]
         if isinstance(klines, list) and len(klines) >= volume_ma_days:
             df = pd.DataFrame(klines, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+            if df.empty: continue
             df['quoteVolume'] = df['volume'] * df['close']
             avg_quote_volume = df['quoteVolume'].rolling(window=volume_ma_days).mean().iloc[-1]
 
@@ -101,7 +102,6 @@ async def screen_coins_task(exchange: ccxt.binanceusdm, criteria: RebalanceCrite
         await log_message("基准数据准备完毕，开始合成各币种的相对强度K线...", "info")
 
         for item in coin_data_pre_filter:
-            symbol = item['symbol']
             coin_usdt_klines = item['usdt_klines']
             synthetic_klines_dict = {}
 
@@ -134,7 +134,7 @@ async def screen_coins_task(exchange: ccxt.binanceusdm, criteria: RebalanceCrite
         None,
         rebalance_logic.screen_coins_advanced,
         coin_data,
-        criteria,
+        criteria.model_dump(),
         AVAILABLE_LONG_COINS
     )
 
