@@ -1,9 +1,10 @@
+# backend/app/api/rebalance.py (最终完整正确版)
 import asyncio
 from typing import List, Dict, Any
 
 import ccxt.async_support as ccxt
 from fastapi import APIRouter, Depends, BackgroundTasks
-import pandas as pd  # 导入 pandas
+import pandas as pd
 
 from ..config.config import AVAILABLE_LONG_COINS, STABLECOIN_PREFERENCE, AVAILABLE_SHORT_COINS
 from ..core.dependencies import get_settings_dependency
@@ -27,9 +28,6 @@ async def screen_coins_task(exchange: ccxt.binanceusdm, criteria: RebalanceCrite
         raise ValueError("做空币种备选池为空，无法进行智能再平衡筛选。请先在'币种列表管理'中配置。")
     await log_message(f"将使用您配置的 {len(short_pool)} 个币种的做空备选池进行筛选。", "info")
 
-    # --- 核心重构：K线获取和筛选流程 ---
-
-    # 1. 确定需要获取的K线天数
     days_to_fetch = max(
         criteria.abs_momentum_days,
         criteria.rel_strength_days,
@@ -40,10 +38,9 @@ async def screen_coins_task(exchange: ccxt.binanceusdm, criteria: RebalanceCrite
         criteria.rebalance_short_term_momentum_days,
         2
     )
-    fetch_limit = days_to_fetch + 30  # 增加额外天数以确保计算窗口足够
+    fetch_limit = days_to_fetch + 30
     await log_message(f"准备并发获取 {len(short_pool)} 个币种过去 {fetch_limit} 天的K线...", "info")
 
-    # 2. 并发获取所有备选池币种的K线
     kline_tasks = []
     symbols_for_kline = []
     for symbol in short_pool:
@@ -54,7 +51,6 @@ async def screen_coins_task(exchange: ccxt.binanceusdm, criteria: RebalanceCrite
 
     kline_results = await asyncio.gather(*kline_tasks, return_exceptions=True)
 
-    # 3. 使用K线数据进行流动性筛选
     await log_message("K线数据获取完毕，开始进行流动性筛选...", "info")
     coin_data_pre_filter = []
     min_volume_usd = criteria.rebalance_min_volume_usd
@@ -64,27 +60,25 @@ async def screen_coins_task(exchange: ccxt.binanceusdm, criteria: RebalanceCrite
         symbol = symbols_for_kline[i]
         if isinstance(klines, list) and len(klines) >= volume_ma_days:
             df = pd.DataFrame(klines, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-            # 计算每日交易额 (成交量 * 收盘价)
             df['quoteVolume'] = df['volume'] * df['close']
-            # 计算N日平均交易额
             avg_quote_volume = df['quoteVolume'].rolling(window=volume_ma_days).mean().iloc[-1]
 
-            if avg_quote_volume >= min_volume_usd:
+            if pd.notna(avg_quote_volume) and avg_quote_volume >= min_volume_usd:
                 coin_data_pre_filter.append({
                     'symbol': symbol,
-                    'usdt_klines': klines  # 传递原始K线列表
+                    'usdt_klines': klines
                 })
             else:
-                print(
-                    f"--- [REBALANCE_FILTER] 剔除币种 {symbol}: 平均交易额({avg_quote_volume:,.0f})过低，低于门槛 {min_volume_usd:,.0f} ---")
+                if pd.notna(avg_quote_volume):
+                    print(
+                        f"--- [REBALANCE_FILTER] 剔除币种 {symbol}: 平均交易额({avg_quote_volume:,.0f})过低，低于门槛 {min_volume_usd:,.0f} ---")
 
     if not coin_data_pre_filter:
         raise ValueError("您选择的做空币种中，没有币种通过流动性筛选。请检查或降低交易额门槛。")
 
     await log_message(f"通过流动性筛选的币种数量: {len(coin_data_pre_filter)}", "info")
-    coin_data = []  # 用于存放最终数据的列表
+    coin_data = []
 
-    # 4. 准备基准币种数据 (如果需要)
     if criteria.method == 'multi_factor_weakest':
         benchmark_coins = criteria.rebalance_benchmark_coin
         if not benchmark_coins:
@@ -106,7 +100,6 @@ async def screen_coins_task(exchange: ccxt.binanceusdm, criteria: RebalanceCrite
 
         await log_message("基准数据准备完毕，开始合成各币种的相对强度K线...", "info")
 
-        # 5. 为通过流动性筛选的币种合成相对强度K线
         for item in coin_data_pre_filter:
             symbol = item['symbol']
             coin_usdt_klines = item['usdt_klines']
@@ -128,10 +121,8 @@ async def screen_coins_task(exchange: ccxt.binanceusdm, criteria: RebalanceCrite
             item['synthetic_klines'] = synthetic_klines_dict
             coin_data.append(item)
 
-    else:  # foam 策略，直接使用通过流动性筛选的数据
+    else:
         coin_data = coin_data_pre_filter
-
-    # --- 重构结束 ---
 
     if not coin_data:
         raise ValueError("成功获取并处理K线数据的币种为0，无法进行下一步计算。")
@@ -143,7 +134,7 @@ async def screen_coins_task(exchange: ccxt.binanceusdm, criteria: RebalanceCrite
         None,
         rebalance_logic.screen_coins_advanced,
         coin_data,
-        criteria.model_dump(),
+        criteria,
         AVAILABLE_LONG_COINS
     )
 
