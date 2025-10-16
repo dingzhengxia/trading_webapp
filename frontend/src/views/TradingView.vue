@@ -131,9 +131,10 @@ const handleSyncSlTp = () => {
   }
 }
 
+// --- 核心修改在这里 ---
 const onGenerateRebalancePlan = () => {
   if (settingsStore.settings) {
-    // --- FINAL FIX: 确保将所有需要的参数都包含在 criteria 对象中 ---
+    // 创建一个完整的 criteria 对象，包含所有在UI上配置的参数
     const criteria: RebalanceCriteria = {
       method: settingsStore.settings.rebalance_method,
       top_n: settingsStore.settings.rebalance_top_n,
@@ -141,13 +142,25 @@ const onGenerateRebalancePlan = () => {
       abs_momentum_days: settingsStore.settings.rebalance_abs_momentum_days,
       rel_strength_days: settingsStore.settings.rebalance_rel_strength_days,
       foam_days: settingsStore.settings.rebalance_foam_days,
-      // 将新添加的成交量过滤参数也加入请求体
       rebalance_volume_ma_days: settingsStore.settings.rebalance_volume_ma_days,
       rebalance_volume_spike_ratio: settingsStore.settings.rebalance_volume_spike_ratio,
+
+      // --- 新增：添加所有缺失的参数 ---
+      rebalance_benchmark_coin: settingsStore.settings.rebalance_benchmark_coin,
+      enable_rebalance_filters: settingsStore.settings.enable_rebalance_filters,
+      rebalance_rsi_period: settingsStore.settings.rebalance_rsi_period,
+      rebalance_rsi_threshold: settingsStore.settings.rebalance_rsi_threshold,
+      rebalance_short_term_momentum_days: settingsStore.settings.rebalance_short_term_momentum_days,
+      rebalance_short_term_momentum_threshold: settingsStore.settings.rebalance_short_term_momentum_threshold,
+      rebalance_bollinger_period: settingsStore.settings.rebalance_bollinger_period,
+      rebalance_bollinger_std_dev: settingsStore.settings.rebalance_bollinger_std_dev,
+      rebalance_bollinger_width_spike_ratio: settingsStore.settings.rebalance_bollinger_width_spike_ratio,
     }
+    // 使用这个完整的对象去调用处理函数
     handleGenerateRebalancePlan(criteria)
   }
 }
+// --- 修改结束 ---
 
 const handleGenerateRebalancePlan = async (criteria: RebalanceCriteria) => {
   if (uiStore.isRunning || isGeneratingPlan.value) return
