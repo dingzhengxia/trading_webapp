@@ -1,4 +1,4 @@
-# backend/app/models/schemas.py (最终修正版)
+# backend/app/models/schemas.py (最终完整修正版)
 from typing import List, Dict, Any, Optional
 
 from pydantic import BaseModel, Field
@@ -133,10 +133,11 @@ class RebalanceCriteria(BaseModel):
     rebalance_bollinger_std_dev: int = 2
     rebalance_bollinger_width_spike_ratio: float = 2.0
 
-# --- 新增模型：用于接收再平衡计划请求 ---
+
 class RebalancePlanRequest(BaseModel):
     criteria: RebalanceCriteria
     custom_target_short_value: Optional[float] = None
+
 
 class RebalancePlanResponse(BaseModel):
     target_ratio_perc: float
