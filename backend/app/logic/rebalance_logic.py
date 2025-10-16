@@ -1,306 +1,170 @@
-# backend/app/logic/rebalance_logic.py (最终完整版)
-from typing import List, Dict, Optional, Any, Tuple
+# backend/app/logic/rebalance_logic.py (最终整合版)
+from typing import List, Dict, Any, Tuple
 import numpy as np
 import pandas as pd
 
 from ..models.schemas import Position
 
 
-def calculate_change_percent(klines: Optional[List], days: int) -> Optional[float]:
-    if days <= 0: return None
-    if not klines or len(klines) < days + 1:
+def create_synthetic_benchmark(benchmark_klines: Dict[str, List], benchmark_weights: Dict[str, float]) -> pd.DataFrame:
+    """
+    根据多个基准币种及其权重，创建一个合成基准指数的DataFrame。
+    """
+    benchmark_dfs = {}
+    common_timestamps = None
+    for symbol, klines in benchmark_klines.items():
+        df = pd.DataFrame(klines, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+        df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+        df = df.set_index('timestamp')
+        benchmark_dfs[symbol] = df['close']
+        if common_timestamps is None:
+            common_timestamps = set(df.index)
+        else:
+            common_timestamps &= set(df.index)
+
+    if not common_timestamps:
+        return pd.DataFrame()
+
+    common_timestamps = sorted(list(common_timestamps))
+
+    total_weight = sum(benchmark_weights.values())
+    if total_weight == 0:
+        num_benchmarks = len(benchmark_dfs)
+        weights = {s: 1.0 / num_benchmarks for s in benchmark_dfs.keys()} if num_benchmarks > 0 else {}
+    else:
+        weights = {s: w / total_weight for s, w in benchmark_weights.items()}
+
+    synthetic_index = pd.Series(0.0, index=common_timestamps)
+    for symbol, close_prices in benchmark_dfs.items():
+        synthetic_index += close_prices.reindex(common_timestamps, method='ffill') * weights.get(symbol, 0)
+
+    return synthetic_index.to_frame(name='close')
+
+
+def calculate_relative_performance(coin_close: pd.Series, benchmark_close: pd.Series, days: int) -> float | None:
+    """
+    计算一个币种相对于基准的超额/亏损回报率 (Alpha Spread)。
+    """
+    if len(coin_close) < days + 1 or len(benchmark_close) < days + 1:
         return None
 
-    end_price = klines[-1][4]
-    start_price = klines[-1 - days][1]
+    df = pd.concat([coin_close, benchmark_close], axis=1, join='inner').tail(days + 1)
+    if len(df) < days + 1:
+        return None
 
-    if start_price > 0:
-        return ((end_price - start_price) / start_price) * 100
-    return 0.0
+    coin_return = (df.iloc[-1, 0] / df.iloc[0, 0]) - 1 if df.iloc[0, 0] > 0 else 0
+    benchmark_return = (df.iloc[-1, 1] / df.iloc[0, 1]) - 1 if df.iloc[0, 1] > 0 else 0
+
+    return (coin_return - benchmark_return) * 100
 
 
-def calculate_indicators(klines_df: pd.DataFrame, criteria: Dict[str, Any]) -> Dict[str, Any]:
-    """为一个币种的K线数据计算所有需要的技术指标"""
+def calculate_indicators_for_filtering(klines_df: pd.DataFrame, criteria: Dict[str, Any]) -> Dict[str, Any]:
+    """计算用于防反弹过滤的技术指标"""
     indicators = {}
     close_prices = klines_df['close']
 
-    # 1. RSI
     rsi_period = criteria.get('rebalance_rsi_period', 14)
     if len(close_prices) > rsi_period:
         delta = close_prices.diff()
         gain = (delta.where(delta > 0, 0)).rolling(window=rsi_period).mean()
         loss = (-delta.where(delta < 0, 0)).rolling(window=rsi_period).mean()
-        if loss.iloc[-1] > 1e-9:  # 避免除以零
-            rs = gain.iloc[-1] / loss.iloc[-1]
-            indicators['rsi'] = 100 - (100 / (1 + rs))
-        else:
-            indicators['rsi'] = 100  # 如果没有下跌，RSI为100
+        rs = gain.iloc[-1] / loss.iloc[-1] if loss.iloc[-1] > 1e-9 else float('inf')
+        indicators['rsi'] = 100 - (100 / (1 + rs))
 
-    # 2. Bollinger Bands Width
-    bb_period = criteria.get('rebalance_bollinger_period', 20)
-    bb_std = criteria.get('rebalance_bollinger_std_dev', 2)
-    if len(close_prices) > bb_period:
-        sma = close_prices.rolling(window=bb_period).mean()
-        std = close_prices.rolling(window=bb_period).std()
-        upper_band = sma + (std * bb_std)
-        lower_band = sma - (std * bb_std)
-
-        bb_width = ((upper_band - lower_band) / sma) * 100
-        if not bb_width.empty and pd.notna(bb_width.iloc[-1]):
-            indicators['bb_width'] = bb_width.iloc[-1]
-            if len(bb_width) >= 5:
-                indicators['bb_width_sma'] = bb_width.rolling(window=5).mean().iloc[-1]
-
-    # 3. 短期动量
     short_term_days = criteria.get('rebalance_short_term_momentum_days', 3)
     if len(klines_df) > short_term_days:
-        short_term_start_price = klines_df['open'].iloc[-short_term_days]
-        short_term_end_price = klines_df['close'].iloc[-1]
-        if short_term_start_price > 0:
-            indicators['short_term_momentum'] = ((
-                                                             short_term_end_price - short_term_start_price) / short_term_start_price) * 100
+        start_price = klines_df['open'].iloc[-short_term_days]
+        end_price = klines_df['close'].iloc[-1]
+        if start_price > 0:
+            indicators['short_term_momentum'] = ((end_price - start_price) / start_price) * 100
 
     return indicators
 
 
-def screen_coins_advanced(
-        coin_data: List[Dict[str, Any]],
+def screen_coins_based_on_relative_weakness(
+        candidate_klines: Dict[str, List],
+        benchmark_klines: Dict[str, List],
         criteria: Dict[str, Any],
         blacklist: List[str]
 ) -> List[str]:
-    method = criteria.get('method')
+    """
+    整合了防反弹过滤和相对弱势评分的最终筛选函数。
+    """
     top_n = criteria.get('top_n')
-    blacklist_upper = [b.upper() for b in blacklist]
+    blacklist_upper = set(b.upper() for b in blacklist)
 
-    # 步骤1: 预处理和初始过滤 (成交量)
-    volume_ma_days = criteria.get('rebalance_volume_ma_days', 20)
-    volume_spike_ratio = criteria.get('rebalance_volume_spike_ratio', 3.0)
-
-    pre_filtered_coin_data = []
-    for data in coin_data:
-        if 'usdt_klines' not in data or len(data['usdt_klines']) < volume_ma_days + 1:
-            continue
-        volumes = [kline[5] for kline in data['usdt_klines'][-(volume_ma_days + 1):-1]]
-        if not volumes:
-            continue
-        avg_volume = np.mean(volumes)
-        latest_volume = data['usdt_klines'][-1][5]
-        if avg_volume < 1e-6:
-            continue
-        if (latest_volume / avg_volume) <= volume_spike_ratio:
-            pre_filtered_coin_data.append(data)
-        else:
-            print(
-                f"--- [REBALANCE_FILTER] 剔除币种 {data['symbol']}: 成交量异常放大 ({latest_volume:,.0f} vs 均量 {avg_volume:,.0f}, 超过 {volume_spike_ratio}x) ---")
-
-    initial_filtered_data = [d for d in pre_filtered_coin_data if d['symbol'].upper() not in blacklist_upper]
-    if not initial_filtered_data:
-        return []
-
-    # 步骤2: 计算所有币种的技术指标并应用防反弹过滤器
-    final_filtered_data = []
+    # --- 阶段1: 防反弹过滤 ---
+    filtered_klines = {}
     enable_filters = criteria.get('enable_rebalance_filters', False)
 
-    for data in initial_filtered_data:
-        symbol = data['symbol']
-
-        if 'usdt_klines' not in data or not data['usdt_klines']:
+    for symbol, klines in candidate_klines.items():
+        if symbol.upper() in blacklist_upper or symbol in benchmark_klines:
             continue
 
-        klines_df = pd.DataFrame(data['usdt_klines'], columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-        if klines_df.empty:
-            continue
-
-        indicators = calculate_indicators(klines_df, criteria)
-        data.update(indicators)
+        klines_df = pd.DataFrame(klines, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
 
         if enable_filters:
+            indicators = calculate_indicators_for_filtering(
+                klines_df.set_index(pd.to_datetime(klines_df['timestamp'], unit='ms')), criteria)
+
             rsi_threshold = criteria.get('rebalance_rsi_threshold', 0)
-            if 'rsi' in data and data['rsi'] < rsi_threshold:
-                print(
-                    f"--- [REBALANCE_FILTER] 剔除币种 {symbol}: RSI({data['rsi']:.2f}) 过低，低于门槛 {rsi_threshold} ---")
+            if 'rsi' in indicators and indicators['rsi'] < rsi_threshold:
+                print(f"--- [REBALANCE_FILTER] 剔除 {symbol}: RSI({indicators['rsi']:.2f}) < {rsi_threshold} ---")
                 continue
 
             short_mom_threshold = criteria.get('rebalance_short_term_momentum_threshold', 100)
-            if 'short_term_momentum' in data and data['short_term_momentum'] > short_mom_threshold:
+            if 'short_term_momentum' in indicators and indicators['short_term_momentum'] > short_mom_threshold:
                 print(
-                    f"--- [REBALANCE_FILTER] 剔除币种 {symbol}: 短期动量({data['short_term_momentum']:.2f}%) 过高，高于门槛 {short_mom_threshold}% ---")
+                    f"--- [REBALANCE_FILTER] 剔除 {symbol}: 短期动量({indicators['short_term_momentum']:.2f}%) > {short_mom_threshold}% ---")
                 continue
 
-            bb_spike_ratio = criteria.get('rebalance_bollinger_width_spike_ratio', 100)
-            if 'bb_width' in data and 'bb_width_sma' in data and data['bb_width_sma'] > 1e-9:
-                current_ratio = data['bb_width'] / data['bb_width_sma']
-                if current_ratio > bb_spike_ratio:
-                    print(
-                        f"--- [REBALANCE_FILTER] 剔除币种 {symbol}: 波动率异常放大({current_ratio:.2f}x)，高于门槛 {bb_spike_ratio}x ---")
-                    continue
+        filtered_klines[symbol] = klines
 
-        final_filtered_data.append(data)
-
-    if not final_filtered_data:
+    print(f"--- [REBALANCE_INFO] 经过防反弹过滤后，剩余 {len(filtered_klines)} 个候选币种。")
+    if not filtered_klines:
         return []
 
-    # 步骤3: 对通过所有过滤的币种进行评分和排名
+    # --- 阶段2: 相对弱势评分 ---
+    benchmark_weights = {s: 1.0 for s in benchmark_klines.keys()}
+    synthetic_benchmark_df = create_synthetic_benchmark(benchmark_klines, benchmark_weights)
+
+    if synthetic_benchmark_df.empty:
+        print("--- [REBALANCE_ERROR] 无法创建合成基准指数，筛选中止。")
+        return []
+
     qualified_coins = []
-    abs_days = criteria.get('abs_momentum_days', 30)
-    rel_days = criteria.get('rel_strength_days', 60)
-    foam_days = criteria.get('foam_days', 1)
+    abs_days = criteria.get('abs_momentum_days', 21)
+    rel_days = criteria.get('rel_strength_days', 21)
 
-    for data in final_filtered_data:
-        coin_info = {'symbol': data['symbol']}
-        foam_momentum = calculate_change_percent(data.get('usdt_klines'), foam_days)
-        abs_momentum = calculate_change_percent(data.get('usdt_klines'), abs_days)
+    for symbol, klines in filtered_klines.items():
+        coin_df = pd.DataFrame(klines, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+        coin_df['timestamp'] = pd.to_datetime(coin_df['timestamp'], unit='ms')
+        coin_df = coin_df.set_index('timestamp')
 
-        if method == 'foam' and foam_momentum is not None:
-            coin_info['foam_momentum'] = foam_momentum
-            qualified_coins.append(coin_info)
-        elif method == 'multi_factor_weakest' and abs_momentum is not None:
-            coin_info['abs_momentum'] = abs_momentum
+        abs_momentum = calculate_relative_performance(coin_df['close'], pd.Series(1.0, index=coin_df.index), abs_days)
+        relative_performance = calculate_relative_performance(coin_df['close'], synthetic_benchmark_df['close'],
+                                                              rel_days)
 
-            rel_strengths = {}
-            if 'synthetic_klines' in data:
-                for bench_coin, klines in data['synthetic_klines'].items():
-                    strength = calculate_change_percent(klines, rel_days)
-                    if strength is not None:
-                        rel_strengths[bench_coin] = strength
-            coin_info['rel_strengths'] = rel_strengths
+        if relative_performance is None or abs_momentum is None:
+            continue
 
-            qualified_coins.append(coin_info)
+        score = (relative_performance * 0.7) + (abs_momentum * 0.3)
+        qualified_coins.append({'symbol': symbol, 'score': score})
 
-    if not qualified_coins: return []
-
-    # 步骤4: 最终排序
-    if method == 'foam':
-        qualified_coins.sort(key=lambda x: x['foam_momentum'], reverse=True)
-    elif method == 'multi_factor_weakest':
-        benchmark_coins = criteria.get('rebalance_benchmark_coin', ['BTC'])
-
-        abs_sorted = sorted(qualified_coins, key=lambda x: x['abs_momentum'])
-        abs_rank_map = {coin['symbol']: i for i, coin in enumerate(abs_sorted)}
-
-        rel_rank_maps = {}
-        for bench_coin in benchmark_coins:
-            rel_sorted = sorted(
-                [c for c in qualified_coins if bench_coin in c['rel_strengths']],
-                key=lambda x: x['rel_strengths'][bench_coin]
-            )
-            rel_rank_maps[bench_coin] = {coin['symbol']: i for i, coin in enumerate(rel_sorted)}
-
-        for coin in qualified_coins:
-            rank_abs = abs_rank_map.get(coin['symbol'], len(qualified_coins))
-
-            rel_ranks = []
-            for bench_coin, rank_map in rel_rank_maps.items():
-                rank = rank_map.get(coin['symbol'], len(rank_map))
-                rel_ranks.append(rank)
-
-            avg_rel_rank = np.mean(rel_ranks) if rel_ranks else len(qualified_coins)
-
-            coin['score'] = rank_abs * 0.6 + avg_rel_rank * 0.4
-
-        qualified_coins.sort(key=lambda x: x['score'])
-    else:
+    if not qualified_coins:
         return []
+
+    qualified_coins.sort(key=lambda x: x['score'])
+
+    print("--- [REBALANCE] Top 10 Weakest Coins (Score): ---")
+    for coin in qualified_coins[:10]:
+        print(f"  - {coin['symbol']}: {coin['score']:.2f}")
+    print("-------------------------------------------------")
 
     return [coin['symbol'] for coin in qualified_coins[:top_n]]
 
 
-def screen_coins_advanced(
-        coin_data: List[Dict[str, Any]],
-        criteria: Dict[str, Any],
-        blacklist: List[str]
-) -> List[str]:
-    method = criteria.get('method')
-    top_n = criteria.get('top_n')
-    blacklist_upper = [b.upper() for b in blacklist]
-
-    volume_ma_days = criteria.get('rebalance_volume_ma_days', 20)
-    volume_spike_ratio = criteria.get('rebalance_volume_spike_ratio', 3.0)
-
-    pre_filtered_coin_data = []
-    for data in coin_data:
-        if 'usdt_klines' not in data or len(data['usdt_klines']) < volume_ma_days + 1:
-            continue
-        volumes = [kline[5] for kline in data['usdt_klines'][-(volume_ma_days + 1):-1]]
-        if not volumes:
-            continue
-        avg_volume = np.mean(volumes)
-        latest_volume = data['usdt_klines'][-1][5]
-        if avg_volume < 1e-6:
-            continue
-        if (latest_volume / avg_volume) <= volume_spike_ratio:
-            pre_filtered_coin_data.append(data)
-        else:
-            print(
-                f"--- [REBALANCE_FILTER] 剔除币种 {data['symbol']}: 成交量异常放大 ({latest_volume:,.0f} vs 均量 {avg_volume:,.0f}, 超过 {volume_spike_ratio}x) ---")
-
-    filtered_coin_data = [d for d in pre_filtered_coin_data if d['symbol'].upper() not in blacklist_upper]
-    if not filtered_coin_data:
-        return []
-
-    qualified_coins = []
-    abs_days = criteria.get('abs_momentum_days', 30)
-    rel_days = criteria.get('rel_strength_days', 60)
-    foam_days = criteria.get('foam_days', 1)
-
-    for data in filtered_coin_data:
-        coin_info = {'symbol': data['symbol']}
-        foam_momentum = calculate_change_percent(data.get('usdt_klines'), foam_days)
-        abs_momentum = calculate_change_percent(data.get('usdt_klines'), abs_days)
-
-        if method == 'foam' and foam_momentum is not None:
-            coin_info['foam_momentum'] = foam_momentum
-            qualified_coins.append(coin_info)
-        elif method == 'multi_factor_weakest' and abs_momentum is not None:
-            coin_info['abs_momentum'] = abs_momentum
-
-            rel_strengths = {}
-            if 'synthetic_klines' in data:
-                for bench_coin, klines in data['synthetic_klines'].items():
-                    strength = calculate_change_percent(klines, rel_days)
-                    if strength is not None:
-                        rel_strengths[bench_coin] = strength
-            coin_info['rel_strengths'] = rel_strengths
-
-            qualified_coins.append(coin_info)
-
-    if not qualified_coins: return []
-
-    if method == 'foam':
-        qualified_coins.sort(key=lambda x: x['foam_momentum'], reverse=True)
-    elif method == 'multi_factor_weakest':
-        benchmark_coins = criteria.get('rebalance_benchmark_coin', ['BTC'])
-
-        abs_sorted = sorted(qualified_coins, key=lambda x: x['abs_momentum'])
-        abs_rank_map = {coin['symbol']: i for i, coin in enumerate(abs_sorted)}
-
-        rel_rank_maps = {}
-        for bench_coin in benchmark_coins:
-            rel_sorted = sorted(
-                [c for c in qualified_coins if bench_coin in c['rel_strengths']],
-                key=lambda x: x['rel_strengths'][bench_coin]
-            )
-            rel_rank_maps[bench_coin] = {coin['symbol']: i for i, coin in enumerate(rel_sorted)}
-
-        for coin in qualified_coins:
-            rank_abs = abs_rank_map.get(coin['symbol'], len(qualified_coins))
-
-            rel_ranks = []
-            for bench_coin, rank_map in rel_rank_maps.items():
-                rank = rank_map.get(coin['symbol'], len(rank_map))
-                rel_ranks.append(rank)
-
-            avg_rel_rank = np.mean(rel_ranks) if rel_ranks else len(qualified_coins)
-
-            coin['score'] = rank_abs * 0.6 + avg_rel_rank * 0.4
-
-        qualified_coins.sort(key=lambda x: x['score'])
-    else:
-        return []
-
-    return [coin['symbol'] for coin in qualified_coins[:top_n]]
-
-
+# --- 辅助函数 ---
 def calculate_target_ratio_by_alt_index(alt_index: float, config: dict) -> float:
     max_ratio = config.get('rebalance_short_ratio_max', 0.70)
     min_ratio = config.get('rebalance_short_ratio_min', 0.35)
@@ -317,42 +181,25 @@ def generate_rebalance_plan(
     current_positions_map = {p.symbol: p for p in current_short_positions}
     current_symbols = set(current_positions_map.keys())
     target_symbols = set(target_coin_list)
-
     close_plan = []
     open_plan = {}
-
     if not target_symbols:
         for position in current_short_positions:
-            close_plan.append({
-                "symbol": position.symbol,
-                "notional": position.notional,
-                "close_ratio": 1.0
-            })
+            close_plan.append({"symbol": position.symbol, "notional": position.notional, "close_ratio": 1.0})
         return close_plan, {}
-
     value_per_coin_ideal = target_short_value / len(target_symbols)
-
     for symbol, position in current_positions_map.items():
         if symbol not in target_symbols:
-            close_plan.append({
-                "symbol": position.symbol,
-                "notional": position.notional,
-                "close_ratio": 1.0
-            })
+            close_plan.append({"symbol": position.symbol, "notional": position.notional, "close_ratio": 1.0})
         else:
             delta = value_per_coin_ideal - position.notional
             if delta < -10:
                 close_ratio = min(abs(delta) / position.notional, 1.0)
-                close_plan.append({
-                    "symbol": position.symbol,
-                    "notional": position.notional,
-                    "close_ratio": close_ratio
-                })
+                close_plan.append(
+                    {"symbol": position.symbol, "notional": position.notional, "close_ratio": close_ratio})
             elif delta > 10:
                 open_plan[symbol] = delta
-
     symbols_to_open_new = target_symbols - current_symbols
     for symbol in symbols_to_open_new:
         open_plan[symbol] = value_per_coin_ideal
-
     return close_plan, open_plan
