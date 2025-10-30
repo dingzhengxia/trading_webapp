@@ -132,7 +132,8 @@ class TradingService:
         return {"message": "Stop event set. Task will terminate shortly."}
 
     async def _trading_loop_task(self, config: Dict[str, Any]):
-        long_plan, short_plan = calculate_trade_plan(config, config.get('long_custom_weights', {}))
+        # long_plan, short_plan = calculate_trade_plan(config, config.get('long_custom_weights', {}))
+        long_plan, short_plan = calculate_trade_plan(config)
         order_plan = [item for item in (
             [{'coin': c, 'value': v, 'side': 'buy'} for c, v in long_plan.items()] if config.get(
                 'enable_long_trades') else []

@@ -1,14 +1,19 @@
-# backend/app/logic/plan_calculator.py
+# backend/app/logic/plan_calculator.py (已修复)
 
-def calculate_trade_plan(config, custom_weights):
+def calculate_trade_plan(config):
     long_plan, short_plan = {}, {}
 
     # --- 诊断日志 4：打印传入 plan_calculator 的关键配置 ---
     print("\n--- [BACKEND DEBUG 4] Inside plan_calculator ---")
     print(f"    'enable_long_trades' received: {config.get('enable_long_trades')}")
     print(f"    'enable_short_trades' received: {config.get('enable_short_trades')}")
+    # --- 核心修复：增加权重日志，方便调试 ---
+    print(f"    'long_custom_weights' received: {config.get('long_custom_weights')}")
     print("------------------------------------------\n")
     # ---------------------------------------------------------
+
+    # --- 核心修复：从 config 中获取权重，而不是依赖第二个参数 ---
+    custom_weights = config.get('long_custom_weights', {})
 
     if config.get('enable_long_trades', True) and config.get('total_long_position_value', 0) > 0:
         long_coin_list = config.get('long_coin_list', [])
