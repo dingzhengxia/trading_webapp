@@ -1,4 +1,4 @@
-# backend/app/main.py (优化心跳后的完整代码)
+# backend/app/main.py (修正命名衝突後的完整代碼)
 import os
 from pathlib import Path
 import json
@@ -7,7 +7,10 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, status
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from .api import positions, trading, rebalance, settings, status
+# --- 核心修改：為 status 路由使用別名 ---
+from .api import positions, trading, rebalance, settings
+from .api import status as status_router # 將 status 模組導入為 status_router
+# --- 修改結束 ---
 from .core.websocket_manager import manager, log_message
 from .core.security import APP_ACCESS_KEY
 
@@ -21,6 +24,7 @@ async def global_exception_handler(request: Request, exc: Exception):
     error_message = f"Unhandled exception for request {request.method} {request.url}: {exc}"
     print(f"--- [FATAL] {error_message} ---")
     await log_message(f"服务器内部错误: {exc}", "error")
+    # 這裡的 status 現在可以正確地引用從 fastapi 導入的 status 物件
     return JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         content={"detail": "An unexpected server error occurred. Check server logs and UI logs for details."},
@@ -31,7 +35,9 @@ app.include_router(settings.router)
 app.include_router(positions.router)
 app.include_router(trading.router)
 app.include_router(rebalance.router)
-app.include_router(status.router)
+# --- 核心修改：使用新的別名來註冊路由 ---
+app.include_router(status_router.router)
+# --- 修改結束 ---
 
 
 @app.websocket("/ws")
@@ -41,12 +47,12 @@ async def websocket_endpoint(websocket: WebSocket):
         while True:
             data = await websocket.receive_text()
             try:
-                # REFACTOR: 增加心跳响应逻辑
+                # REFACTOR: 增加心跳響應邏輯
                 message = json.loads(data)
                 if isinstance(message, dict) and message.get('type') == 'ping':
                     await websocket.send_text('{"type":"pong"}')
             except json.JSONDecodeError:
-                # 忽略无法解析的或非json格式的消息
+                # 忽略無法解析的或非json格式的消息
                 pass
     except WebSocketDisconnect:
         manager.disconnect(websocket)
