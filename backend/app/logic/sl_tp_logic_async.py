@@ -1,7 +1,6 @@
-# backend/app/logic/sl_tp_logic_async.py (CCXT升级适配 + 原生参数修正版)
+# backend/app/logic/sl_tp_logic_async.py (最终修正：通过 create_order 强行注入 STOP/TAKE_PROFIT 类型)
 import asyncio
-import json
-from typing import Set, List, Dict, Any
+from typing import Set, List, Any
 
 import ccxt.async_support as ccxt
 
@@ -11,9 +10,11 @@ from ..models.schemas import Position
 
 
 async def _cancel_sl_tp_orders_async(exchange: ccxt.binanceusdm, symbol: str, async_logger):
+    """
+    清理旧订单
+    """
     try:
         open_orders = await exchange.fetch_open_orders(symbol)
-        # 清理所有带 reduceOnly 属性的条件单
         orders_to_cancel = [
             order for order in open_orders
             if (order.get('reduceOnly') or order.get('info', {}).get('reduceOnly'))
@@ -30,74 +31,64 @@ async def _cancel_sl_tp_orders_async(exchange: ccxt.binanceusdm, symbol: str, as
         return False
 
 
-async def _place_raw_order(
+async def _place_limit_stop_official(
         exchange: ccxt.binanceusdm,
         full_symbol: str,
         side: str,
         amount: float,
         trigger_price: float,
-        limit_price: float,
         is_stop_loss: bool,
         async_logger
 ):
     """
-    使用 private_post_order 发送最底层的限价止损/止盈单。
+    使用标准的 create_order 接口，但通过 params 强行指定 API 真实类型。
+    这是解决 -4120 和 -1104 的最稳妥方案。
     """
 
-    # 1. 获取币安原生 Symbol (例如 "WLDUSDC")
-    # full_symbol 是 "WLD/USDC:USDC"
-    try:
-        market = exchange.market(full_symbol)
-        raw_symbol = market['id']  # 这里拿到的就是 "WLDUSDC"
-    except Exception as e:
-        await async_logger(f"  > ❌ 无法解析 Symbol {full_symbol}: {e}", "error")
-        return False
+    # 1. 确定币安合约 API 的真实类型字符串 (Limit Stop/TP)
+    # STOP = 限价止损
+    # TAKE_PROFIT = 限价止盈
+    real_api_type = 'STOP' if is_stop_loss else 'TAKE_PROFIT'
 
-    # 2. 确定原生类型字符串 (币安合约API仅识别 STOP 和 TAKE_PROFIT)
-    order_type = 'STOP' if is_stop_loss else 'TAKE_PROFIT'
+    # 2. 计算激进的限价 (模拟市价成交)
+    # 5% 的滑点缓冲，保证触发后立即成交
+    SLIPPAGE = 0.05
+    if side.upper() == 'BUY':
+        raw_limit_price = trigger_price * (1 + SLIPPAGE)
+    else:
+        raw_limit_price = trigger_price * (1 - SLIPPAGE)
 
-    # 3. 格式化参数为字符串 (防止 -1104 错误)
-    str_qty = exchange.amount_to_precision(full_symbol, amount)
-    str_stop_price = exchange.price_to_precision(full_symbol, trigger_price)
-    str_limit_price = exchange.price_to_precision(full_symbol, limit_price)
+    # 3. 精度处理
+    limit_price = float(exchange.price_to_precision(full_symbol, raw_limit_price))
+    trigger_price = float(exchange.price_to_precision(full_symbol, trigger_price))
+    amount = float(exchange.amount_to_precision(full_symbol, amount))
 
-    # 4. 构造请求参数字典 (单向持仓模式)
-    # 必须严格遵守：reduceOnly="true" (string), timeInForce="GTC"
+    # 4. 构造 params
+    # 关键：我们告诉 create_order 这是一个 'LIMIT' 单，但用 params 中的 'type' 覆盖它。
+    # 这样 ccxt 会正确处理签名和参数结构，而币安会收到正确的 STOP 类型。
     params = {
-        'symbol': raw_symbol,
-        'side': side.upper(),
-        'type': order_type,
-        'quantity': str_qty,
-        'price': str_limit_price,  # 限价单价格
-        'stopPrice': str_stop_price,  # 触发价格
-        'timeInForce': 'GTC',
-        'reduceOnly': 'true',  # 注意：传字符串 true
-        'workingType': 'MARK_PRICE'
+        'type': real_api_type,  # <--- 核心：覆盖类型
+        'stopPrice': trigger_price,  # 触发价
+        'reduceOnly': True,  # 单向持仓必须
+        'timeInForce': 'GTC'  # 限价单必须
     }
 
-    # 调试日志：打印出我们要发的原生 ID 和参数
-    # print(f"--- [RAW DEBUG] Symbol: {raw_symbol} | Type: {order_type} ---")
-    # print(json.dumps(params, indent=2))
-
     try:
-        # 直接调用私有接口
-        return await exchange.private_post_order(params)
+        # 使用 'LIMIT' 作为基础类型调用，确保 ccxt 包含 price 参数
+        return await exchange.create_order(full_symbol, 'LIMIT', side, amount, limit_price, params)
 
-    except Exception as e:
+    except ccxt.ExchangeError as e:
         error_msg = str(e)
 
-        # 兜底：如果报 -4061 (Hedge Mode)，说明用户账户其实是双向持仓
+        # 兜底：如果报 -4061 (Hedge Mode 冲突)
         if '-4061' in error_msg:
-            print(f"--- [DEBUG] {raw_symbol} 检测到 Hedge Mode，重试 ---")
-
+            # print(f"--- [DEBUG] 检测到 Hedge Mode，重试 {full_symbol} ---")
             params_hedge = params.copy()
-            del params_hedge['reduceOnly']  # Hedge 模式不能有 reduceOnly
-            # 自动判断 positionSide
+            del params_hedge['reduceOnly']  # Hedge 模式移除 reduceOnly
             params_hedge['positionSide'] = 'LONG' if side.upper() == 'SELL' else 'SHORT'
 
-            return await exchange.private_post_order(params_hedge)
+            return await exchange.create_order(full_symbol, 'LIMIT', side, amount, limit_price, params_hedge)
         else:
-            # 抛出异常供上层记录
             raise e
 
 
@@ -134,57 +125,42 @@ async def set_tp_sl_for_position_async(exchange: ccxt.binanceusdm, position: Pos
 
         tasks: List[Any] = []
 
-        # 计算滑点缓冲 (5%) - 确保限价单能成交
-        SLIPPAGE = 0.05
-
-        # --- 止损 ---
+        # 止损
         if sl_perc > 0:
             leverage = config.get('leverage', 1)
             sl_ratio = float(sl_perc) / 100 / leverage
             entry_price = position.entry_price
 
             if is_long:
-                # 多单止损：向下触发，卖出。限价要比触发价低
-                target_trigger = entry_price * (1 - sl_ratio)
-                target_limit = target_trigger * (1 - SLIPPAGE)
-                sl_side = 'SELL'
+                target_sl_price = entry_price * (1 - sl_ratio)
+                sl_side = 'sell'
             else:
-                # 空单止损：向上触发，买入。限价要比触发价高
-                target_trigger = entry_price * (1 + sl_ratio)
-                target_limit = target_trigger * (1 + SLIPPAGE)
-                sl_side = 'BUY'
+                target_sl_price = entry_price * (1 + sl_ratio)
+                sl_side = 'buy'
 
-            # 打印日志确认价格
-            # await async_logger(f"  > 准备提交 {position.symbol} SL (触发: {target_trigger:.4f}, 限价: {target_limit:.4f})")
-
-            tasks.append(_place_raw_order(
+            await async_logger(f"  > 准备提交 {position.symbol} SL (Limit Stop)...")
+            tasks.append(_place_limit_stop_official(
                 exchange, full_symbol, sl_side, position.contracts,
-                target_trigger, target_limit, is_stop_loss=True, async_logger=async_logger
+                target_sl_price, is_stop_loss=True, async_logger=async_logger
             ))
 
-        # --- 止盈 ---
+        # 止盈
         if tp_perc > 0:
             leverage = config.get('leverage', 1)
             tp_ratio = float(tp_perc) / 100 / leverage
             entry_price = position.entry_price
 
             if is_long:
-                # 多单止盈：向上触发，卖出。限价通常等于或略低于触发价(为了成交)
-                target_trigger = entry_price * (1 + tp_ratio)
-                # 这里设为相同，或者略低一点点保证成交
-                target_limit = target_trigger
-                tp_side = 'SELL'
+                target_tp_price = entry_price * (1 + tp_ratio)
+                tp_side = 'sell'
             else:
-                # 空单止盈：向下触发，买入
-                target_trigger = entry_price * (1 - tp_ratio)
-                target_limit = target_trigger
-                tp_side = 'BUY'
+                target_tp_price = entry_price * (1 - tp_ratio)
+                tp_side = 'buy'
 
-            # await async_logger(f"  > 准备提交 {position.symbol} TP (触发: {target_trigger:.4f}, 限价: {target_limit:.4f})")
-
-            tasks.append(_place_raw_order(
+            await async_logger(f"  > 准备提交 {position.symbol} TP (Limit TP)...")
+            tasks.append(_place_limit_stop_official(
                 exchange, full_symbol, tp_side, position.contracts,
-                target_trigger, target_limit, is_stop_loss=False, async_logger=async_logger
+                target_tp_price, is_stop_loss=False, async_logger=async_logger
             ))
 
         if not tasks:
@@ -197,7 +173,7 @@ async def set_tp_sl_for_position_async(exchange: ccxt.binanceusdm, position: Pos
         total_tasks = len(tasks)
 
         for res in results:
-            if isinstance(res, dict) and res.get('orderId'):
+            if isinstance(res, dict) and res.get('id'):
                 success_count += 1
             elif isinstance(res, Exception):
                 await async_logger(f"  > ❌ {position.symbol} 订单失败: {res}", "error")
