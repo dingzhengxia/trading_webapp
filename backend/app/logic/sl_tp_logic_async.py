@@ -1,4 +1,4 @@
-# backend/app/logic/sl_tp_logic_async.py (最终修正版：原生参数注入策略)
+# backend/app/logic/sl_tp_logic_async.py (最终方案：自动降级为模拟市价的限价止损)
 import asyncio
 from typing import Set, List, Dict, Any
 
@@ -28,63 +28,74 @@ async def _cancel_sl_tp_orders_async(exchange: ccxt.binanceusdm, symbol: str, as
         return False
 
 
-async def _place_stop_order_with_retry(
+async def _place_stop_order_final(
         exchange: ccxt.binanceusdm,
         symbol: str,
-        desired_type: str,  # 例如 'STOP_MARKET'
         side: str,
         amount: float,
-        params: Dict[str, Any],
+        trigger_price: float,
+        is_stop_loss: bool,  # True=SL, False=TP
         pos_side_fallback: str,
         async_logger
 ):
     """
-    智能下单函数 - 修复 -4120 错误
-    策略：告诉 CCXT 这是一个 MARKET 单，但在 params 中注入真实的 type。
+    终极下单函数：
+    1. 优先尝试标准的 STOP_MARKET / TAKE_PROFIT_MARKET
+    2. 如果报错 -4120 (类型不支持)，自动降级为 STOP / TAKE_PROFIT (限价单)，并设置大滑点模拟市价。
     """
 
-    # --- 构建 One-Way Mode 参数 ---
-    req_params = params.copy()
+    # 确定首选类型
+    if is_stop_loss:
+        primary_type = 'STOP_MARKET'
+        secondary_type = 'STOP'
+    else:
+        primary_type = 'TAKE_PROFIT_MARKET'
+        secondary_type = 'TAKE_PROFIT'
 
-    # 关键修改：通过 params 覆盖 type
-    req_params['type'] = desired_type
-
-    # 1. 确保 reduceOnly 存在
-    req_params['reduceOnly'] = True
-
-    # 2. 清理不需要的字段
-    if 'positionSide' in req_params: del req_params['positionSide']
-    if 'closePosition' in req_params: del req_params['closePosition']
-
-    # --- 🔍 [DEBUG LOG] ---
-    print(f"--- [DEBUG] 尝试原生参数注入 ({symbol}) ---")
-    print(f"    CCXT Base Type: MARKET")
-    print(f"    Injected Type: {desired_type}")
-    print(f"    Params: {req_params}")
-    # ----------------------
+    # 基础参数 (One-Way Mode)
+    params = {
+        'stopPrice': trigger_price,
+        'workingType': 'MARK_PRICE',
+        'reduceOnly': True
+    }
 
     try:
-        # 关键修改：第二个参数传 'MARKET'，让 CCXT 认为这是市价单，
-        # 但 req_params 中的 'type': 'STOP_MARKET' 会在发送给币安时覆盖它。
-        return await exchange.create_order(symbol, 'MARKET', side, amount, None, req_params)
+        # --- 尝试 1: 标准市价止损/止盈 ---
+        # print(f"--- [DEBUG] 尝试标准市价止损 {symbol} Type={primary_type} ---")
+        return await exchange.create_order(symbol, primary_type, side, amount, None, params)
+
     except ccxt.ExchangeError as e:
         error_msg = str(e)
-        print(f"--- [DEBUG ERROR] {symbol} 下单报错: {error_msg}")
 
-        # 如果报错 -4061 (Hedge Mode 冲突)
+        # 处理 -4061 (Hedge Mode 冲突)
         if '-4061' in error_msg:
-            print(f"--- [DEBUG] 检测到 Hedge Mode，重试 {symbol} ...")
+            # print(f"--- [DEBUG] 切换到 Hedge Mode 重试 {symbol} ---")
+            params_hedge = params.copy()
+            params_hedge['positionSide'] = pos_side_fallback
+            if 'reduceOnly' in params_hedge: del params_hedge['reduceOnly']
+            return await exchange.create_order(symbol, primary_type, side, amount, None, params_hedge)
 
-            hedge_params = params.copy()
-            hedge_params['type'] = desired_type
-            hedge_params['positionSide'] = pos_side_fallback
+        # 处理 -4120 (市价止损不支持) -> 降级为限价止损
+        elif '-4120' in error_msg:
+            print(f"--- [DEBUG] {symbol} 不支持市价止损，降级为模拟市价的限价止损 (Type={secondary_type}) ---")
 
-            # Hedge 模式必须移除 reduceOnly
-            if 'reduceOnly' in hedge_params:
-                del hedge_params['reduceOnly']
+            # 计算激进的限价价格以确保立即成交
+            # 买入平空: 限价 = 触发价 * 1.1 (允许10%滑点)
+            # 卖出平多: 限价 = 触发价 * 0.9 (允许10%滑点)
+            if side.lower() == 'buy':
+                limit_price = trigger_price * 1.1
+            else:
+                limit_price = trigger_price * 0.9
 
-            # 同样使用 'MARKET' 欺骗 CCXT
-            return await exchange.create_order(symbol, 'MARKET', side, amount, None, hedge_params)
+            # 修正价格精度
+            limit_price = float(exchange.price_to_precision(symbol, limit_price))
+
+            # 构建限价单参数
+            params_limit = params.copy()
+            # 限价单不需要 type 字段在 params 里，create_order 第2个参数决定
+
+            return await exchange.create_order(symbol, secondary_type, side, amount, limit_price, params_limit)
+
         else:
             raise e
 
@@ -112,7 +123,7 @@ async def set_tp_sl_for_position_async(exchange: ccxt.binanceusdm, position: Pos
         is_long = position.side == i18n.SIDE_LONG
         side_key = "long" if is_long else "short"
 
-        # 3. 检查配置开关
+        # 3. 检查开关
         sl_tp_enabled = config.get(f'enable_{side_key}_sl_tp', False)
         if not sl_tp_enabled:
             await async_logger(f"{position.symbol} 的SL/TP功能已禁用。", "info")
@@ -138,17 +149,11 @@ async def set_tp_sl_for_position_async(exchange: ccxt.binanceusdm, position: Pos
             target_sl_price = float(exchange.price_to_precision(full_symbol, price_raw))
             sl_side = i18n.ORDER_SIDE_SELL if is_long else i18n.ORDER_SIDE_BUY
 
-            sl_params = {
-                'stopPrice': target_sl_price,
-                'workingType': 'MARK_PRICE'
-            }
+            await async_logger(f"  > 准备为 {position.symbol} 提交 SL (触发价: {target_sl_price}) ...")
 
-            await async_logger(f"  > 准备为 {position.symbol} 提交 SL (标记价: {target_sl_price}) ...")
-
-            # 这里的 desired_type 传真实需要的类型
-            tasks.append(_place_stop_order_with_retry(
-                exchange, full_symbol, 'STOP_MARKET', sl_side, position.contracts,
-                sl_params, pos_side_fallback, async_logger
+            tasks.append(_place_stop_order_final(
+                exchange, full_symbol, sl_side, position.contracts,
+                target_sl_price, True, pos_side_fallback, async_logger
             ))
 
         # 止盈订单
@@ -165,16 +170,11 @@ async def set_tp_sl_for_position_async(exchange: ccxt.binanceusdm, position: Pos
             target_tp_price = float(exchange.price_to_precision(full_symbol, price_raw))
             tp_side = i18n.ORDER_SIDE_SELL if is_long else i18n.ORDER_SIDE_BUY
 
-            tp_params = {
-                'stopPrice': target_tp_price,
-                'workingType': 'MARK_PRICE'
-            }
+            await async_logger(f"  > 准备为 {position.symbol} 提交 TP (触发价: {target_tp_price}) ...")
 
-            await async_logger(f"  > 准备为 {position.symbol} 提交 TP (标记价: {target_tp_price}) ...")
-
-            tasks.append(_place_stop_order_with_retry(
-                exchange, full_symbol, 'TAKE_PROFIT_MARKET', tp_side, position.contracts,
-                tp_params, pos_side_fallback, async_logger
+            tasks.append(_place_stop_order_final(
+                exchange, full_symbol, tp_side, position.contracts,
+                target_tp_price, False, pos_side_fallback, async_logger
             ))
 
         if not tasks:
