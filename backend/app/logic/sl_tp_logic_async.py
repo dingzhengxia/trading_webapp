@@ -1,4 +1,4 @@
-# backend/app/logic/sl_tp_logic_async.py (模拟市价的限价单 - 终极稳健版)
+# backend/app/logic/sl_tp_logic_async.py (最终修正：使用官方全称 STOP_LOSS_LIMIT)
 import asyncio
 from typing import Set, List, Any
 
@@ -13,10 +13,14 @@ async def _cancel_sl_tp_orders_async(exchange: ccxt.binanceusdm, symbol: str, as
     try:
         open_orders = await exchange.fetch_open_orders(symbol)
         # 清理所有带 reduceOnly 属性的条件单
+        # 注意：这里需要涵盖所有可能的类型字符串
         orders_to_cancel = [
             order for order in open_orders
             if (order.get('reduceOnly') or order.get('info', {}).get('reduceOnly'))
-               and order['type'] in ['STOP', 'TAKE_PROFIT', 'STOP_MARKET', 'TAKE_PROFIT_MARKET']
+               and order['type'] in [
+                   'STOP', 'TAKE_PROFIT', 'STOP_MARKET', 'TAKE_PROFIT_MARKET',
+                   'STOP_LOSS', 'STOP_LOSS_LIMIT', 'TAKE_PROFIT_LIMIT'
+               ]
         ]
         if not orders_to_cancel:
             return True
@@ -29,7 +33,7 @@ async def _cancel_sl_tp_orders_async(exchange: ccxt.binanceusdm, symbol: str, as
         return False
 
 
-async def _place_simulated_market_stop(
+async def _place_limit_conditional_order(
         exchange: ccxt.binanceusdm,
         symbol: str,
         side: str,
@@ -39,26 +43,27 @@ async def _place_simulated_market_stop(
         async_logger
 ):
     """
-    通过发送"价格非常激进的限价单"来模拟市价单。
-    解决了 -4120 (市价单不支持) 和 -1104 (参数格式错误) 问题。
+    发送严格符合币安文档的限价条件单。
+    使用全称: STOP_LOSS_LIMIT / TAKE_PROFIT_LIMIT
     """
 
-    # 1. 确定类型: 使用最基础的 STOP 和 TAKE_PROFIT (对应限价单)
+    # 1. 确定 API 订单类型 (必须使用全称，不能用简称 STOP)
     if is_stop_loss:
-        order_type = 'STOP'
+        # 文档定义: STOP_LOSS_LIMIT 需要 timeInForce, quantity, price, stopPrice
+        order_type = 'STOP_LOSS_LIMIT'
     else:
-        order_type = 'TAKE_PROFIT'
+        # 文档定义: TAKE_PROFIT_LIMIT 需要 timeInForce, quantity, price, stopPrice
+        order_type = 'TAKE_PROFIT_LIMIT'
 
-    # 2. 计算激进的限价价格 (Slippage Buffer)
-    # 这里的逻辑是：为了保证触发后立即成交，买单价格要高，卖单价格要低。
-    # 5% 的缓冲通常足够吃掉深度，实现"市价"效果。
+    # 2. 计算激进的限价价格 (模拟市价成交)
+    # 5% 滑点缓冲
     SLIPPAGE = 0.05
 
     if side.upper() == 'BUY':
-        # 空单平仓(买入): 触发价 * 1.05
+        # 空单平仓(买入): 限价 = 触发价 * 1.05
         raw_limit_price = trigger_price * (1 + SLIPPAGE)
     else:
-        # 多单平仓(卖出): 触发价 * 0.95
+        # 多单平仓(卖出): 限价 = 触发价 * 0.95
         raw_limit_price = trigger_price * (1 - SLIPPAGE)
 
     # 3. 精度处理
@@ -69,30 +74,31 @@ async def _place_simulated_market_stop(
     # 4. 构造标准参数 (单向持仓模式)
     params = {
         'stopPrice': trigger_price,
-        'reduceOnly': True,  # 关键：布尔值 True
-        'timeInForce': 'GTC',  # 关键：限价单必须有 GTC
+        'reduceOnly': True,
+        'timeInForce': 'GTC',
         'workingType': 'MARK_PRICE'
     }
 
     # 调试日志
     print(f"--- [DEBUG] 下单 {symbol} ({side}) ---")
-    print(f"    Type: {order_type} (Limit)")
+    print(f"    Type: {order_type} (Official Enum)")
     print(f"    Trigger: {trigger_price}")
-    print(f"    Limit: {limit_price} (Simulated Market)")
+    print(f"    Limit: {limit_price}")
     print(f"    Params: {params}")
 
     try:
-        # 使用标准 create_order，不使用 type 覆盖，不使用 raw request
+        # create_order(symbol, type, side, amount, price, params)
+        # 这里直接传 'STOP_LOSS_LIMIT' 作为 type，ccxt 会直接透传给 binance
         return await exchange.create_order(symbol, order_type, side, amount, limit_price, params)
 
     except ccxt.ExchangeError as e:
         error_msg = str(e)
 
-        # 兜底逻辑：如果万一报 -4061 (Hedge Mode Conflict)，虽然您说是单向，但为了代码不死
+        # 兜底逻辑：Hedge Mode 兼容
         if '-4061' in error_msg:
-            print(f"--- [DEBUG] 检测到 Hedge Mode 冲突，尝试 Hedge 参数重试 {symbol} ---")
+            print(f"--- [DEBUG] 检测到 Hedge Mode 冲突，重试 {symbol} ---")
             params_hedge = params.copy()
-            del params_hedge['reduceOnly']  # Hedge 模式不能有 reduceOnly
+            del params_hedge['reduceOnly']
             params_hedge['positionSide'] = 'LONG' if side.upper() == 'SELL' else 'SHORT'
 
             return await exchange.create_order(symbol, order_type, side, amount, limit_price, params_hedge)
@@ -146,8 +152,8 @@ async def set_tp_sl_for_position_async(exchange: ccxt.binanceusdm, position: Pos
                 target_sl_price = entry_price * (1 + sl_ratio)
                 sl_side = 'buy'
 
-            await async_logger(f"  > 准备提交 {position.symbol} SL (Limit Sim Market)...")
-            tasks.append(_place_simulated_market_stop(
+            await async_logger(f"  > 准备提交 {position.symbol} SL (Limit Stop)...")
+            tasks.append(_place_limit_conditional_order(
                 exchange, full_symbol, sl_side, position.contracts,
                 target_sl_price, is_stop_loss=True, async_logger=async_logger
             ))
@@ -165,8 +171,8 @@ async def set_tp_sl_for_position_async(exchange: ccxt.binanceusdm, position: Pos
                 target_tp_price = entry_price * (1 - tp_ratio)
                 tp_side = 'buy'
 
-            await async_logger(f"  > 准备提交 {position.symbol} TP (Limit Sim Market)...")
-            tasks.append(_place_simulated_market_stop(
+            await async_logger(f"  > 准备提交 {position.symbol} TP (Limit TP)...")
+            tasks.append(_place_limit_conditional_order(
                 exchange, full_symbol, tp_side, position.contracts,
                 target_tp_price, is_stop_loss=False, async_logger=async_logger
             ))
