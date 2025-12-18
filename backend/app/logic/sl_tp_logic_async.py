@@ -1,4 +1,4 @@
-# backend/app/logic/sl_tp_logic_async.py (带详细调试日志的修复版)
+# backend/app/logic/sl_tp_logic_async.py (最终修正版：原生参数注入策略)
 import asyncio
 from typing import Set, List, Dict, Any
 
@@ -31,7 +31,7 @@ async def _cancel_sl_tp_orders_async(exchange: ccxt.binanceusdm, symbol: str, as
 async def _place_stop_order_with_retry(
         exchange: ccxt.binanceusdm,
         symbol: str,
-        order_type: str,
+        desired_type: str,  # 例如 'STOP_MARKET'
         side: str,
         amount: float,
         params: Dict[str, Any],
@@ -39,54 +39,52 @@ async def _place_stop_order_with_retry(
         async_logger
 ):
     """
-    智能下单函数 - 严格单向持仓模式 (One-Way)
+    智能下单函数 - 修复 -4120 错误
+    策略：告诉 CCXT 这是一个 MARKET 单，但在 params 中注入真实的 type。
     """
 
     # --- 构建 One-Way Mode 参数 ---
     req_params = params.copy()
 
-    # 1. 确保 reduceOnly 存在且为布尔值 True
+    # 关键修改：通过 params 覆盖 type
+    req_params['type'] = desired_type
+
+    # 1. 确保 reduceOnly 存在
     req_params['reduceOnly'] = True
 
-    # 2. 绝对不能有 positionSide
-    if 'positionSide' in req_params:
-        del req_params['positionSide']
-
-    # 3. 绝对不能有 closePosition
-    if 'closePosition' in req_params:
-        del req_params['closePosition']
+    # 2. 清理不需要的字段
+    if 'positionSide' in req_params: del req_params['positionSide']
+    if 'closePosition' in req_params: del req_params['closePosition']
 
     # --- 🔍 [DEBUG LOG] ---
-    debug_msg = (
-        f"--- [DEBUG] 下单参数检查 ({symbol}) ---\n"
-        f"    Type: {order_type}\n"
-        f"    Side: {side}\n"
-        f"    Amount: {amount}\n"
-        f"    Params: {req_params}\n"
-        f"--------------------------------"
-    )
-    print(debug_msg)  # 输出到控制台
+    print(f"--- [DEBUG] 尝试原生参数注入 ({symbol}) ---")
+    print(f"    CCXT Base Type: MARKET")
+    print(f"    Injected Type: {desired_type}")
+    print(f"    Params: {req_params}")
     # ----------------------
 
     try:
-        # 使用标准的 create_order
-        return await exchange.create_order(symbol, order_type, side, amount, None, req_params)
+        # 关键修改：第二个参数传 'MARKET'，让 CCXT 认为这是市价单，
+        # 但 req_params 中的 'type': 'STOP_MARKET' 会在发送给币安时覆盖它。
+        return await exchange.create_order(symbol, 'MARKET', side, amount, None, req_params)
     except ccxt.ExchangeError as e:
         error_msg = str(e)
         print(f"--- [DEBUG ERROR] {symbol} 下单报错: {error_msg}")
 
-        # 如果报错提示 -4061 (Order's position side does not match user's setting)
-        # 这意味着虽然用户说是单向，但账户实际是双向持仓模式 (Hedge Mode)
+        # 如果报错 -4061 (Hedge Mode 冲突)
         if '-4061' in error_msg:
-            print(f"--- [DEBUG] 检测到 Hedge Mode，正在重试 {symbol} ...")
+            print(f"--- [DEBUG] 检测到 Hedge Mode，重试 {symbol} ...")
 
-            # 切换为 Hedge Mode 参数
             hedge_params = params.copy()
-            hedge_params['positionSide'] = pos_side_fallback  # 必须带 positionSide
-            if 'reduceOnly' in hedge_params:
-                del hedge_params['reduceOnly']  # 必须去掉 reduceOnly (否则报 -1106)
+            hedge_params['type'] = desired_type
+            hedge_params['positionSide'] = pos_side_fallback
 
-            return await exchange.create_order(symbol, order_type, side, amount, None, hedge_params)
+            # Hedge 模式必须移除 reduceOnly
+            if 'reduceOnly' in hedge_params:
+                del hedge_params['reduceOnly']
+
+            # 同样使用 'MARKET' 欺骗 CCXT
+            return await exchange.create_order(symbol, 'MARKET', side, amount, None, hedge_params)
         else:
             raise e
 
@@ -137,7 +135,6 @@ async def set_tp_sl_for_position_async(exchange: ccxt.binanceusdm, position: Pos
             else:
                 price_raw = entry_price * (1 + sl_ratio)
 
-            # 强制转换为 float，防止精度问题
             target_sl_price = float(exchange.price_to_precision(full_symbol, price_raw))
             sl_side = i18n.ORDER_SIDE_SELL if is_long else i18n.ORDER_SIDE_BUY
 
@@ -148,6 +145,7 @@ async def set_tp_sl_for_position_async(exchange: ccxt.binanceusdm, position: Pos
 
             await async_logger(f"  > 准备为 {position.symbol} 提交 SL (标记价: {target_sl_price}) ...")
 
+            # 这里的 desired_type 传真实需要的类型
             tasks.append(_place_stop_order_with_retry(
                 exchange, full_symbol, 'STOP_MARKET', sl_side, position.contracts,
                 sl_params, pos_side_fallback, async_logger
