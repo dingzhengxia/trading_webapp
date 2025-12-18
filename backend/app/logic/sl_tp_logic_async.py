@@ -1,4 +1,4 @@
-# backend/app/logic/sl_tp_logic_async.py (智能兼容 Hedge/One-Way 模式版)
+# backend/app/logic/sl_tp_logic_async.py (修复 -1106 和 -4061 错误)
 import asyncio
 from typing import Set, List, Dict, Any
 
@@ -42,23 +42,36 @@ async def _place_stop_order_with_retry(
         async_logger
 ):
     """
-    智能下单函数：先尝试带 positionSide (Hedge模式)，如果失败且错误为 -4061，则去除 positionSide 重试 (One-Way模式)。
+    智能下单函数：
+    1. 优先尝试 Hedge 模式格式：带 positionSide，但必须移除 reduceOnly (否则报 -1106)。
+    2. 如果失败报 -4061 (单向持仓模式)，则尝试 One-Way 格式：移除 positionSide，带上 reduceOnly。
     """
+
+    # --- 尝试 1: Hedge Mode (双向持仓) ---
+    # 规则: 必须有 positionSide，必须没有 reduceOnly
+    params_hedge = params.copy()
+    if 'reduceOnly' in params_hedge:
+        del params_hedge['reduceOnly']  # 关键修复：移除 reduceOnly 以避免 -1106 错误
+
     try:
-        # 尝试 1: 默认带上 positionSide (适用于双向持仓 Hedge Mode)
-        return await exchange.create_order(symbol, type_, side, amount, None, params)
+        return await exchange.create_order(symbol, type_, side, amount, None, params_hedge)
     except ccxt.ExchangeError as e:
         error_msg = str(e)
+
+        # --- 尝试 2: One-Way Mode (单向持仓) ---
         # 错误 -4061: Order's position side does not match user's setting.
-        # 这意味着用户处于单向持仓模式 (One-Way Mode)，不能传 positionSide。
-        if '-4061' in error_msg and 'positionSide' in params:
-            # print(f"Detected One-Way Mode for {symbol}, retrying without positionSide...")
-            params_retry = params.copy()
-            params_retry.pop('positionSide', None)
-            # 尝试 2: 去除 positionSide 重试
-            return await exchange.create_order(symbol, type_, side, amount, None, params_retry)
+        # 这意味着用户实际上是单向持仓模式。
+        if '-4061' in error_msg:
+            # 规则: 必须没有 positionSide，必须有 reduceOnly
+            params_oneway = params.copy()
+            if 'positionSide' in params_oneway:
+                del params_oneway['positionSide']
+            params_oneway['reduceOnly'] = True  # 确保 reduceOnly 存在
+
+            # await async_logger(f"  > 检测到单向持仓模式，重试 {symbol}...", "info")
+            return await exchange.create_order(symbol, type_, side, amount, None, params_oneway)
         else:
-            # 其他错误直接抛出
+            # 如果是其他错误 (如余额不足等)，直接抛出
             raise e
 
 
@@ -97,8 +110,8 @@ async def set_tp_sl_for_position_async(exchange: ccxt.binanceusdm, position: Pos
         tasks: List[Any] = []
 
         # --- 准备参数 ---
-        # Hedge Mode 必须参数: positionSide ('LONG' or 'SHORT')
-        # One-Way Mode: 不能传 positionSide (将在 _place_stop_order_with_retry 中自动处理)
+        # 我们在这里把 reduceOnly 和 positionSide 都放进去
+        # 由 _place_stop_order_with_retry 函数决定保留哪一个
         pos_side_param = 'LONG' if is_long else 'SHORT'
 
         # 止损订单
@@ -118,14 +131,13 @@ async def set_tp_sl_for_position_async(exchange: ccxt.binanceusdm, position: Pos
 
             sl_params = {
                 'stopPrice': target_sl_price,
-                'reduceOnly': True,
                 'workingType': 'MARK_PRICE',
-                'positionSide': pos_side_param  # 默认带上
+                'positionSide': pos_side_param,  # 放入 positionSide
+                'reduceOnly': True  # 放入 reduceOnly (作为备选)
             }
 
             await async_logger(f"  > 准备为 {position.symbol} 提交 SL (标记价: {target_sl_price}) ...")
 
-            # 创建协程任务，但不立即 await，放入列表
             tasks.append(_place_stop_order_with_retry(
                 exchange, full_symbol, 'STOP_MARKET', sl_side, position.contracts, sl_params, async_logger
             ))
@@ -147,9 +159,9 @@ async def set_tp_sl_for_position_async(exchange: ccxt.binanceusdm, position: Pos
 
             tp_params = {
                 'stopPrice': target_tp_price,
-                'reduceOnly': True,
                 'workingType': 'MARK_PRICE',
-                'positionSide': pos_side_param  # 默认带上
+                'positionSide': pos_side_param,  # 放入 positionSide
+                'reduceOnly': True  # 放入 reduceOnly (作为备选)
             }
 
             await async_logger(f"  > 准备为 {position.symbol} 提交 TP (标记价: {target_tp_price}) ...")
@@ -187,7 +199,7 @@ async def set_tp_sl_for_position_async(exchange: ccxt.binanceusdm, position: Pos
         return False
     except ccxt.ExchangeError as e:
         if '-1106' in str(e):
-            await async_logger(f"⚠️ 为 {position.symbol} 设置SL/TP失败 (仓位可能已关闭): {e.args[0]}", "warning")
+            await async_logger(f"⚠️ 为 {position.symbol} 设置SL/TP失败 (参数冲突或仓位关闭): {e}", "warning")
             return True
         await async_logger(f"❌ 设置 {position.symbol} SL/TP时发生未处理的交易所错误: {e}", "error")
         return False
