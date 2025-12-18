@@ -1,4 +1,4 @@
-# backend/app/logic/sl_tp_logic_async.py (修复 -1106 和 -4061 错误)
+# backend/app/logic/sl_tp_logic_async.py (最终修复版: 采用 closePosition=True 策略)
 import asyncio
 from typing import Set, List, Dict, Any
 
@@ -10,12 +10,17 @@ from ..models.schemas import Position
 
 
 async def _cancel_sl_tp_orders_async(exchange: ccxt.binanceusdm, symbol: str, async_logger):
+    """
+    清理现有的止盈止损订单
+    """
     try:
         open_orders = await exchange.fetch_open_orders(symbol)
         # 筛选出只减仓且类型为止盈止损的订单
+        # 注意：使用 closePosition=True 创建的订单，ccxt 返回的 info 中通常也会有 closePosition 标记
         orders_to_cancel = [
             order for order in open_orders
-            if order.get('reduceOnly') and order['type'] in ['stop_market', 'stop', 'take_profit_market', 'take_profit']
+            if (order.get('reduceOnly') or order.get('info', {}).get('closePosition'))
+               and order['type'] in ['stop_market', 'stop', 'take_profit_market', 'take_profit']
         ]
         if not orders_to_cancel:
             return True
@@ -43,35 +48,50 @@ async def _place_stop_order_with_retry(
 ):
     """
     智能下单函数：
-    1. 优先尝试 Hedge 模式格式：带 positionSide，但必须移除 reduceOnly (否则报 -1106)。
-    2. 如果失败报 -4061 (单向持仓模式)，则尝试 One-Way 格式：移除 positionSide，带上 reduceOnly。
+    策略 A (Hedge Mode): 使用 closePosition=True。这是双向持仓模式下最标准的止损方式。
+                         此时 quantity 必须忽略（传0），positionSide 必须存在，reduceOnly 必须移除。
+
+    策略 B (One-Way Mode): 如果策略 A 失败并报 -4061，说明是单向持仓。
+                         此时使用 reduceOnly=True。quantity 必须存在，positionSide 必须移除，closePosition 必须移除。
     """
 
-    # --- 尝试 1: Hedge Mode (双向持仓) ---
-    # 规则: 必须有 positionSide，必须没有 reduceOnly
+    # --- 策略 A: Hedge Mode (Close Position) ---
     params_hedge = params.copy()
+
+    # 设置 Hedge 模式专用参数
+    params_hedge['closePosition'] = True  # 关键：告诉币安这是一个全平单
     if 'reduceOnly' in params_hedge:
-        del params_hedge['reduceOnly']  # 关键修复：移除 reduceOnly 以避免 -1106 错误
+        del params_hedge['reduceOnly']  # closePosition 与 reduceOnly 互斥
+
+    # 注意：positionSide 已在外部传入 params
 
     try:
-        return await exchange.create_order(symbol, type_, side, amount, None, params_hedge)
+        # 当 closePosition=True 时，amount 应该传 0 或 None，交易所会忽略它并平掉所有仓位
+        return await exchange.create_order(symbol, type_, side, 0, None, params_hedge)
     except ccxt.ExchangeError as e:
         error_msg = str(e)
 
-        # --- 尝试 2: One-Way Mode (单向持仓) ---
-        # 错误 -4061: Order's position side does not match user's setting.
-        # 这意味着用户实际上是单向持仓模式。
-        if '-4061' in error_msg:
-            # 规则: 必须没有 positionSide，必须有 reduceOnly
+        # --- 策略 B: One-Way Mode (Fallback) ---
+        # 错误 -4061: Order's position side does not match user's setting. (单向持仓)
+        # 错误 -4120: 有时候 closePosition 在某些旧版单向账户也会报这个，尝试回退
+        if '-4061' in error_msg or '-4120' in error_msg:
+            # await async_logger(f"  > 模式自适应：切换为单向持仓(One-Way)模式重试 {symbol}...", "info")
+
             params_oneway = params.copy()
+
+            # 清理 Hedge 参数
             if 'positionSide' in params_oneway:
                 del params_oneway['positionSide']
-            params_oneway['reduceOnly'] = True  # 确保 reduceOnly 存在
+            if 'closePosition' in params_oneway:
+                del params_oneway['closePosition']
 
-            # await async_logger(f"  > 检测到单向持仓模式，重试 {symbol}...", "info")
+            # 设置 One-Way 参数
+            params_oneway['reduceOnly'] = True
+
+            # 单向模式必须指定数量
             return await exchange.create_order(symbol, type_, side, amount, None, params_oneway)
         else:
-            # 如果是其他错误 (如余额不足等)，直接抛出
+            # 其他错误 (如 -2019 保证金不足等) 直接抛出
             raise e
 
 
@@ -109,9 +129,7 @@ async def set_tp_sl_for_position_async(exchange: ccxt.binanceusdm, position: Pos
 
         tasks: List[Any] = []
 
-        # --- 准备参数 ---
-        # 我们在这里把 reduceOnly 和 positionSide 都放进去
-        # 由 _place_stop_order_with_retry 函数决定保留哪一个
+        # Hedge 模式需要的参数，One-Way 模式下会在 retry 函数中被移除
         pos_side_param = 'LONG' if is_long else 'SHORT'
 
         # 止损订单
@@ -132,8 +150,8 @@ async def set_tp_sl_for_position_async(exchange: ccxt.binanceusdm, position: Pos
             sl_params = {
                 'stopPrice': target_sl_price,
                 'workingType': 'MARK_PRICE',
-                'positionSide': pos_side_param,  # 放入 positionSide
-                'reduceOnly': True  # 放入 reduceOnly (作为备选)
+                'positionSide': pos_side_param,
+                # 注意：这里不再传 reduceOnly，因为 create_order 函数内部会优先尝试 closePosition=True
             }
 
             await async_logger(f"  > 准备为 {position.symbol} 提交 SL (标记价: {target_sl_price}) ...")
@@ -160,8 +178,7 @@ async def set_tp_sl_for_position_async(exchange: ccxt.binanceusdm, position: Pos
             tp_params = {
                 'stopPrice': target_tp_price,
                 'workingType': 'MARK_PRICE',
-                'positionSide': pos_side_param,  # 放入 positionSide
-                'reduceOnly': True  # 放入 reduceOnly (作为备选)
+                'positionSide': pos_side_param,
             }
 
             await async_logger(f"  > 准备为 {position.symbol} 提交 TP (标记价: {target_tp_price}) ...")
@@ -199,7 +216,7 @@ async def set_tp_sl_for_position_async(exchange: ccxt.binanceusdm, position: Pos
         return False
     except ccxt.ExchangeError as e:
         if '-1106' in str(e):
-            await async_logger(f"⚠️ 为 {position.symbol} 设置SL/TP失败 (参数冲突或仓位关闭): {e}", "warning")
+            await async_logger(f"⚠️ 为 {position.symbol} 设置SL/TP失败 (参数冲突): {e}", "warning")
             return True
         await async_logger(f"❌ 设置 {position.symbol} SL/TP时发生未处理的交易所错误: {e}", "error")
         return False
@@ -214,7 +231,8 @@ async def cleanup_orphan_sltp_orders_async(exchange: ccxt.binanceusdm, active_sy
         all_open_orders = await exchange.fetch_open_orders()
         orphan_orders = [
             order for order in all_open_orders
-            if order.get('reduceOnly') and order['symbol'] not in active_symbols
+            if (order.get('reduceOnly') or order.get('info', {}).get('closePosition'))
+               and order['symbol'] not in active_symbols
         ]
         if not orphan_orders:
             await async_logger("未发现任何无主订单。", "success")
