@@ -1,4 +1,4 @@
-# backend/app/logic/sl_tp_logic_async.py (回归 CCXT 最标准接口 - 终极规范版)
+# backend/app/logic/sl_tp_logic_async.py (完整修复版)
 import asyncio
 from typing import Set, List, Dict, Any
 
@@ -47,70 +47,73 @@ async def _place_standard_stop_order(
 ):
     """
     使用 CCXT 最标准的 create_order 接口。
-
     对应币安功能：【市价止损/止盈】+【只平仓(Close Position)】
-    这是最符合用户直觉和文档规范的下单方式。
+    增加了自动错误重试机制 (-4130 冲突清理 和 -4120 降级)。
     """
 
-    # 1. 确定标准的订单类型 (Standard Enum)
-    # 币安合约推荐使用 STOP_MARKET 和 TAKE_PROFIT_MARKET 来做单纯的止损止盈
+    # 1. 确定标准的订单类型
     order_type = 'STOP_MARKET' if is_stop_loss else 'TAKE_PROFIT_MARKET'
 
     # 2. 精度处理
     price_str = exchange.price_to_precision(symbol, trigger_price)
-    # 注意：使用 closePosition=True 时，币安其实忽略数量，但 ccxt 的 create_order 签名需要传一个值
     amount_str = exchange.amount_to_precision(symbol, amount)
 
-    # 3. 构造 params (这是 CCXT 传递额外参数的标准方式)
+    # 3. 构造 params
     params = {
         'stopPrice': price_str,  # 触发价格
         'closePosition': True,  # 【关键】开启“只平仓”，自动平掉所有仓位
         'workingType': 'MARK_PRICE',  # 推荐使用标记价格
     }
 
-    # 【重要】为了避免 -1106 或 -4120 错误，必须显式清理掉冲突参数
-    # 如果使用了 closePosition，就绝对不能有 reduceOnly
     if 'reduceOnly' in params:
         del params['reduceOnly']
 
-    # 调试日志
-    # print(f"--- [STANDARD] {symbol} {side} {order_type} @ {price_str} ---")
+    # --- 内部执行函数，用于支持重试逻辑 ---
+    async def _execute_create():
+        try:
+            return await exchange.create_order(symbol, order_type, side, amount_str, None, params)
+        except ccxt.ExchangeError as e:
+            err_msg = str(e)
 
-    try:
-        # 调用标准接口
-        # create_order(symbol, type, side, amount, price, params)
-        # 市价单 price 传 None
-        return await exchange.create_order(symbol, order_type, side, amount_str, None, params)
+            # 【修复核心 1】处理 -4130 冲突错误
+            # "An open stop or take profit order with GTE and closePosition... is existing"
+            if '-4130' in err_msg:
+                print(f"--- [RETRY] {symbol} 遇到订单冲突 (-4130)，正在清理并重试... ---")
+                # 再次强制清理所有条件单
+                await _cancel_sl_tp_orders_async(exchange, symbol, async_logger)
+                # 等待一小段时间让交易所状态同步
+                await asyncio.sleep(0.5)
+                # 重试一次 (仅一次，防止死循环)
+                return await exchange.create_order(symbol, order_type, side, amount_str, None, params)
 
-    except ccxt.ExchangeError as e:
-        err_msg = str(e)
+            # 【修复核心 2】处理 -4120 不支持市价单错误 (降级为限价)
+            elif '-4120' in err_msg:
+                print(f"--- [INFO] {symbol} 不支持市价止损，切换为标准限价止损 ---")
 
-        # 如果还是报 -4120，说明该交易对暂不支持 STOP_MARKET，降级为 STOP (限价)
-        if '-4120' in err_msg:
-            print(f"--- [INFO] {symbol} 不支持市价止损，切换为标准限价止损 ---")
+                # 切换为限价类型
+                limit_type = 'STOP' if is_stop_loss else 'TAKE_PROFIT'
 
-            # 切换为限价类型
-            limit_type = 'STOP' if is_stop_loss else 'TAKE_PROFIT'
+                # 计算一个必定成交的限价 (5% 滑点)
+                if side.upper() == 'BUY':
+                    limit_price = trigger_price * 1.05
+                else:
+                    limit_price = trigger_price * 0.95
+                limit_price_str = exchange.price_to_precision(symbol, limit_price)
 
-            # 计算一个必定成交的限价 (5% 滑点)
-            if side.upper() == 'BUY':
-                limit_price = trigger_price * 1.05
+                # 限价单参数调整
+                params_limit = {
+                    'stopPrice': price_str,
+                    'reduceOnly': True,  # 限价单不支持 closePosition，必须用 reduceOnly
+                    'timeInForce': 'GTC',  # 限价单必须有 GTC
+                    'workingType': 'MARK_PRICE'
+                }
+
+                return await exchange.create_order(symbol, limit_type, side, amount_str, limit_price_str, params_limit)
+
             else:
-                limit_price = trigger_price * 0.95
-            limit_price_str = exchange.price_to_precision(symbol, limit_price)
+                raise e
 
-            # 限价单参数调整
-            params_limit = {
-                'stopPrice': price_str,
-                'reduceOnly': True,  # 限价单不支持 closePosition，必须用 reduceOnly
-                'timeInForce': 'GTC',  # 限价单必须有 GTC
-                'workingType': 'MARK_PRICE'
-            }
-
-            return await exchange.create_order(symbol, limit_type, side, amount_str, limit_price_str, params_limit)
-
-        else:
-            raise e
+    return await _execute_create()
 
 
 async def set_tp_sl_for_position_async(exchange: ccxt.binanceusdm, position: Position, config: dict, async_logger,
