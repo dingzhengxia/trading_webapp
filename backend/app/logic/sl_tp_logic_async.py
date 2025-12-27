@@ -1,4 +1,4 @@
-# backend/app/logic/sl_tp_logic_async.py (模糊匹配+全量清理版)
+# backend/app/logic/sl_tp_logic_async.py (完全透视调试版)
 import asyncio
 from typing import Set, List, Dict, Any
 
@@ -9,91 +9,100 @@ from ..config import i18n
 from ..models.schemas import Position
 
 
-def _is_symbol_match(target_symbol: str, order: dict) -> bool:
+def _normalize_symbol(s: str) -> str:
     """
-    【模糊匹配逻辑】
-    判断订单是否属于目标交易对。
-    解决 CCXT symbol 格式 (BTC/USDT:USDT) 与 订单 symbol (BTC/USDT) 不一致的问题。
+    将 symbol 简化为纯字母形式，用于宽松匹配。
+    例如: 'BTC/USDT:USDT' -> 'BTCUSDT'
+          'ETH/USDC'      -> 'ETHUSDC'
     """
-    order_symbol = order['symbol']
-
-    # 1. 严格匹配
-    if order_symbol == target_symbol:
-        return True
-
-    # 2. 原始 ID 匹配 (查看 binance 返回的原始 symbol，如 'BTCUSDT')
-    if 'info' in order and 'symbol' in order['info']:
-        # 将 target_symbol (BTC/USDT:USDT) 简化为 BTCUSDT 格式尝试匹配
-        normalized_target = target_symbol.split(':')[0].replace('/', '')
-        if order['info']['symbol'] == normalized_target:
-            return True
-
-    # 3. 结构化模糊匹配
-    # 提取目标币种的基础和计价货币
-    # 假设 target_symbol 格式为 BASE/QUOTE:QUOTE 或 BASE/QUOTE
-    try:
-        parts = target_symbol.split(':')[0].split('/')
-        if len(parts) == 2:
-            base, quote = parts[0], parts[1]
-            # 如果订单 symbol 同时也包含这两个部分
-            if base in order_symbol and quote in order_symbol:
-                return True
-    except:
-        pass
-
-    return False
+    if not s: return ""
+    # 1. 去掉后缀 :USDT
+    s = s.split(':')[0]
+    # 2. 去掉斜杠 /
+    s = s.replace('/', '')
+    return s
 
 
 async def _ensure_no_open_orders_async(exchange: ccxt.binanceusdm, symbol: str, async_logger):
     """
-    【智能全量清理】
-    拉取全账户订单 -> 使用模糊匹配找出目标 -> 逐个删除。
+    【完全透视清理模式】
+    拉取全量订单，并打印每一个订单的比对细节，彻底找出为什么删不掉。
     """
     max_retries = 5
 
-    # print(f"\n====== [CLEAN-START] 准备清理 {symbol} ======")
+    # 目标 symbol 的简化版 (例如 BTCUSDT)
+    target_clean = _normalize_symbol(symbol)
+
+    print(f"\n====== [DEBUG START] 正在为 {symbol} (简化:{target_clean}) 清理挂单 ======")
 
     for i in range(max_retries):
         try:
-            # 1. 全量拉取 (这是目前最可靠获取订单的方法)
-            # 虽然效率低，但能保证拿到数据
+            # 1. 全量拉取
             all_open_orders = await exchange.fetch_open_orders()
 
-            # 2. 使用模糊匹配筛选
-            target_orders = []
+            # 如果是第一次尝试，打印一下账户总单数，确认为什么这里有单子
+            if i == 0:
+                print(f"--- [INFO] 账户当前未完成订单总数: {len(all_open_orders)} ---")
+
+            orders_to_delete = []
+
+            # 2. 遍历比对 (核心调试区)
             for order in all_open_orders:
-                if _is_symbol_match(symbol, order):
-                    target_orders.append(order)
+                o_id = order['id']
+                o_symbol = order['symbol']  # CCXT 解析后的 symbol
+                o_raw_symbol = order['info'].get('symbol', '')  # 交易所原始 symbol
 
-            count = len(target_orders)
+                o_symbol_clean = _normalize_symbol(o_symbol)
 
-            # 如果没找到，说明干净了
+                # 判断逻辑
+                is_match = False
+                match_reason = ""
+
+                # 规则1: CCXT symbol 直接相等
+                if o_symbol == symbol:
+                    is_match = True
+                    match_reason = "Strict Match"
+                # 规则2: 原始 symbol 相等 (例如 BTCUSDT == BTCUSDT)
+                elif o_raw_symbol == target_clean:
+                    is_match = True
+                    match_reason = "Raw Match"
+                # 规则3: 简化后相等 (例如 BTC/USDT == BTCUSDT)
+                elif o_symbol_clean == target_clean:
+                    is_match = True
+                    match_reason = "Clean Match"
+
+                # --- 关键日志：打印那些“看起来像”但不匹配的，或者匹配成功的 ---
+                # 只打印相关的币种，防止 153 个订单刷屏太快看不清
+                if is_match or target_clean in o_symbol_clean or o_symbol_clean in target_clean:
+                    print(
+                        f"   [CHECK] ID:{o_id} | OrderSym:{o_symbol} | Raw:{o_raw_symbol} | Target:{symbol} | 结果: {'✅ 匹配 (' + match_reason + ')' if is_match else '❌ 不匹配'}")
+
+                if is_match:
+                    orders_to_delete.append(order)
+
+            count = len(orders_to_delete)
+
             if count == 0:
                 if i > 0:
                     await async_logger(f"✅ {symbol} 挂单已清零。", "info")
+                print(f"====== [DEBUG END] {symbol} 没有发现匹配订单，清理结束 ======\n")
                 return True
 
             if i == 0:
-                print(f"--- [CLEANUP] {symbol} 匹配到 {count} 个关联订单，执行删除... ---")
+                print(f"--- [ACTION] 锁定 {count} 个目标订单，执行删除... ---")
 
-            # 3. 逐个击杀 (Cancel by ID)
-            # 使用并发加速删除过程
-            cancel_tasks = [exchange.cancel_order(o['id'], symbol) for o in target_orders]
-
+            # 3. 执行删除
+            cancel_tasks = [exchange.cancel_order(o['id'], symbol) for o in orders_to_delete]
             results = await asyncio.gather(*cancel_tasks, return_exceptions=True)
 
-            success_cnt = 0
-            for res in results:
-                if not isinstance(res, Exception):
-                    success_cnt += 1
-                else:
-                    # 忽略 "Unknown order" (可能已经被成交或被取消)
+            # 打印删除结果
+            for idx, res in enumerate(results):
+                if isinstance(res, Exception):
+                    # 只有真正的错误才打印
                     if "Unknown order" not in str(res) and "Order was not found" not in str(res):
-                        print(f"--- [ERR] 撤单报错: {res} ---")
+                        print(f"   !!! [ERROR] 删除订单 {orders_to_delete[idx]['id']} 失败: {res}")
 
-            # 4. 这里的等待是为了防止API频率限制 (Rate Limit)
-            # 对于50个仓位，如果这里不等待，很容易触发 IP Ban
-            await asyncio.sleep(0.2)
+            await asyncio.sleep(0.5)
 
         except Exception as e:
             print(f"--- [FATAL] 清理流程异常: {e} ---")
@@ -144,13 +153,12 @@ async def _place_standard_stop_order(
         except ccxt.ExchangeError as e:
             err_msg = str(e)
 
-            # 冲突或超限 -> 清理
             if '-4130' in err_msg or '-4045' in err_msg or 'limit' in err_msg.lower():
                 await _ensure_no_open_orders_async(exchange, symbol, async_logger)
                 continue
 
             elif '-4120' in err_msg:
-                # 降级为限价
+                # 降级
                 limit_type = 'STOP'
                 limit_price = trigger_price * (1.05 if side.upper() == 'BUY' else 0.95)
                 limit_price_str = exchange.price_to_precision(symbol, limit_price)
@@ -159,7 +167,6 @@ async def _place_standard_stop_order(
                     'timeInForce': 'GTC', 'workingType': 'MARK_PRICE'
                 }
                 return await exchange.create_order(symbol, limit_type, side, amount_str, limit_price_str, params_limit)
-
             else:
                 raise e
         except Exception as e:
@@ -196,7 +203,7 @@ async def _place_trailing_stop_order(
             err_msg = str(e)
 
             if '-4130' in err_msg or '-4045' in err_msg or 'limit' in err_msg.lower():
-                await async_logger(f"--- [RETRY {attempt + 1}] {symbol} 订单拥堵，执行模糊清理... ---", "warning")
+                await async_logger(f"--- [RETRY {attempt + 1}] {symbol} 订单拥堵，执行清理... ---", "warning")
                 await _ensure_no_open_orders_async(exchange, symbol, async_logger)
                 continue
             else:
@@ -235,12 +242,9 @@ async def set_tp_sl_for_position_async(exchange: ccxt.binanceusdm, position: Pos
         is_long = position.side == i18n.SIDE_LONG
         side_key = "long" if is_long else "short"
 
-        # --- 策略互斥逻辑 ---
-
         enable_trailing = config.get(f'enable_{side_key}_trailing_stop', False)
 
         if enable_trailing:
-            # === 分支 A：移动止盈模式 ===
             callback_rate = config.get(f'{side_key}_trailing_stop_callback_rate', 1.0)
             ts_side = 'sell' if is_long else 'buy'
 
@@ -256,9 +260,7 @@ async def set_tp_sl_for_position_async(exchange: ccxt.binanceusdm, position: Pos
                 return False
 
         else:
-            # === 分支 B：固定止损模式 (无TP) ===
             tasks_to_run = []
-
             if config.get(f'enable_{side_key}_sl_tp', False):
                 sl_perc = config.get(f'{side_key}_stop_loss_percentage', 0)
                 leverage = config.get('leverage', 1)
@@ -266,7 +268,6 @@ async def set_tp_sl_for_position_async(exchange: ccxt.binanceusdm, position: Pos
                 if sl_perc > 0:
                     sl_ratio = float(sl_perc) / 100 / leverage
                     entry_price = position.entry_price
-
                     target_sl = entry_price * (1 - sl_ratio) if is_long else entry_price * (1 + sl_ratio)
                     sl_side = 'sell' if is_long else 'buy'
                     tasks_to_run.append({
@@ -305,10 +306,9 @@ async def set_tp_sl_for_position_async(exchange: ccxt.binanceusdm, position: Pos
 
 async def cleanup_orphan_sltp_orders_async(exchange: ccxt.binanceusdm, active_symbols: Set[str], async_logger):
     """
-    清理无主订单 (不在 active_symbols 列表中的币种)
+    清理无主订单
     """
     try:
-        # 全量拉取
         all_open_orders = await exchange.fetch_open_orders()
         orphan_orders = [
             o for o in all_open_orders
