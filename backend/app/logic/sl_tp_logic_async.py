@@ -1,4 +1,4 @@
-# backend/app/logic/sl_tp_logic_async.py (调试诊断版)
+# backend/app/logic/sl_tp_logic_async.py (深度诊断版)
 import asyncio
 from typing import Set, List, Dict, Any
 
@@ -11,60 +11,74 @@ from ..models.schemas import Position
 
 async def _ensure_no_open_orders_async(exchange: ccxt.binanceusdm, symbol: str, async_logger):
     """
-    【严防死守清理模式】
-    1. 查单 -> 2. 有单就撤 -> 3. 再查 -> 4. 还不干净？报错并返回 False。
-    绝不吞掉任何错误。
+    【深度诊断清理模式】
+    带有详细的调试日志，用于排查为什么订单删不掉。
     """
     max_retries = 5
+
+    print(f"\n====== [DIAG-START] 开始清理 {symbol} ======")
+
     for i in range(max_retries):
+        print(f"--- [DIAG] {symbol} 第 {i + 1}/{max_retries} 次尝试 ---")
+
         try:
-            # 1. 查询 (带日志)
-            # print(f"--- [DEBUG] {symbol} 第 {i+1} 次检查挂单... ---")
-            open_orders = await exchange.fetch_open_orders(symbol)
-
-            if len(open_orders) == 0:
-                if i > 0:
-                    await async_logger(f"✅ {symbol} 挂单已清零。", "info")
-                return True
-
-            # 2. 发现残留，开始清理
-            if i == 0:
-                print(f"--- [CLEANUP] {symbol} 现有 {len(open_orders)} 个挂单，开始清理... ---")
-
-            # 3. 尝试 Cancel All
+            # 1. 无论如何，先发一个 Cancel All
+            # print(f"   >>> [REQ] 发送 cancel_all_orders({symbol})...")
             try:
                 await exchange.cancel_all_orders(symbol)
+                # print(f"   <<< [RES] cancel_all_orders({symbol}) 请求发送成功。")
             except Exception as e:
-                # 只有 "No orders" 错误是可以原谅的，其他错误必须打印
-                if "No orders" not in str(e):
-                    print(f"--- [ERROR] {symbol} cancel_all_orders 失败: {e} ---")
+                err_msg = str(e)
+                if "No orders" in err_msg:
+                    pass  # 这是正常的
+                else:
+                    print(f"   !!! [ERR] cancel_all_orders 异常: {err_msg}")
 
-            # 4. 双重保险：无论 Cancel All 是否成功，都尝试通过 ID 再次撤销
-            # (因为有时候 cancel_all_orders 响应慢，或者某些特殊单子撤不掉)
-            if len(open_orders) > 0:
-                ids = [o['id'] for o in open_orders]
-                # print(f"--- [DEBUG] {symbol} 尝试逐个撤销 ID: {ids} ---")
+            # 2. 等待撮合引擎
+            await asyncio.sleep(1.0)
 
-                # 并发执行逐个撤单
-                tasks = [exchange.cancel_order(oid, symbol) for oid in ids]
-                results = await asyncio.gather(*tasks, return_exceptions=True)
+            # 3. 查单验证
+            # print(f"   >>> [REQ] 发送 fetch_open_orders({symbol})...")
+            open_orders = await exchange.fetch_open_orders(symbol)
+            count = len(open_orders)
 
-                # 检查结果
-                for idx, res in enumerate(results):
-                    if isinstance(res, Exception):
-                        err_msg = str(res)
-                        if "Unknown order" not in err_msg and "Order was not found" not in err_msg:
-                            print(f"--- [ERROR] {symbol} 撤销订单 {ids[idx]} 失败: {err_msg} ---")
+            if count == 0:
+                print(f"   <<< [RES] {symbol} 当前挂单数: 0。清理成功。")
+                print(f"====== [DIAG-END] {symbol} 清理完毕 ======\n")
+                return True
 
-            # 5. 必须等待
+            # 4. 如果还有单子，打印出来看看是何方神圣
+            order_ids = [o['id'] for o in open_orders]
+            order_types = [o['type'] for o in open_orders]
+            print(f"   !!! [WARN] {symbol} 盲撤后仍有 {count} 个订单滞留！")
+            print(f"       ID列表: {order_ids}")
+            print(f"       类型列表: {order_types}")
+
+            # 5. 执行点名枪毙 (Cancel by ID)
+            print(f"   >>> [REQ] 执行逐个删除 (Cancel by ID)...")
+            cancel_tasks = [exchange.cancel_order(oid, symbol) for oid in order_ids]
+            results = await asyncio.gather(*cancel_tasks, return_exceptions=True)
+
+            err_count = 0
+            for idx, res in enumerate(results):
+                if isinstance(res, Exception):
+                    # 忽略找不到订单的错误（可能被CancelAll删了）
+                    if "Unknown order" not in str(res) and "Order was not found" not in str(res):
+                        print(f"       [ERR] 删除 ID {order_ids[idx]} 失败: {res}")
+                        err_count += 1
+
+            if err_count == 0:
+                print(f"   <<< [RES] 逐个删除请求全部发送完毕。")
+
+            # 再次等待
             await asyncio.sleep(0.5)
 
         except Exception as e:
-            print(f"--- [FATAL] {symbol} 清理流程发生未捕获异常: {e} ---")
+            print(f"   !!! [FATAL] 清理循环发生严重错误: {e}")
             await asyncio.sleep(1.0)
 
-    # 如果循环结束还没 return True，说明清理失败
-    await async_logger(f"❌ {symbol} 清理失败！仍有挂单残留，已停止后续下单操作。", "error")
+    print(f"!!! [DIAG-FAIL] {symbol} {max_retries} 次尝试后仍未清理干净，禁止下单！\n")
+    await async_logger(f"⛔ {symbol} 顽固订单无法清除，已跳过下单。", "error")
     return False
 
 
@@ -108,17 +122,14 @@ async def _place_standard_stop_order(
             return await exchange.create_order(symbol, order_type, side, amount_str, None, params)
         except ccxt.ExchangeError as e:
             err_msg = str(e)
+            print(f"--- [ERR-PLACE] {symbol} 固定SL下单失败: {err_msg}")
 
-            # 冲突或超限 -> 再次调用清理
             if '-4130' in err_msg or '-4045' in err_msg or 'limit' in err_msg.lower():
-                print(f"--- [RETRY] {symbol} 下单遇阻 ({err_msg})，执行清理后重试... ---")
-                cleaned = await _ensure_no_open_orders_async(exchange, symbol, async_logger)
-                if not cleaned:
-                    return False  # 清理失败则放弃
+                await _ensure_no_open_orders_async(exchange, symbol, async_logger)
                 continue
 
             elif '-4120' in err_msg:
-                # 降级为限价
+                # 降级
                 limit_type = 'STOP'
                 limit_price = trigger_price * (1.05 if side.upper() == 'BUY' else 0.95)
                 limit_price_str = exchange.price_to_precision(symbol, limit_price)
@@ -127,7 +138,6 @@ async def _place_standard_stop_order(
                     'timeInForce': 'GTC', 'workingType': 'MARK_PRICE'
                 }
                 return await exchange.create_order(symbol, limit_type, side, amount_str, limit_price_str, params_limit)
-
             else:
                 raise e
         except Exception as e:
@@ -159,15 +169,15 @@ async def _place_trailing_stop_order(
     max_retries = 3
     for attempt in range(max_retries):
         try:
+            print(f"--- [REQ] {symbol} 尝试下移动止盈单 (Rate:{rate}%)...")
             return await exchange.create_order(symbol, 'TRAILING_STOP_MARKET', side, amount_str, None, params)
         except ccxt.ExchangeError as e:
             err_msg = str(e)
+            print(f"--- [ERR-PLACE] {symbol} 移动止盈下单失败: {err_msg}")
 
             if '-4130' in err_msg or '-4045' in err_msg or 'limit' in err_msg.lower():
-                print(f"--- [RETRY] {symbol} 移动止盈下单遇阻 ({err_msg})，执行清理后重试... ---")
-                cleaned = await _ensure_no_open_orders_async(exchange, symbol, async_logger)
-                if not cleaned:
-                    return False
+                await async_logger(f"--- [RETRY {attempt + 1}] {symbol} 订单拥堵/冲突，执行清理... ---", "warning")
+                await _ensure_no_open_orders_async(exchange, symbol, async_logger)
                 continue
             else:
                 raise e
@@ -195,12 +205,12 @@ async def set_tp_sl_for_position_async(exchange: ccxt.binanceusdm, position: Pos
             return True
 
         # 2. 【严防死守】下单前，必须死磕直到订单清空
-        # 如果这里返回 False，直接 return，绝对不下单！
         cleaned = await _ensure_no_open_orders_async(exchange, full_symbol, async_logger)
 
         if not cleaned:
             # 这里的日志会告诉你为什么失败
-            await async_logger(f"⛔ {position.symbol} 旧订单清理失败，为防止堆积，已跳过下单。", "error")
+            print(f"!!! [ABORT] {position.symbol} 清理未通过，放弃下单 !!!")
+            await async_logger(f"⛔ {position.symbol} 挂单清理失败，已跳过下单。", "error")
             return False
 
         if stop_event.is_set(): raise InterruptedError()
