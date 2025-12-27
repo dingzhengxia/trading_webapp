@@ -7,44 +7,7 @@ from ..models.schemas import Position
 
 
 async def _ensure_no_open_orders_async(exchange: ccxt.binanceusdm, symbol: str, async_logger):
-    """
-    【盲发双杀模式】
-    不查询，直接调用 cancel_all_orders。
-    同时尝试清理 USDT 和 USDC 两个市场，防止 Symbol 错位。
-    """
-    # 1. 确定我们要轰炸的目标列表
-    targets = [symbol]
-
-    # 自动推导另一个市场 (如果当前是 USDC，就加 USDT；反之亦然)
-    # 这样能保证不管配置怎么写，两个市场都会被清理
-    if "/USDC" in symbol:
-        targets.append(symbol.replace("/USDC", "/USDT").replace(":USDC", ":USDT"))
-    elif "/USDT" in symbol:
-        targets.append(symbol.replace("/USDT", "/USDC").replace(":USDT", ":USDC"))
-
-    # print(f"====== [BLIND KILL] 正在盲删: {targets} ======", flush=True)
-
-    # 2. 循环尝试 3 次
-    for i in range(3):
-        for target_sym in targets:
-            try:
-                # 直接调用标准撤单接口
-                await exchange.cancel_all_orders(target_sym)
-                # print(f"   >>> [SENT] cancel_all_orders({target_sym}) 发送成功")
-            except Exception as e:
-                err = str(e)
-                # "No orders" 不是错误，说明已经干净了
-                if "No orders" in err:
-                    pass
-                    # "Symbol not found" 说明该币种可能没有 USDC 交易对，正常跳过
-                elif "Symbol" in err or "found" in err:
-                    pass
-                else:
-                    print(f"   !!! [ERR] 撤单报错 ({target_sym}): {err}", flush=True)
-
-        # 稍等一下让交易所处理
-        await asyncio.sleep(0.5)
-
+    await exchange.cancel_all_orders("BTCUSDC")
     return True
 
 
