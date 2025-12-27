@@ -1,4 +1,4 @@
-# backend/app/logic/sl_tp_logic_async.py (盲删版)
+# backend/app/logic/sl_tp_logic_async.py (回归标准版)
 import asyncio
 from typing import Set, List, Dict, Any
 import ccxt.async_support as ccxt
@@ -6,56 +6,53 @@ from ..config import i18n
 from ..models.schemas import Position
 
 
-def _get_raw_symbol(ccxt_symbol: str) -> str:
-    """
-    ADA/USDC:USDC -> ADAUSDC
-    """
-    if not ccxt_symbol: return ""
-    return ccxt_symbol.split(':')[0].replace('/', '')
-
-
 async def _ensure_no_open_orders_async(exchange: ccxt.binanceusdm, symbol: str, async_logger):
     """
-    【盲删模式】
-    不查询，不比对，直接发送删除指令。
-    针对 USDC 交易对做了特别适配。
+    【标准清理模式】
+    只使用 CCXT 标准方法。
+    逻辑：先尝试 CancelAll -> 等待 -> 查单 -> 如果还有，按 ID 逐个撤销。
     """
-    # 1. 解析出原生 Symbol (例如 ADAUSDC)
-    raw_symbol = _get_raw_symbol(symbol)
+    max_retries = 5
 
-    # print(f"--- [KILL] 正在清理 {symbol} (原生: {raw_symbol}) ---")
-
-    # 2. 连续发送 3 次撤单指令，防止网络丢包
-    # 只要有一次成功，目的就达到了
-    for i in range(3):
+    for i in range(max_retries):
         try:
-            # 方案A: 币安底层接口 (最可靠)
-            # fapiPrivateDeleteAllOpenOrders 既支持 USDT 也支持 USDC 合约
-            await exchange.fapiPrivateDeleteAllOpenOrders({'symbol': raw_symbol})
-            # print(f"   >>> [SENT] 原生撤单成功 ({i+1}/3)")
-
-            # 如果成功了，稍微等一下让交易所处理，然后直接返回
-            await asyncio.sleep(0.5)
-            return True
-
-        except Exception as e:
-            err = str(e)
-            # 如果报错 "No orders"，说明已经干净了，直接成功
-            if "No orders" in err:
-                return True
-
-            # 其他错误 (比如网络超时)，打印一下，继续重试
-            # print(f"   [RETRY] 撤单报错: {err}")
-
-            # 方案B: 如果原生失败，尝试 CCXT 标准接口补刀
+            # 1. 先尝试标准的一键全撤
             try:
                 await exchange.cancel_all_orders(symbol)
-            except:
-                pass
+                # print(f"   >>> [标准接口] 已发送 cancel_all_orders({symbol})")
+            except Exception as e:
+                # 如果报错 "No orders" 是正常的
+                if "No orders" not in str(e):
+                    print(f"   [WARN] cancel_all_orders 报错: {e}")
 
+            # 2. 稍等片刻，让交易所飞一会儿
             await asyncio.sleep(0.5)
 
-    return True  # 默认放行，不再阻塞下单，依靠下单时的错误重试来兜底
+            # 3. 查单核实
+            open_orders = await exchange.fetch_open_orders(symbol)
+
+            if len(open_orders) == 0:
+                if i > 0:
+                    await async_logger(f"✅ {symbol} 挂单已清理。", "info")
+                return True
+
+            if i == 0:
+                print(f"--- [CLEANUP] {symbol} 发现 {len(open_orders)} 个残留订单，执行 ID 补刀... ---")
+
+            # 4. 如果还有，使用 ID 逐个撤销 (这是标准接口中最稳的)
+            tasks = [exchange.cancel_order(o['id'], symbol) for o in open_orders]
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+            # 5. 再等一下
+            await asyncio.sleep(0.5)
+
+        except Exception as e:
+            print(f"--- [ERR] 清理异常: {e}")
+            await asyncio.sleep(1.0)
+
+    # 如果最后还有单子，为了防止下单报错，返回 False
+    await async_logger(f"❌ {symbol} 清理超时，仍有挂单。", "error")
+    return False
 
 
 # --- 兼容性包装器 ---
@@ -78,42 +75,43 @@ async def _place_trailing_stop_order(
         callback_rate: float,
         async_logger
 ):
-    # 1. 放宽限制到 20%
+    """
+    移动止盈下单
+    """
+    # 限制范围
     rate = max(0.1, min(20.0, float(callback_rate)))
     amount_str = exchange.amount_to_precision(symbol, amount)
 
-    # 2. 这里的 symbol 必须是 CCXT 格式 (ADA/USDC:USDC)
     params = {
         'callbackRate': rate,
         'reduceOnly': True,
     }
 
-    # 3. 极简重试逻辑
-    try:
-        return await exchange.create_order(symbol, 'TRAILING_STOP_MARKET', side, amount_str, None, params)
-    except Exception as e:
-        err = str(e)
-        # 如果是因为满了或者冲突，再清理一次
-        if '-4045' in err or '-4130' in err or 'limit' in err:
-            await async_logger(f"⚠️ {symbol} 订单拥堵，再次清理...", "warning")
-            await _ensure_no_open_orders_async(exchange, symbol, async_logger)
-            # 再试一次
-            await asyncio.sleep(1.0)
-            try:
-                return await exchange.create_order(symbol, 'TRAILING_STOP_MARKET', side, amount_str, None, params)
-            except Exception as final_e:
-                await async_logger(f"❌ {symbol} 最终下单失败: {final_e}", "error")
+    # 重试逻辑
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            return await exchange.create_order(symbol, 'TRAILING_STOP_MARKET', side, amount_str, None, params)
+        except Exception as e:
+            err = str(e)
+            # 冲突或超限 -> 再清理一次
+            if '-4045' in err or '-4130' in err or 'limit' in err:
+                print(f"--- [RETRY] {symbol} 下单拥堵，再次清理... ---")
+                await _ensure_no_open_orders_async(exchange, symbol, async_logger)
+                await asyncio.sleep(1.0)
+                continue  # 重试
+            else:
+                # 其他错误 (如参数错误) 直接记录
+                await async_logger(f"❌ {symbol} 移动止盈下单失败: {e}", "error")
                 return False
-
-        await async_logger(f"❌ {symbol} 下单报错: {e}", "error")
-        return False
+    return False
 
 
 async def set_tp_sl_for_position_async(exchange: ccxt.binanceusdm, position: Position, config: dict, async_logger,
                                        stop_event: asyncio.Event) -> bool:
     full_symbol = position.full_symbol
 
-    # 1. 上来先清理，不管有没有单
+    # 1. 启动前先清理
     await _ensure_no_open_orders_async(exchange, full_symbol, async_logger)
 
     if stop_event.is_set(): return False
@@ -123,8 +121,8 @@ async def set_tp_sl_for_position_async(exchange: ccxt.binanceusdm, position: Pos
 
     enable_trailing = config.get(f'enable_{side_key}_trailing_stop', False)
 
-    # 2. 只处理移动止盈
     if enable_trailing:
+        # === 移动止盈 ===
         callback_rate = config.get(f'{side_key}_trailing_stop_callback_rate', 1.0)
         ts_side = 'sell' if is_long else 'buy'
 
@@ -138,9 +136,11 @@ async def set_tp_sl_for_position_async(exchange: ccxt.binanceusdm, position: Pos
         else:
             return False
 
-    return True  # 如果没开启移动止盈，也算成功
+    # 如果没开启移动止盈，这里为了简单起见就不下固定止损了 (根据你之前的要求只保留移动止盈)
+    # 且因为前面执行了清理，相当于把旧的固定止损也撤了
+    return True
 
 
 async def cleanup_orphan_sltp_orders_async(exchange: ccxt.binanceusdm, active_symbols: Set[str], async_logger):
     pass
-# 移除 _place_standard_stop_order 以简化文件，反正不用了
+# 移除 _place_standard_stop_order，既然只要移动止盈，那个就没用了
