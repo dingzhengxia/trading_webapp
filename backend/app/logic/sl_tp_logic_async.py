@@ -1,4 +1,4 @@
-# backend/app/logic/sl_tp_logic_async.py (死磕清理版)
+# backend/app/logic/sl_tp_logic_async.py (修复导入错误版)
 import asyncio
 from typing import Set, List, Dict, Any
 
@@ -35,20 +35,18 @@ async def _ensure_no_open_orders_async(exchange: ccxt.binanceusdm, symbol: str, 
             try:
                 await exchange.cancel_all_orders(symbol)
             except Exception as e:
-                print(f"--- [DEBUG] {symbol} cancel_all_orders 失败: {e}，转为逐个清理 ---")
+                # 如果没有订单可撤，API可能会报错，忽略
+                pass
 
             # 手段B: 逐个点名撤单 (Cancel by ID) - 这是最保险的
-            # 我们重新获取一次列表（因为刚才可能撤掉了一部分），或者直接用刚才缓存的列表
-            # 为了保险，直接用刚才查到的 ID 列表进行并发删除
+            # 我们重新获取一次列表（或者直接用刚才的），为了保险，并发删除
             cancel_tasks = [exchange.cancel_order(order['id'], symbol) for order in open_orders]
-            results = await asyncio.gather(*cancel_tasks, return_exceptions=True)
-
-            # 检查是否有错误
-            for res in results:
-                if isinstance(res, Exception):
-                    # 忽略 "Unknown order" 错误，说明已经被手段A撤掉了
-                    if "Unknown order" not in str(res):
-                        print(f"--- [ERROR] {symbol} 逐个撤单失败: {res} ---")
+            if cancel_tasks:
+                results = await asyncio.gather(*cancel_tasks, return_exceptions=True)
+                for res in results:
+                    if isinstance(res, Exception):
+                        if "Unknown order" not in str(res):
+                            print(f"--- [ERROR] {symbol} 逐个撤单失败: {res} ---")
 
             # 3. 撤完后，必须等待，绝不能立即进入下一次检查
             await asyncio.sleep(0.5)
@@ -61,7 +59,15 @@ async def _ensure_no_open_orders_async(exchange: ccxt.binanceusdm, symbol: str, 
     return False
 
 
-# 保留此函数接口以兼容旧代码，但内部指向新逻辑
+# --- 兼容性修复：加回这个函数名，供 exchange_logic_async.py 调用 ---
+async def _cancel_sl_tp_orders_async(exchange: ccxt.binanceusdm, symbol: str, async_logger):
+    """
+    兼容旧代码调用的包装器，实际上执行的是死磕清理。
+    """
+    return await _ensure_no_open_orders_async(exchange, symbol, async_logger)
+
+
+# 保留此函数接口以兼容旧代码
 async def _force_cancel_all_orders(exchange: ccxt.binanceusdm, symbol: str, async_logger):
     return await _ensure_no_open_orders_async(exchange, symbol, async_logger)
 
@@ -258,7 +264,7 @@ async def set_tp_sl_for_position_async(exchange: ccxt.binanceusdm, position: Pos
 
 async def cleanup_orphan_sltp_orders_async(exchange: ccxt.binanceusdm, active_symbols: Set[str], async_logger):
     """
-    清理无主订单 (不在 active_symbols 列表中的币种)
+    清理无主订单
     """
     try:
         all_open_orders = await exchange.fetch_open_orders()
@@ -268,7 +274,6 @@ async def cleanup_orphan_sltp_orders_async(exchange: ccxt.binanceusdm, active_sy
         ]
         if not orphan_orders: return
 
-        # 针对无主订单，使用死磕清理逻辑的一个简化版（直接调cancel_all）
         orphan_symbols = set(o['symbol'] for o in orphan_orders)
         await async_logger(f"发现 {len(orphan_symbols)} 个币种有残留订单，正在清理...", "warning")
 
