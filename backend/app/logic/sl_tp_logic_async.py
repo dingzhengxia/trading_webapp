@@ -1,4 +1,4 @@
-# backend/app/logic/sl_tp_logic_async.py (自动降级版)
+# backend/app/logic/sl_tp_logic_async.py (阶梯降级版)
 import asyncio
 from typing import Set, List, Dict, Any
 import ccxt.async_support as ccxt
@@ -11,24 +11,30 @@ async def _ensure_no_open_orders_async(exchange: ccxt.binanceusdm, symbol: str, 
     【精准清理模式】
     调用两次 cancel_all_orders，第二次必须传入 {'stop': True} 以撤销条件单。
     """
-    # 循环尝试 3 次
+    # 1. 确定目标列表 (同时处理 USDT 和 USDC)
+    targets = [symbol]
+    if "/USDC" in symbol:
+        targets.append(symbol.replace("/USDC", "/USDT").replace(":USDC", ":USDT"))
+    elif "/USDT" in symbol:
+        targets.append(symbol.replace("/USDT", "/USDC").replace(":USDT", ":USDC"))
+
+    # 2. 循环尝试 3 次
     for i in range(3):
-        try:
-            # 1. 撤销普通订单
+        for target_sym in targets:
             try:
-                await exchange.cancel_all_orders(symbol)
+                # 撤销普通订单
+                try:
+                    await exchange.cancel_all_orders(target_sym)
+                except Exception:
+                    pass
+
+                # 撤销条件订单 (关键)
+                try:
+                    await exchange.cancel_all_orders(target_sym, {'stop': True})
+                except Exception:
+                    pass
             except Exception:
                 pass
-
-            # 2. 撤销条件订单 (Trailing Stop/Stop Loss)
-            # 必须传 {'stop': True}
-            try:
-                await exchange.cancel_all_orders(symbol, {'stop': True})
-            except Exception:
-                pass
-
-        except Exception:
-            pass
 
         await asyncio.sleep(0.5)
 
@@ -47,6 +53,73 @@ async def _force_cancel_all_orders(exchange: ccxt.binanceusdm, symbol: str, asyn
 # ------------------
 
 
+async def _place_trailing_stop_order(
+        exchange: ccxt.binanceusdm,
+        symbol: str,
+        side: str,
+        amount: float,
+        callback_rate: float,
+        async_logger
+):
+    """
+    移动止盈下单 (阶梯式降级)
+    """
+    amount_str = exchange.amount_to_precision(symbol, amount)
+
+    # --- 构建重试阶梯 ---
+    user_rate = max(0.1, min(20.0, float(callback_rate)))
+    rates_to_try = [user_rate]
+
+    # 如果用户设定值大于 5.0，进行细粒度降级 (每 1% 降一档)
+    if user_rate > 5.0:
+        curr = user_rate - 1.0
+        while curr > 5.0:
+            rates_to_try.append(round(curr, 1))
+            curr -= 1.0
+        rates_to_try.append(5.0)
+
+    # 添加保底
+    if 2.0 not in rates_to_try and user_rate > 2.0:
+        rates_to_try.append(2.0)
+
+    # ------------------
+
+    for rate in rates_to_try:
+        params = {
+            'callbackRate': rate,
+            'reduceOnly': True,
+        }
+
+        # 每个比率尝试 2 次 (处理网络或并发问题)
+        for attempt in range(2):
+            try:
+                # print(f"   >>> [REQ] 下单 {symbol} (Rate:{rate}%)")
+                return await exchange.create_order(symbol, 'TRAILING_STOP_MARKET', side, amount_str, None, params)
+
+            except Exception as e:
+                err = str(e)
+
+                # 情况A: 交易所明确拒绝这个比率 (-2007)
+                if '-2007' in err or 'Invalid callBack rate' in err:
+                    print(f"   [WARN] {symbol} {rate}% 被拒，尝试降低...")
+                    break  # 跳出内层循环，直接试下一个更小的比率
+
+                # 情况B: 订单拥堵 (-4045 / -4130) -> 清理并重试当前比率
+                elif '-4045' in err or '-4130' in err or 'limit' in err:
+                    # print(f"   [RETRY] {symbol} 拥堵，清理后重试 {rate}%...")
+                    await _ensure_no_open_orders_async(exchange, symbol, async_logger)
+                    await asyncio.sleep(1.0)
+                    continue
+
+                    # 情况C: 其他错误
+                else:
+                    await async_logger(f"❌ {symbol} 移动止盈出错: {err}", "error")
+                    return False
+
+    await async_logger(f"❌ {symbol} 即使降级到 {rates_to_try[-1]}% 也无法下单。", "error")
+    return False
+
+
 async def _place_standard_stop_order(
         exchange: ccxt.binanceusdm,
         symbol: str,
@@ -57,17 +130,12 @@ async def _place_standard_stop_order(
         async_logger
 ):
     """
-    标准止损下单 (备用)
+    标准止损 (备用)
     """
     order_type = 'STOP_MARKET'
     price_str = exchange.price_to_precision(symbol, trigger_price)
     amount_str = exchange.amount_to_precision(symbol, amount)
-
-    params = {
-        'stopPrice': price_str,
-        'reduceOnly': True,
-        'workingType': 'MARK_PRICE',
-    }
+    params = {'stopPrice': price_str, 'reduceOnly': True, 'workingType': 'MARK_PRICE'}
 
     for attempt in range(3):
         try:
@@ -79,71 +147,6 @@ async def _place_standard_stop_order(
                 await asyncio.sleep(1.0)
                 continue
             return False
-    return False
-
-
-async def _place_trailing_stop_order(
-        exchange: ccxt.binanceusdm,
-        symbol: str,
-        side: str,
-        amount: float,
-        callback_rate: float,
-        async_logger
-):
-    """
-    移动止盈下单 (带自动降级功能)
-    """
-    amount_str = exchange.amount_to_precision(symbol, amount)
-
-    # 尝试列表：用户设定的值 -> 5.0% -> 2.0%
-    rates_to_try = []
-
-    # 用户设定的值
-    user_rate = max(0.1, min(20.0, float(callback_rate)))
-    rates_to_try.append(user_rate)
-
-    # 如果用户设定的大于 5.0，添加 5.0 作为备选
-    if user_rate > 5.0:
-        rates_to_try.append(5.0)
-
-    # 添加 2.0 作为保底
-    if user_rate > 2.0:
-        rates_to_try.append(2.0)
-
-    # 循环尝试不同的比率
-    for rate in rates_to_try:
-        params = {
-            'callbackRate': rate,
-            'reduceOnly': True,
-        }
-
-        # 每个比率尝试重试 2 次
-        for attempt in range(2):
-            try:
-                # print(f"   >>> [REQ] 下单 {symbol} (Rate:{rate}%)")
-                return await exchange.create_order(symbol, 'TRAILING_STOP_MARKET', side, amount_str, None, params)
-
-            except Exception as e:
-                err = str(e)
-
-                # 1. 如果是 -2007 (Invalid Rate)，直接跳出内层循环，尝试下一个更低的比率
-                if '-2007' in err or 'Invalid callBack rate' in err:
-                    print(f"   [WARN] {symbol} 回调率 {rate}% 被交易所拒绝，尝试降低比率...")
-                    break  # Break inner loop, try next rate in outer loop
-
-                # 2. 如果是 -4045/-4130 (拥堵/冲突)，执行清理并原地重试
-                elif '-4045' in err or '-4130' in err or 'limit' in err:
-                    print(f"   [RETRY] {symbol} 订单拥堵，清理后重试...")
-                    await _ensure_no_open_orders_async(exchange, symbol, async_logger)
-                    await asyncio.sleep(1.0)
-                    continue  # Continue inner loop (retry same rate)
-
-                # 3. 其他错误，记录并退出
-                else:
-                    await async_logger(f"❌ {symbol} 移动止盈下单失败: {err}", "error")
-                    return False
-
-    await async_logger(f"❌ {symbol} 所有回调率尝试均失败。", "error")
     return False
 
 
@@ -171,11 +174,12 @@ async def set_tp_sl_for_position_async(exchange: ccxt.binanceusdm, position: Pos
         )
 
         if isinstance(res, dict) and res.get('id'):
-            # 获取实际成交的 rate (如果降级了)
-            final_rate = res.get('info', {}).get('priceRate')  # 部分API返回这个
-            if not final_rate: final_rate = callback_rate  # 回退
+            # 获取最终成功的比率 (可能被降级了)
+            final_rate = res.get('info', {}).get('priceRate')
+            if not final_rate: final_rate = callback_rate
 
-            await async_logger(f"✅ {position.symbol} 移动止盈设置成功", "success")
+            # 如果成功，即使降级了也标记为绿色
+            await async_logger(f"✅ {position.symbol} 移动止盈成功 (Rate:{final_rate}%)", "success")
             return True
         else:
             return False
@@ -195,7 +199,7 @@ async def set_tp_sl_for_position_async(exchange: ccxt.binanceusdm, position: Pos
                     exchange, full_symbol, sl_side, position.contracts, target_sl, True, async_logger
                 )
                 if isinstance(res, dict) and res.get('id'):
-                    await async_logger(f"✅ {position.symbol} 固定止损设置成功", "success")
+                    await async_logger(f"✅ {position.symbol} 固定止损成功", "success")
                     return True
 
     return True
