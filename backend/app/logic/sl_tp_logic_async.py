@@ -7,7 +7,8 @@ from ..models.schemas import Position
 
 
 async def _ensure_no_open_orders_async(exchange: ccxt.binanceusdm, symbol: str, async_logger):
-    await exchange.cancel_all_orders("BTCUSDC")
+    res = await exchange.cancel_all_orders("BTCUSDC")
+    print(f"   !!! [ERR] 下单失败 ({symbol}): {res}", flush=True)
     return True
 
 
