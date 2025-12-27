@@ -1,4 +1,4 @@
-# backend/app/logic/sl_tp_logic_async.py (全量拉取清理版)
+# backend/app/logic/sl_tp_logic_async.py (法医鉴定版)
 import asyncio
 from typing import Set, List, Dict, Any
 
@@ -11,72 +11,85 @@ from ..models.schemas import Position
 
 async def _ensure_no_open_orders_async(exchange: ccxt.binanceusdm, symbol: str, async_logger):
     """
-    【全量拉取清理模式】
-    不依赖交易所的 symbol 过滤（可能因为格式问题失效）。
-    直接拉取账户所有订单，在本地进行匹配和删除。
+    【法医鉴定清理模式】
+    详细打印比对过程，找出为什么删不掉订单。
     """
-    max_retries = 10
+    max_retries = 5  # 减少重试次数，专注诊断
 
-    # 获取该交易对的原始 Market ID (例如 'BTCUSDT')，用于双重匹配验证
-    market_id = None
-    try:
-        if symbol in exchange.markets:
-            market_id = exchange.markets[symbol]['id']
-    except:
-        pass
+    print(f"\n====== [DIAG-START] 准备清理 {symbol} ======")
 
     for i in range(max_retries):
         try:
-            # 1. 拉取账户下【所有】未完成订单 (不传 symbol)
-            # 既然按 symbol 查不到，我们就查所有的，自己过滤
-            # print(f"--- [GLOBAL-FETCH] 正在拉取全账户挂单以排查 {symbol}... ---")
+            # 1. 全量拉取
+            # print(f"   >>> [REQ] 拉取全账户所有挂单 (不按Symbol过滤)...")
             all_open_orders = await exchange.fetch_open_orders()
+            total_count = len(all_open_orders)
 
-            # 2. 本地过滤：找出属于当前 symbol 的订单
+            # print(f"   <<< [RES] 账户当前总挂单数: {total_count}")
+
+            # 2. 本地匹配逻辑 (带详细日志)
             target_orders = []
-            for order in all_open_orders:
-                # 匹配逻辑：CCXT symbol 匹配 或 原始 ID 匹配
-                is_match = False
-                if order['symbol'] == symbol:
-                    is_match = True
-                elif market_id and order['info'].get('symbol') == market_id:
-                    is_match = True
 
-                if is_match:
+            # 打印前3个订单的样本，看看格式长啥样
+            if i == 0 and total_count > 0:
+                sample = all_open_orders[0]
+                print(
+                    f"   --- [SAMPLE] 订单样本: ID={sample['id']}, Symbol='{sample['symbol']}' (Type: {type(sample['symbol'])})")
+
+            for order in all_open_orders:
+                o_symbol = order['symbol']
+                o_id = order['id']
+
+                # 严格匹配
+                if o_symbol == symbol:
                     target_orders.append(order)
+                else:
+                    # 模糊匹配调试：如果包含 target 字符串，说明可能格式不对
+                    # 例如 target="BTC/USDT:USDT", order="BTC/USDT"
+                    if symbol in o_symbol or o_symbol in symbol:
+                        if i == 0:  # 只在第一轮打印，防止刷屏
+                            print(f"   ??? [MISMATCH] 发现疑似订单但不匹配: ID={o_id}")
+                            print(f"       Order Symbol : '{o_symbol}'")
+                            print(f"       Target Symbol: '{symbol}'")
 
             count = len(target_orders)
 
-            # 如果没找到，说明真的没有了
             if count == 0:
                 if i > 0:
-                    await async_logger(f"✅ {symbol} 挂单已彻底清除。", "info")
+                    await async_logger(f"✅ {symbol} 清理完毕 (本地比对0个)。", "info")
+                print(f"====== [DIAG-END] {symbol} 匹配数为0，结束 ======\n")
                 return True
 
             if i == 0:
-                print(f"--- [CLEANUP] {symbol} 在全量列表中发现 {count} 个残留订单，执行精确清除... ---")
+                print(f"--- [CLEANUP] {symbol} 匹配到 {count} 个目标订单，准备击杀... ---")
 
-            # 3. 根据 ID 逐个删除 (这是唯一绝对可靠的方法)
+            # 3. 逐个击杀
+            # 注意：这里使用 cancel_order(id, symbol)
+            # 有时候传入 symbol 有助于加速，但有时候 symbol 不对会导致报错
+            # 我们先尝试带 symbol
             cancel_tasks = [exchange.cancel_order(o['id'], symbol) for o in target_orders]
 
-            # 并发执行
             results = await asyncio.gather(*cancel_tasks, return_exceptions=True)
 
-            # 打印错误（如果有）
-            for res in results:
+            success_cnt = 0
+            for idx, res in enumerate(results):
                 if isinstance(res, Exception):
                     err = str(res)
                     if "Unknown order" not in err and "Order was not found" not in err:
-                        print(f"--- [ERR] 删除失败: {err} ---")
+                        print(f"   !!! [ERR] 删除 ID {target_orders[idx]['id']} 失败: {err}")
+                else:
+                    success_cnt += 1
+
+            print(f"   >>> [RESULT] 本轮尝试删除 {count} 个，成功发送指令 {success_cnt} 个")
 
             # 4. 等待
             await asyncio.sleep(0.5 + (i * 0.2))
 
         except Exception as e:
-            print(f"--- [FATAL] 清理流程异常: {e} ---")
+            print(f"   !!! [FATAL] 清理流程异常: {e}")
             await asyncio.sleep(1.0)
 
-    await async_logger(f"❌ {symbol} 清理失败，无法消除残留订单，跳过下单。", "error")
+    await async_logger(f"❌ {symbol} 清理失败，无法消除 {len(target_orders)} 个残留订单。", "error")
     return False
 
 
