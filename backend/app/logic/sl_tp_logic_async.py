@@ -1,4 +1,4 @@
-# backend/app/logic/sl_tp_logic_async.py (法医鉴定版)
+# backend/app/logic/sl_tp_logic_async.py (模糊匹配+全量清理版)
 import asyncio
 from typing import Set, List, Dict, Any
 
@@ -9,87 +9,97 @@ from ..config import i18n
 from ..models.schemas import Position
 
 
+def _is_symbol_match(target_symbol: str, order: dict) -> bool:
+    """
+    【模糊匹配逻辑】
+    判断订单是否属于目标交易对。
+    解决 CCXT symbol 格式 (BTC/USDT:USDT) 与 订单 symbol (BTC/USDT) 不一致的问题。
+    """
+    order_symbol = order['symbol']
+
+    # 1. 严格匹配
+    if order_symbol == target_symbol:
+        return True
+
+    # 2. 原始 ID 匹配 (查看 binance 返回的原始 symbol，如 'BTCUSDT')
+    if 'info' in order and 'symbol' in order['info']:
+        # 将 target_symbol (BTC/USDT:USDT) 简化为 BTCUSDT 格式尝试匹配
+        normalized_target = target_symbol.split(':')[0].replace('/', '')
+        if order['info']['symbol'] == normalized_target:
+            return True
+
+    # 3. 结构化模糊匹配
+    # 提取目标币种的基础和计价货币
+    # 假设 target_symbol 格式为 BASE/QUOTE:QUOTE 或 BASE/QUOTE
+    try:
+        parts = target_symbol.split(':')[0].split('/')
+        if len(parts) == 2:
+            base, quote = parts[0], parts[1]
+            # 如果订单 symbol 同时也包含这两个部分
+            if base in order_symbol and quote in order_symbol:
+                return True
+    except:
+        pass
+
+    return False
+
+
 async def _ensure_no_open_orders_async(exchange: ccxt.binanceusdm, symbol: str, async_logger):
     """
-    【法医鉴定清理模式】
-    详细打印比对过程，找出为什么删不掉订单。
+    【智能全量清理】
+    拉取全账户订单 -> 使用模糊匹配找出目标 -> 逐个删除。
     """
-    max_retries = 5  # 减少重试次数，专注诊断
+    max_retries = 5
 
-    print(f"\n====== [DIAG-START] 准备清理 {symbol} ======")
+    # print(f"\n====== [CLEAN-START] 准备清理 {symbol} ======")
 
     for i in range(max_retries):
         try:
-            # 1. 全量拉取
-            # print(f"   >>> [REQ] 拉取全账户所有挂单 (不按Symbol过滤)...")
+            # 1. 全量拉取 (这是目前最可靠获取订单的方法)
+            # 虽然效率低，但能保证拿到数据
             all_open_orders = await exchange.fetch_open_orders()
-            total_count = len(all_open_orders)
 
-            # print(f"   <<< [RES] 账户当前总挂单数: {total_count}")
-
-            # 2. 本地匹配逻辑 (带详细日志)
+            # 2. 使用模糊匹配筛选
             target_orders = []
-
-            # 打印前3个订单的样本，看看格式长啥样
-            if i == 0 and total_count > 0:
-                sample = all_open_orders[0]
-                print(
-                    f"   --- [SAMPLE] 订单样本: ID={sample['id']}, Symbol='{sample['symbol']}' (Type: {type(sample['symbol'])})")
-
             for order in all_open_orders:
-                o_symbol = order['symbol']
-                o_id = order['id']
-
-                # 严格匹配
-                if o_symbol == symbol:
+                if _is_symbol_match(symbol, order):
                     target_orders.append(order)
-                else:
-                    # 模糊匹配调试：如果包含 target 字符串，说明可能格式不对
-                    # 例如 target="BTC/USDT:USDT", order="BTC/USDT"
-                    if symbol in o_symbol or o_symbol in symbol:
-                        if i == 0:  # 只在第一轮打印，防止刷屏
-                            print(f"   ??? [MISMATCH] 发现疑似订单但不匹配: ID={o_id}")
-                            print(f"       Order Symbol : '{o_symbol}'")
-                            print(f"       Target Symbol: '{symbol}'")
 
             count = len(target_orders)
 
+            # 如果没找到，说明干净了
             if count == 0:
                 if i > 0:
-                    await async_logger(f"✅ {symbol} 清理完毕 (本地比对0个)。", "info")
-                print(f"====== [DIAG-END] {symbol} 匹配数为0，结束 ======\n")
+                    await async_logger(f"✅ {symbol} 挂单已清零。", "info")
                 return True
 
             if i == 0:
-                print(f"--- [CLEANUP] {symbol} 匹配到 {count} 个目标订单，准备击杀... ---")
+                print(f"--- [CLEANUP] {symbol} 匹配到 {count} 个关联订单，执行删除... ---")
 
-            # 3. 逐个击杀
-            # 注意：这里使用 cancel_order(id, symbol)
-            # 有时候传入 symbol 有助于加速，但有时候 symbol 不对会导致报错
-            # 我们先尝试带 symbol
+            # 3. 逐个击杀 (Cancel by ID)
+            # 使用并发加速删除过程
             cancel_tasks = [exchange.cancel_order(o['id'], symbol) for o in target_orders]
 
             results = await asyncio.gather(*cancel_tasks, return_exceptions=True)
 
             success_cnt = 0
-            for idx, res in enumerate(results):
-                if isinstance(res, Exception):
-                    err = str(res)
-                    if "Unknown order" not in err and "Order was not found" not in err:
-                        print(f"   !!! [ERR] 删除 ID {target_orders[idx]['id']} 失败: {err}")
-                else:
+            for res in results:
+                if not isinstance(res, Exception):
                     success_cnt += 1
+                else:
+                    # 忽略 "Unknown order" (可能已经被成交或被取消)
+                    if "Unknown order" not in str(res) and "Order was not found" not in str(res):
+                        print(f"--- [ERR] 撤单报错: {res} ---")
 
-            print(f"   >>> [RESULT] 本轮尝试删除 {count} 个，成功发送指令 {success_cnt} 个")
-
-            # 4. 等待
-            await asyncio.sleep(0.5 + (i * 0.2))
+            # 4. 这里的等待是为了防止API频率限制 (Rate Limit)
+            # 对于50个仓位，如果这里不等待，很容易触发 IP Ban
+            await asyncio.sleep(0.2)
 
         except Exception as e:
-            print(f"   !!! [FATAL] 清理流程异常: {e}")
+            print(f"--- [FATAL] 清理流程异常: {e} ---")
             await asyncio.sleep(1.0)
 
-    await async_logger(f"❌ {symbol} 清理失败，无法消除 {len(target_orders)} 个残留订单。", "error")
+    await async_logger(f"❌ {symbol} 清理失败，跳过下单。", "error")
     return False
 
 
@@ -186,7 +196,7 @@ async def _place_trailing_stop_order(
             err_msg = str(e)
 
             if '-4130' in err_msg or '-4045' in err_msg or 'limit' in err_msg.lower():
-                await async_logger(f"--- [RETRY {attempt + 1}] {symbol} 订单拥堵，执行全量清理... ---", "warning")
+                await async_logger(f"--- [RETRY {attempt + 1}] {symbol} 订单拥堵，执行模糊清理... ---", "warning")
                 await _ensure_no_open_orders_async(exchange, symbol, async_logger)
                 continue
             else:
@@ -214,7 +224,7 @@ async def set_tp_sl_for_position_async(exchange: ccxt.binanceusdm, position: Pos
             await _ensure_no_open_orders_async(exchange, full_symbol, async_logger)
             return True
 
-        # 2. 【核心】下单前，强制执行全量清理
+        # 2. 【核心】下单前清理
         cleaned = await _ensure_no_open_orders_async(exchange, full_symbol, async_logger)
         if not cleaned:
             await async_logger(f"⛔ {position.symbol} 无法清除旧单，跳过。", "error")
