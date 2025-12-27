@@ -1,4 +1,4 @@
-# backend/app/logic/sl_tp_logic_async.py (完整修复版)
+# backend/app/logic/sl_tp_logic_async.py (最终健壮版)
 import asyncio
 from typing import Set, List, Dict, Any, Awaitable
 
@@ -52,7 +52,7 @@ async def _place_standard_stop_order(
     """
     使用 CCXT 最标准的 create_order 接口。
     对应币安功能：【市价止损/止盈】+【只平仓(Close Position)】
-    增加了自动错误重试机制 (-4130 冲突清理 和 -4120 降级)。
+    增加了自动错误重试机制 (-4130 冲突, -4045 超限, -4120 降级)。
     """
 
     # 1. 确定标准的订单类型
@@ -79,15 +79,16 @@ async def _place_standard_stop_order(
         except ccxt.ExchangeError as e:
             err_msg = str(e)
 
-            # 处理 -4130 冲突错误 (Existing open stop order)
-            if '-4130' in err_msg:
-                print(f"--- [RETRY] {symbol} 遇到订单冲突 (-4130)，正在清理并重试... ---")
+            # --- 修复核心 1: 处理 -4130 (冲突) 或 -4045 (超限) ---
+            # 如果已有订单冲突，或者订单数量达到上限
+            if '-4130' in err_msg or '-4045' in err_msg or 'limit' in err_msg.lower():
+                print(f"--- [RETRY] {symbol} 下单遇到冲突或超限 ({err_msg})，正在清理并重试... ---")
                 await _cancel_sl_tp_orders_async(exchange, symbol, async_logger)
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(1.0)  # 等待稍微久一点，确保币安清理完毕
                 # 再次尝试
                 return await exchange.create_order(symbol, order_type, side, amount_str, None, params)
 
-            # 处理 -4120 不支持市价单错误 (降级为限价)
+            # --- 修复核心 2: 处理 -4120 不支持市价单错误 (降级为限价) ---
             elif '-4120' in err_msg:
                 print(f"--- [INFO] {symbol} 不支持市价止损，切换为标准限价止损 ---")
 
@@ -129,7 +130,7 @@ async def _place_trailing_stop_order(
     注意：Binance 要求 callbackRate 范围通常是 0.1% 到 5%
     """
     # 确保回调率在有效范围内 (0.1 - 5.0)
-    rate = max(0.1, min(5.0, float(callback_rate)))
+    rate = max(0.1, min(20.0, float(callback_rate)))
 
     amount_str = exchange.amount_to_precision(symbol, amount)
 
@@ -139,23 +140,26 @@ async def _place_trailing_stop_order(
         # 'workingType': 'MARK_PRICE'
     }
 
-    # --- 核心修改：增加重试逻辑处理 -4130 错误 ---
+    # --- 核心修改：增加重试逻辑处理 -4130 冲突 和 -4045 超限 ---
     async def _execute_create():
         try:
             return await exchange.create_order(symbol, 'TRAILING_STOP_MARKET', side, amount_str, None, params)
         except ccxt.ExchangeError as e:
             err_msg = str(e)
 
-            # 如果是因为之前的固定止损(closePosition=True)阻挡了移动止盈
-            # 我们选择清理旧订单，优先保证移动止盈下单成功
-            if '-4130' in err_msg:
-                msg = f"--- [RETRY] {symbol} 移动止盈遇到冲突 (-4130)，正在清理旧订单以确保移动止盈生效... ---"
+            # -4130: 冲突 (Existing open stop order)
+            # -4045: 超限 (Reach max stop order limit)
+            # 任何一种情况，解决方法都是：清理旧的，腾出位置，再试一次
+            if '-4130' in err_msg or '-4045' in err_msg or 'limit' in err_msg.lower():
+                msg = f"--- [RETRY] {symbol} 移动止盈遇到错误 ({err_msg})，正在清理旧订单并重试... ---"
                 print(msg)
                 await async_logger(msg, "warning")
 
+                # 强制清理
                 await _cancel_sl_tp_orders_async(exchange, symbol, async_logger)
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(1.0)  # 增加等待时间
 
+                # 重试
                 return await exchange.create_order(symbol, 'TRAILING_STOP_MARKET', side, amount_str, None, params)
             else:
                 raise e
@@ -183,10 +187,10 @@ async def set_tp_sl_for_position_async(exchange: ccxt.binanceusdm, position: Pos
             await _cancel_sl_tp_orders_async(exchange, full_symbol, async_logger)
             return True
 
-        # 2. 清理旧订单
+        # 2. 清理旧订单 (初始清理)
         await _cancel_sl_tp_orders_async(exchange, full_symbol, async_logger)
-        # 稍微等待一下确保币安处理完取消请求，避免 race condition
-        await asyncio.sleep(0.3)
+        # 增加初始等待时间，确保币安后端同步状态
+        await asyncio.sleep(0.5)
 
         if stop_event.is_set(): raise InterruptedError()
 
@@ -261,9 +265,8 @@ async def set_tp_sl_for_position_async(exchange: ccxt.binanceusdm, position: Pos
 
         if not tasks_to_run: return True
 
-        # 5. 顺序执行任务 (Sequential Execution)
-        # 之前的 asyncio.gather 会导致并发请求，容易触发 -4130 冲突
-        # 改为顺序执行，确保每一个单子都稳妥处理
+        # 5. 顺序执行任务
+        # 使用顺序执行而不是并发，减少 Rate Limit 错误和并发冲突
         success_count = 0
 
         for task_info in tasks_to_run:
@@ -271,28 +274,18 @@ async def set_tp_sl_for_position_async(exchange: ccxt.binanceusdm, position: Pos
 
             task_name = task_info["name"]
 
-            # 日志
-            if task_name == "SL":
-                await async_logger(f"  > 提交 {position.symbol} 固定止损...")
-            elif task_name == "TP":
-                await async_logger(f"  > 提交 {position.symbol} 固定止盈...")
-            elif task_name == "Trailing":
-                await async_logger(f"  > 提交 {position.symbol} 移动止盈...")
-
             try:
                 res = await task_info["coro"]
 
                 if isinstance(res, dict) and res.get('id'):
                     success_count += 1
                 elif isinstance(res, Exception):
-                    # 如果移动止盈因为冲突失败，我们已经在内部尝试过重试了
-                    # 如果还是返回Exception，说明真的无法放置
                     await async_logger(f"  > ❌ {position.symbol} {task_name} 失败: {res}", "error")
             except Exception as e:
                 await async_logger(f"  > ❌ {position.symbol} {task_name} 异常: {e}", "error")
 
-            # 两个订单之间稍微间隔一点点，防止交易所频率限制或状态未同步
-            await asyncio.sleep(0.1)
+            # 两个订单之间稍微间隔，防止频率限制
+            await asyncio.sleep(0.2)
 
         if success_count < len(tasks_to_run):
             await async_logger(f"⚠️ {position.symbol} 订单设置部分完成 ({success_count}/{len(tasks_to_run)})",
