@@ -1,4 +1,4 @@
-# backend/app/logic/sl_tp_logic_async.py (全日志标准版)
+# backend/app/logic/sl_tp_logic_async.py (盲发双杀版)
 import asyncio
 from typing import Set, List, Dict, Any
 import ccxt.async_support as ccxt
@@ -8,84 +8,44 @@ from ..models.schemas import Position
 
 async def _ensure_no_open_orders_async(exchange: ccxt.binanceusdm, symbol: str, async_logger):
     """
-    【全日志标准清理】
-    1. 拉取全量订单 (不传 symbol)。
-    2. 打印比对日志。
-    3. 使用标准 cancel_order 删除。
+    【盲发双杀模式】
+    不查询，直接调用 cancel_all_orders。
+    同时尝试清理 USDT 和 USDC 两个市场，防止 Symbol 错位。
     """
-    max_retries = 5
+    # 1. 确定我们要轰炸的目标列表
+    targets = [symbol]
 
-    # 提取简单的特征，例如 "ADA/USDC:USDC" -> "ADA"
-    try:
-        simple_base = symbol.split('/')[0]  # ADA
-    except:
-        simple_base = symbol
+    # 自动推导另一个市场 (如果当前是 USDC，就加 USDT；反之亦然)
+    # 这样能保证不管配置怎么写，两个市场都会被清理
+    if "/USDC" in symbol:
+        targets.append(symbol.replace("/USDC", "/USDT").replace(":USDC", ":USDT"))
+    elif "/USDT" in symbol:
+        targets.append(symbol.replace("/USDT", "/USDC").replace(":USDT", ":USDC"))
 
-    print(f"\n====== [DEBUG] 准备清理 {symbol} (特征: {simple_base}) ======", flush=True)
+    # print(f"====== [BLIND KILL] 正在盲删: {targets} ======", flush=True)
 
-    for i in range(max_retries):
-        try:
-            # 1. 全量拉取 (不带参数!)
-            # print(f"   >>> [REQ] fetch_open_orders()...", flush=True)
-            all_orders = await exchange.fetch_open_orders()
+    # 2. 循环尝试 3 次
+    for i in range(3):
+        for target_sym in targets:
+            try:
+                # 直接调用标准撤单接口
+                await exchange.cancel_all_orders(target_sym)
+                # print(f"   >>> [SENT] cancel_all_orders({target_sym}) 发送成功")
+            except Exception as e:
+                err = str(e)
+                # "No orders" 不是错误，说明已经干净了
+                if "No orders" in err:
+                    pass
+                    # "Symbol not found" 说明该币种可能没有 USDC 交易对，正常跳过
+                elif "Symbol" in err or "found" in err:
+                    pass
+                else:
+                    print(f"   !!! [ERR] 撤单报错 ({target_sym}): {err}", flush=True)
 
-            # 2. 打印前几个订单看看长什么样 (仅第一轮打印)
-            if i == 0:
-                print(f"   <<< [RES] 账户总订单数: {len(all_orders)}", flush=True)
-                if len(all_orders) > 0:
-                    sample = all_orders[0]
-                    print(f"       [样板] ID: {sample['id']} | Symbol: {sample['symbol']} | Type: {sample['type']}",
-                          flush=True)
+        # 稍等一下让交易所处理
+        await asyncio.sleep(0.5)
 
-            # 3. 本地筛选
-            orders_to_cancel = []
-            for o in all_orders:
-                o_symbol = o['symbol']
-
-                # --- 核心比对逻辑 ---
-                # 只要订单的 symbol 包含我们的基础币种 (例如 ADAUSDC 包含 ADA)，就视为目标
-                # 这种匹配非常宽泛，绝对不会漏掉
-                if simple_base in o_symbol:
-                    orders_to_cancel.append(o)
-                    if i == 0:
-                        print(f"       [MATCH] 命中需删除订单: {o_symbol} (ID: {o['id']})", flush=True)
-
-            count = len(orders_to_cancel)
-
-            if count == 0:
-                if i > 0:
-                    await async_logger(f"✅ {symbol} 挂单已清零。", "info")
-                return True
-
-            if i == 0:
-                print(f"--- [CLEANUP] 锁定 {count} 个目标订单，执行逐个撤单... ---", flush=True)
-
-            # 4. 逐个撤单 (标准接口)
-            tasks = []
-            for o in orders_to_cancel:
-                # 这里的 symbol 传入订单自带的 symbol，确保不出错
-                tasks.append(exchange.cancel_order(o['id'], o['symbol']))
-
-            # 并发执行
-            results = await asyncio.gather(*tasks, return_exceptions=True)
-
-            # 检查结果
-            for idx, res in enumerate(results):
-                if isinstance(res, Exception):
-                    err = str(res)
-                    # 忽略 "Unknown order" (可能已经成交或被撤)
-                    if "Unknown order" not in err and "Order was not found" not in err:
-                        print(f"   !!! [ERR] 撤单失败 ID {orders_to_cancel[idx]['id']}: {err}", flush=True)
-
-            # 5. 等待
-            await asyncio.sleep(0.5 + (i * 0.2))
-
-        except Exception as e:
-            print(f"--- [FATAL] 清理异常: {e} ---", flush=True)
-            await asyncio.sleep(1.0)
-
-    await async_logger(f"❌ {symbol} 清理多次仍有残留，跳过下单。", "error")
-    return False
+    return True
 
 
 # --- 兼容性包装器 ---
@@ -119,21 +79,22 @@ async def _place_trailing_stop_order(
         'reduceOnly': True,
     }
 
+    # 重试逻辑
     max_retries = 3
     for attempt in range(max_retries):
         try:
-            print(f"   >>> [REQ] 下单 {symbol} (Rate:{rate}%)...", flush=True)
             return await exchange.create_order(symbol, 'TRAILING_STOP_MARKET', side, amount_str, None, params)
         except Exception as e:
             err = str(e)
-            print(f"   !!! [ERR] 下单失败: {err}", flush=True)
+            print(f"   !!! [ERR] 下单失败 ({symbol}): {err}", flush=True)
 
-            # 冲突或超限 -> 清理
+            # 如果是冲突或满了，再盲删一次
             if '-4045' in err or '-4130' in err or 'limit' in err:
                 await _ensure_no_open_orders_async(exchange, symbol, async_logger)
+                await asyncio.sleep(1.0)  # 等久一点
                 continue
             else:
-                await async_logger(f"❌ {symbol} 下单失败: {err}", "error")
+                await async_logger(f"❌ {symbol} 移动止盈下单失败: {err}", "error")
                 return False
     return False
 
@@ -142,7 +103,7 @@ async def set_tp_sl_for_position_async(exchange: ccxt.binanceusdm, position: Pos
                                        stop_event: asyncio.Event) -> bool:
     full_symbol = position.full_symbol
 
-    # 1. 清理
+    # 1. 直接盲删
     await _ensure_no_open_orders_async(exchange, full_symbol, async_logger)
 
     if stop_event.is_set(): return False
@@ -152,7 +113,6 @@ async def set_tp_sl_for_position_async(exchange: ccxt.binanceusdm, position: Pos
 
     enable_trailing = config.get(f'enable_{side_key}_trailing_stop', False)
 
-    # 2. 下单
     if enable_trailing:
         callback_rate = config.get(f'{side_key}_trailing_stop_callback_rate', 1.0)
         ts_side = 'sell' if is_long else 'buy'
@@ -172,4 +132,4 @@ async def set_tp_sl_for_position_async(exchange: ccxt.binanceusdm, position: Pos
 
 async def cleanup_orphan_sltp_orders_async(exchange: ccxt.binanceusdm, active_symbols: Set[str], async_logger):
     pass
-# 移除了 _place_standard_stop_order，只保留移动止盈
+# 移除 _place_standard_stop_order
