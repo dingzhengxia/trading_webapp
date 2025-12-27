@@ -1,4 +1,4 @@
-<!-- frontend/src/views/TradingView.vue (最终修正版) -->
+<!-- frontend/src/views/TradingView.vue (完整代码) -->
 <template>
   <div :style="{ paddingBottom: $vuetify.display.smAndDown ? '128px' : '80px' }">
     <v-container fluid>
@@ -109,6 +109,14 @@ const handleSyncSlTp = () => {
       enable_short_sl_tp,
       short_stop_loss_percentage,
       short_take_profit_percentage,
+
+      // --- 新增: 提取移动止盈参数 ---
+      enable_long_trailing_stop,
+      long_trailing_stop_callback_rate,
+      enable_short_trailing_stop,
+      short_trailing_stop_callback_rate,
+      // --------------------------
+
       leverage,
     } = settingsStore.settings
 
@@ -119,22 +127,28 @@ const handleSyncSlTp = () => {
       enable_short_sl_tp,
       short_stop_loss_percentage,
       short_take_profit_percentage,
+
+      // --- 新增: 传递参数到后端 ---
+      enable_long_trailing_stop,
+      long_trailing_stop_callback_rate,
+      enable_short_trailing_stop,
+      short_trailing_stop_callback_rate,
+      // ------------------------
+
       leverage,
     }
 
     uiStore.launchTask(
       '/api/trading/sync-sltp',
       payload,
-      '同步SL/TP',
+      '同步SL/TP/移动止盈',
       positionStore.positions.length,
     )
   }
 }
 
-// --- 核心修改在这里 ---
 const onGenerateRebalancePlan = () => {
   if (settingsStore.settings) {
-    // 创建一个完整的 criteria 对象，包含所有在UI上配置的参数
     const criteria: RebalanceCriteria = {
       method: settingsStore.settings.rebalance_method,
       top_n: settingsStore.settings.rebalance_top_n,
@@ -144,8 +158,6 @@ const onGenerateRebalancePlan = () => {
       foam_days: settingsStore.settings.rebalance_foam_days,
       rebalance_volume_ma_days: settingsStore.settings.rebalance_volume_ma_days,
       rebalance_volume_spike_ratio: settingsStore.settings.rebalance_volume_spike_ratio,
-
-      // --- 新增：添加所有缺失的参数 ---
       rebalance_benchmark_coin: settingsStore.settings.rebalance_benchmark_coin,
       enable_rebalance_filters: settingsStore.settings.enable_rebalance_filters,
       rebalance_rsi_period: settingsStore.settings.rebalance_rsi_period,
@@ -156,11 +168,9 @@ const onGenerateRebalancePlan = () => {
       rebalance_bollinger_std_dev: settingsStore.settings.rebalance_bollinger_std_dev,
       rebalance_bollinger_width_spike_ratio: settingsStore.settings.rebalance_bollinger_width_spike_ratio,
     }
-    // 使用这个完整的对象去调用处理函数
     handleGenerateRebalancePlan(criteria)
   }
 }
-// --- 修改结束 ---
 
 const handleGenerateRebalancePlan = async (criteria: RebalanceCriteria) => {
   if (uiStore.isRunning || isGeneratingPlan.value) return

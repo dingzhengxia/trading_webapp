@@ -1,4 +1,4 @@
-<!-- frontend/src/components/ControlPanel.vue (最终完整版) -->
+<!-- frontend/src/components/ControlPanel.vue (完整代码) -->
 <template>
   <v-card v-if="settingsStore.settings">
     <v-card-title class="text-h6">交易参数</v-card-title>
@@ -115,7 +115,7 @@
                   <v-divider class="my-4"></v-divider>
                   <v-switch
                     v-model="settingsStore.settings.enable_long_sl_tp"
-                    label="开启多头 SL/TP"
+                    label="开启多头固定 SL/TP"
                     color="info"
                     inset
                     :disabled="!settingsStore.settings.enable_long_trades"
@@ -142,6 +142,28 @@
                       ></v-text-field
                     ></v-col>
                   </v-row>
+
+                  <!-- 新增: 多头移动止盈 -->
+                  <v-divider class="my-4"></v-divider>
+                  <v-switch
+                    v-model="settingsStore.settings.enable_long_trailing_stop"
+                    label="开启多头移动止盈 (Trailing)"
+                    color="purple-accent-2"
+                    inset
+                    :disabled="!settingsStore.settings.enable_long_trades"
+                  ></v-switch>
+                  <v-text-field
+                    v-model.number="settingsStore.settings.long_trailing_stop_callback_rate"
+                    label="回调率 (%)"
+                    type="number"
+                    step="0.1"
+                    min="0.1"
+                    max="5.0"
+                    :disabled="!settingsStore.settings.enable_long_trailing_stop"
+                    hint="价格回撤多少百分比时平仓 (建议 0.5% - 5.0%)"
+                    persistent-hint
+                  ></v-text-field>
+
                 </v-card-text>
               </v-card>
             </v-col>
@@ -240,7 +262,7 @@
                   <v-divider class="my-4"></v-divider>
                   <v-switch
                     v-model="settingsStore.settings.enable_short_sl_tp"
-                    label="开启空头 SL/TP"
+                    label="开启空头固定 SL/TP"
                     color="info"
                     inset
                     :disabled="!settingsStore.settings.enable_short_trades"
@@ -267,6 +289,28 @@
                       ></v-text-field
                     ></v-col>
                   </v-row>
+
+                  <!-- 新增: 空头移动止盈 -->
+                  <v-divider class="my-4"></v-divider>
+                  <v-switch
+                    v-model="settingsStore.settings.enable_short_trailing_stop"
+                    label="开启空头移动止盈 (Trailing)"
+                    color="purple-accent-2"
+                    inset
+                    :disabled="!settingsStore.settings.enable_short_trades"
+                  ></v-switch>
+                  <v-text-field
+                    v-model.number="settingsStore.settings.short_trailing_stop_callback_rate"
+                    label="反弹率 (%)"
+                    type="number"
+                    step="0.1"
+                    min="0.1"
+                    max="5.0"
+                    :disabled="!settingsStore.settings.enable_short_trailing_stop"
+                    hint="价格反弹多少百分比时平仓 (建议 0.5% - 5.0%)"
+                    persistent-hint
+                  ></v-text-field>
+
                 </v-card-text>
               </v-card>
             </v-col>

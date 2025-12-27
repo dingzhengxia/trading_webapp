@@ -1,4 +1,4 @@
-// frontend/src/models/types.ts (最终版)
+// frontend/src/models/types.ts (完整代码)
 export interface Position {
   symbol: string
   full_symbol: string
@@ -31,7 +31,7 @@ export interface RebalancePlan {
     open_value: number
     percentage: number
   }[]
-  target_coin_list: string[] // <--- 新增此字段
+  target_coin_list: string[]
   error?: string
 }
 
@@ -64,6 +64,14 @@ export interface UserSettings {
   enable_short_sl_tp: boolean
   short_stop_loss_percentage: number
   short_take_profit_percentage: number
+
+  // --- 新增 ---
+  enable_long_trailing_stop: boolean
+  long_trailing_stop_callback_rate: number
+  enable_short_trailing_stop: boolean
+  short_trailing_stop_callback_rate: number
+  // -----------
+
   open_maker_retries: number
   open_order_fill_timeout_seconds: number
   close_maker_retries: number
@@ -108,6 +116,5 @@ export interface RebalanceCriteria {
   rebalance_bollinger_std_dev: number;
   rebalance_bollinger_width_spike_ratio: number;
 
-  // 新增字段
   manual_target_ratio_perc?: number;
 }

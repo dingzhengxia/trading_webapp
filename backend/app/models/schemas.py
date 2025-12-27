@@ -1,4 +1,4 @@
-# backend/app/models/schemas.py (最终修正版)
+# backend/app/models/schemas.py (完整代码)
 from typing import List, Dict, Any, Optional
 
 from pydantic import BaseModel, Field
@@ -61,6 +61,14 @@ class TradePlanRequest(BaseTaskRequest):
     enable_short_sl_tp: bool
     short_stop_loss_percentage: float
     short_take_profit_percentage: float
+
+    # --- 新增 ---
+    enable_long_trailing_stop: bool
+    long_trailing_stop_callback_rate: float
+    enable_short_trailing_stop: bool
+    short_trailing_stop_callback_rate: float
+    # -----------
+
     rebalance_volume_ma_days: int
     rebalance_volume_spike_ratio: float
     rebalance_benchmark_coin: List[str]
@@ -82,6 +90,14 @@ class SyncSltpRequest(BaseTaskRequest):
     enable_short_sl_tp: bool
     short_stop_loss_percentage: float
     short_take_profit_percentage: float
+
+    # --- 新增 ---
+    enable_long_trailing_stop: bool
+    long_trailing_stop_callback_rate: float
+    enable_short_trailing_stop: bool
+    short_trailing_stop_callback_rate: float
+    # -----------
+
     leverage: int
 
 
@@ -112,7 +128,6 @@ class ExecutionPlanRequest(BaseTaskRequest):
     orders: List[ExecutionOrderItem]
 
 
-# --- 核心修正：将所有新参数添加到 RebalanceCriteria 模型 ---
 class RebalanceCriteria(BaseModel):
     method: str = "multi_factor_weakest"
     top_n: int = 50
@@ -133,12 +148,12 @@ class RebalanceCriteria(BaseModel):
     rebalance_bollinger_std_dev: int = 2
     rebalance_bollinger_width_spike_ratio: float = 2.0
 
-    # 新增字段：允许前端传入手动设置的目标比例
     manual_target_ratio_perc: Optional[float] = Field(None, ge=0, le=200)
+
 
 class RebalancePlanResponse(BaseModel):
     target_ratio_perc: float
     positions_to_close: List[Dict[str, Any]]
     positions_to_open: List[Dict[str, Any]]
-    target_coin_list: List[str]  # <--- 新增此字段
+    target_coin_list: List[str]
     error: Optional[str] = None

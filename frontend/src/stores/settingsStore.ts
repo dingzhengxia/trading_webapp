@@ -1,4 +1,4 @@
-// frontend/src/stores/settingsStore.ts (最终版)
+// frontend/src/stores/settingsStore.ts (完整代码)
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import type { UserSettings } from '@/models/types'
@@ -25,6 +25,14 @@ const defaultSettings: UserSettings = {
   enable_short_sl_tp: true,
   short_stop_loss_percentage: 80.0,
   short_take_profit_percentage: 150.0,
+
+  // --- 新增 ---
+  enable_long_trailing_stop: false,
+  long_trailing_stop_callback_rate: 1.0,
+  enable_short_trailing_stop: false,
+  short_trailing_stop_callback_rate: 1.0,
+  // -----------
+
   open_maker_retries: 5,
   open_order_fill_timeout_seconds: 60,
   close_maker_retries: 3,

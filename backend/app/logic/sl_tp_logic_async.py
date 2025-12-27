@@ -1,4 +1,4 @@
-# backend/app/logic/sl_tp_logic_async.py (完整修复版)
+# backend/app/logic/sl_tp_logic_async.py (完整代码)
 import asyncio
 from typing import Set, List, Dict, Any
 
@@ -18,11 +18,14 @@ async def _cancel_sl_tp_orders_async(exchange: ccxt.binanceusdm, symbol: str, as
         open_orders = await exchange.fetch_open_orders(symbol)
 
         # 筛选条件单
-        # 只要是 STOP 或 TAKE_PROFIT 相关的都清理
+        # 只要是 STOP, TAKE_PROFIT, TRAILING_STOP 相关的都清理
         orders_to_cancel = [
             order for order in open_orders
-            if order['type'] in ['STOP', 'TAKE_PROFIT', 'STOP_MARKET', 'TAKE_PROFIT_MARKET', 'STOP_LOSS',
-                                 'STOP_LOSS_LIMIT', 'TAKE_PROFIT_LIMIT']
+            if order['type'] in [
+                'STOP', 'TAKE_PROFIT', 'STOP_MARKET', 'TAKE_PROFIT_MARKET',
+                'STOP_LOSS', 'STOP_LOSS_LIMIT', 'TAKE_PROFIT_LIMIT',
+                'TRAILING_STOP_MARKET'  # --- 新增: 清理移动止盈单 ---
+            ]
         ]
 
         if not orders_to_cancel:
@@ -33,6 +36,7 @@ async def _cancel_sl_tp_orders_async(exchange: ccxt.binanceusdm, symbol: str, as
         await asyncio.gather(*tasks, return_exceptions=True)
         return True
     except Exception as e:
+        # 即使清理失败通常也不影响主流程
         return True
 
 
@@ -75,18 +79,14 @@ async def _place_standard_stop_order(
         except ccxt.ExchangeError as e:
             err_msg = str(e)
 
-            # 【修复核心 1】处理 -4130 冲突错误
-            # "An open stop or take profit order with GTE and closePosition... is existing"
+            # 处理 -4130 冲突错误
             if '-4130' in err_msg:
                 print(f"--- [RETRY] {symbol} 遇到订单冲突 (-4130)，正在清理并重试... ---")
-                # 再次强制清理所有条件单
                 await _cancel_sl_tp_orders_async(exchange, symbol, async_logger)
-                # 等待一小段时间让交易所状态同步
                 await asyncio.sleep(0.5)
-                # 重试一次 (仅一次，防止死循环)
                 return await exchange.create_order(symbol, order_type, side, amount_str, None, params)
 
-            # 【修复核心 2】处理 -4120 不支持市价单错误 (降级为限价)
+            # 处理 -4120 不支持市价单错误 (降级为限价)
             elif '-4120' in err_msg:
                 print(f"--- [INFO] {symbol} 不支持市价止损，切换为标准限价止损 ---")
 
@@ -100,11 +100,10 @@ async def _place_standard_stop_order(
                     limit_price = trigger_price * 0.95
                 limit_price_str = exchange.price_to_precision(symbol, limit_price)
 
-                # 限价单参数调整
                 params_limit = {
                     'stopPrice': price_str,
-                    'reduceOnly': True,  # 限价单不支持 closePosition，必须用 reduceOnly
-                    'timeInForce': 'GTC',  # 限价单必须有 GTC
+                    'reduceOnly': True,
+                    'timeInForce': 'GTC',
                     'workingType': 'MARK_PRICE'
                 }
 
@@ -114,6 +113,37 @@ async def _place_standard_stop_order(
                 raise e
 
     return await _execute_create()
+
+
+async def _place_trailing_stop_order(
+        exchange: ccxt.binanceusdm,
+        symbol: str,
+        side: str,
+        amount: float,
+        callback_rate: float,
+        async_logger
+):
+    """
+    提交移动止盈止损订单 (Trailing Stop)
+    注意：Binance 要求 callbackRate 范围通常是 0.1% 到 5%
+    """
+    # 确保回调率在有效范围内 (0.1 - 5.0)
+    rate = max(0.1, min(5.0, float(callback_rate)))
+
+    amount_str = exchange.amount_to_precision(symbol, amount)
+
+    params = {
+        'callbackRate': rate,
+        'reduceOnly': True,  # 移动止盈必须是只减仓
+        # 'workingType': 'MARK_PRICE' # 默认就是MARK_PRICE
+    }
+
+    try:
+        # type='TRAILING_STOP_MARKET'
+        return await exchange.create_order(symbol, 'TRAILING_STOP_MARKET', side, amount_str, None, params)
+    except Exception as e:
+        await async_logger(f"⚠️ {symbol} 移动止盈下单失败 (Rate:{rate}%): {e}", "error")
+        return e
 
 
 async def set_tp_sl_for_position_async(exchange: ccxt.binanceusdm, position: Position, config: dict, async_logger,
@@ -139,56 +169,68 @@ async def set_tp_sl_for_position_async(exchange: ccxt.binanceusdm, position: Pos
         is_long = position.side == i18n.SIDE_LONG
         side_key = "long" if is_long else "short"
 
-        # 3. 检查开关
-        if not config.get(f'enable_{side_key}_sl_tp', False):
-            return True
-
-        sl_perc = config.get(f'{side_key}_stop_loss_percentage', 0)
-        tp_perc = config.get(f'{side_key}_take_profit_percentage', 0)
-
         tasks: List[Any] = []
 
-        # 止损
-        if sl_perc > 0:
-            leverage = config.get('leverage', 1)
-            sl_ratio = float(sl_perc) / 100 / leverage
-            entry_price = position.entry_price
+        # --- 3. 固定止盈止损 (Stop Loss / Take Profit) ---
+        if config.get(f'enable_{side_key}_sl_tp', False):
 
-            if is_long:
-                target_sl = entry_price * (1 - sl_ratio)
-                sl_side = 'sell'
-            else:
-                target_sl = entry_price * (1 + sl_ratio)
-                sl_side = 'buy'
+            sl_perc = config.get(f'{side_key}_stop_loss_percentage', 0)
+            tp_perc = config.get(f'{side_key}_take_profit_percentage', 0)
 
-            await async_logger(f"  > 提交 {position.symbol} SL ({target_sl:.4f})...")
-            tasks.append(_place_standard_stop_order(
-                exchange, full_symbol, sl_side, position.contracts,
-                target_sl, True, async_logger
-            ))
+            # 止损
+            if sl_perc > 0:
+                leverage = config.get('leverage', 1)
+                sl_ratio = float(sl_perc) / 100 / leverage
+                entry_price = position.entry_price
 
-        # 止盈
-        if tp_perc > 0:
-            leverage = config.get('leverage', 1)
-            tp_ratio = float(tp_perc) / 100 / leverage
-            entry_price = position.entry_price
+                if is_long:
+                    target_sl = entry_price * (1 - sl_ratio)
+                    sl_side = 'sell'
+                else:
+                    target_sl = entry_price * (1 + sl_ratio)
+                    sl_side = 'buy'
 
-            if is_long:
-                target_tp = entry_price * (1 + tp_ratio)
-                tp_side = 'sell'
-            else:
-                target_tp = entry_price * (1 - tp_ratio)
-                tp_side = 'buy'
+                await async_logger(f"  > 提交 {position.symbol} SL ({target_sl:.4f})...")
+                tasks.append(_place_standard_stop_order(
+                    exchange, full_symbol, sl_side, position.contracts,
+                    target_sl, True, async_logger
+                ))
 
-            await async_logger(f"  > 提交 {position.symbol} TP ({target_tp:.4f})...")
-            tasks.append(_place_standard_stop_order(
-                exchange, full_symbol, tp_side, position.contracts,
-                target_tp, False, async_logger
+            # 止盈
+            if tp_perc > 0:
+                leverage = config.get('leverage', 1)
+                tp_ratio = float(tp_perc) / 100 / leverage
+                entry_price = position.entry_price
+
+                if is_long:
+                    target_tp = entry_price * (1 + tp_ratio)
+                    tp_side = 'sell'
+                else:
+                    target_tp = entry_price * (1 - tp_ratio)
+                    tp_side = 'buy'
+
+                await async_logger(f"  > 提交 {position.symbol} TP ({target_tp:.4f})...")
+                tasks.append(_place_standard_stop_order(
+                    exchange, full_symbol, tp_side, position.contracts,
+                    target_tp, False, async_logger
+                ))
+
+        # --- 4. 移动止盈 (Trailing Stop) ---
+        enable_trailing = config.get(f'enable_{side_key}_trailing_stop', False)
+        callback_rate = config.get(f'{side_key}_trailing_stop_callback_rate', 1.0)
+
+        if enable_trailing:
+            # 做多仓位，平仓方向是 sell；做空仓位，平仓方向是 buy
+            ts_side = 'sell' if is_long else 'buy'
+
+            await async_logger(f"  > 提交 {position.symbol} 移动止盈 (回调率: {callback_rate}%)...")
+            tasks.append(_place_trailing_stop_order(
+                exchange, full_symbol, ts_side, position.contracts, callback_rate, async_logger
             ))
 
         if not tasks: return True
 
-        # 4. 执行
+        # 5. 执行
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
         success_count = 0
@@ -199,9 +241,9 @@ async def set_tp_sl_for_position_async(exchange: ccxt.binanceusdm, position: Pos
                 await async_logger(f"  > ❌ {position.symbol} 失败: {res}", "error")
 
         if success_count < len(tasks):
-            await async_logger(f"⚠️ {position.symbol} SL/TP 不完整", "warning")
+            await async_logger(f"⚠️ {position.symbol} SL/TP/TS 不完整", "warning")
         else:
-            await async_logger(f"✅ {position.symbol} 设置成功", "success")
+            await async_logger(f"✅ {position.symbol} 订单设置成功", "success")
 
         return success_count == len(tasks)
 

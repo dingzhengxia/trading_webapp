@@ -1,4 +1,4 @@
-# backend/app/config/config.py (最终持久化版)
+# backend/app/config/config.py (完整代码)
 import json
 import os
 from pathlib import Path
@@ -31,6 +31,14 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     'enable_short_sl_tp': True,
     'short_stop_loss_percentage': 80.0,
     'short_take_profit_percentage': 150.0,
+
+    # --- 新增：移动止盈止损配置 ---
+    'enable_long_trailing_stop': False,
+    'long_trailing_stop_callback_rate': 1.0,
+    'enable_short_trailing_stop': False,
+    'short_trailing_stop_callback_rate': 1.0,
+    # ---------------------------
+
     'open_maker_retries': 5,
     'open_order_fill_timeout_seconds': 60,
     'close_maker_retries': 3,
@@ -50,7 +58,6 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     'rebalance_volume_spike_ratio': 3.0,
     'rebalance_benchmark_coin': ['BTC'],
 
-    # --- 核心修正：添加所有新的防反弹过滤参数到默认配置 ---
     'enable_rebalance_filters': True,
     'rebalance_rsi_period': 14,
     'rebalance_rsi_threshold': 25.0,
@@ -68,7 +75,7 @@ AVAILABLE_SHORT_COINS: List[str] = []
 
 _cached_settings: Dict[str, Any] | None = None
 _settings_lock = RLock()
-_coin_list_lock = RLock() # 为币种列表文件添加专用的锁
+_coin_list_lock = RLock()  # 为币种列表文件添加专用的锁
 
 
 def load_coin_lists() -> None:
@@ -173,6 +180,7 @@ def add_coin_to_pool(coin_symbol: str) -> List[str]:
         AVAILABLE_COINS = data['coins_pool']
         print(f"--- [INFO] Added '{symbol_upper}' to coin pool. Total now: {len(AVAILABLE_COINS)} ---")
         return AVAILABLE_COINS
+
 
 # 首次加载
 load_coin_lists()
