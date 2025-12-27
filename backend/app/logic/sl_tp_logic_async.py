@@ -1,4 +1,4 @@
-# backend/app/logic/sl_tp_logic_async.py (回归标准版)
+# backend/app/logic/sl_tp_logic_async.py (全日志标准版)
 import asyncio
 from typing import Set, List, Dict, Any
 import ccxt.async_support as ccxt
@@ -8,50 +8,83 @@ from ..models.schemas import Position
 
 async def _ensure_no_open_orders_async(exchange: ccxt.binanceusdm, symbol: str, async_logger):
     """
-    【标准清理模式】
-    只使用 CCXT 标准方法。
-    逻辑：先尝试 CancelAll -> 等待 -> 查单 -> 如果还有，按 ID 逐个撤销。
+    【全日志标准清理】
+    1. 拉取全量订单 (不传 symbol)。
+    2. 打印比对日志。
+    3. 使用标准 cancel_order 删除。
     """
     max_retries = 5
 
+    # 提取简单的特征，例如 "ADA/USDC:USDC" -> "ADA"
+    try:
+        simple_base = symbol.split('/')[0]  # ADA
+    except:
+        simple_base = symbol
+
+    print(f"\n====== [DEBUG] 准备清理 {symbol} (特征: {simple_base}) ======", flush=True)
+
     for i in range(max_retries):
         try:
-            # 1. 先尝试标准的一键全撤
-            try:
-                await exchange.cancel_all_orders(symbol)
-                # print(f"   >>> [标准接口] 已发送 cancel_all_orders({symbol})")
-            except Exception as e:
-                # 如果报错 "No orders" 是正常的
-                if "No orders" not in str(e):
-                    print(f"   [WARN] cancel_all_orders 报错: {e}")
+            # 1. 全量拉取 (不带参数!)
+            # print(f"   >>> [REQ] fetch_open_orders()...", flush=True)
+            all_orders = await exchange.fetch_open_orders()
 
-            # 2. 稍等片刻，让交易所飞一会儿
-            await asyncio.sleep(0.5)
+            # 2. 打印前几个订单看看长什么样 (仅第一轮打印)
+            if i == 0:
+                print(f"   <<< [RES] 账户总订单数: {len(all_orders)}", flush=True)
+                if len(all_orders) > 0:
+                    sample = all_orders[0]
+                    print(f"       [样板] ID: {sample['id']} | Symbol: {sample['symbol']} | Type: {sample['type']}",
+                          flush=True)
 
-            # 3. 查单核实
-            open_orders = await exchange.fetch_open_orders(symbol)
+            # 3. 本地筛选
+            orders_to_cancel = []
+            for o in all_orders:
+                o_symbol = o['symbol']
 
-            if len(open_orders) == 0:
+                # --- 核心比对逻辑 ---
+                # 只要订单的 symbol 包含我们的基础币种 (例如 ADAUSDC 包含 ADA)，就视为目标
+                # 这种匹配非常宽泛，绝对不会漏掉
+                if simple_base in o_symbol:
+                    orders_to_cancel.append(o)
+                    if i == 0:
+                        print(f"       [MATCH] 命中需删除订单: {o_symbol} (ID: {o['id']})", flush=True)
+
+            count = len(orders_to_cancel)
+
+            if count == 0:
                 if i > 0:
-                    await async_logger(f"✅ {symbol} 挂单已清理。", "info")
+                    await async_logger(f"✅ {symbol} 挂单已清零。", "info")
                 return True
 
             if i == 0:
-                print(f"--- [CLEANUP] {symbol} 发现 {len(open_orders)} 个残留订单，执行 ID 补刀... ---")
+                print(f"--- [CLEANUP] 锁定 {count} 个目标订单，执行逐个撤单... ---", flush=True)
 
-            # 4. 如果还有，使用 ID 逐个撤销 (这是标准接口中最稳的)
-            tasks = [exchange.cancel_order(o['id'], symbol) for o in open_orders]
-            await asyncio.gather(*tasks, return_exceptions=True)
+            # 4. 逐个撤单 (标准接口)
+            tasks = []
+            for o in orders_to_cancel:
+                # 这里的 symbol 传入订单自带的 symbol，确保不出错
+                tasks.append(exchange.cancel_order(o['id'], o['symbol']))
 
-            # 5. 再等一下
-            await asyncio.sleep(0.5)
+            # 并发执行
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+
+            # 检查结果
+            for idx, res in enumerate(results):
+                if isinstance(res, Exception):
+                    err = str(res)
+                    # 忽略 "Unknown order" (可能已经成交或被撤)
+                    if "Unknown order" not in err and "Order was not found" not in err:
+                        print(f"   !!! [ERR] 撤单失败 ID {orders_to_cancel[idx]['id']}: {err}", flush=True)
+
+            # 5. 等待
+            await asyncio.sleep(0.5 + (i * 0.2))
 
         except Exception as e:
-            print(f"--- [ERR] 清理异常: {e}")
+            print(f"--- [FATAL] 清理异常: {e} ---", flush=True)
             await asyncio.sleep(1.0)
 
-    # 如果最后还有单子，为了防止下单报错，返回 False
-    await async_logger(f"❌ {symbol} 清理超时，仍有挂单。", "error")
+    await async_logger(f"❌ {symbol} 清理多次仍有残留，跳过下单。", "error")
     return False
 
 
@@ -78,7 +111,6 @@ async def _place_trailing_stop_order(
     """
     移动止盈下单
     """
-    # 限制范围
     rate = max(0.1, min(20.0, float(callback_rate)))
     amount_str = exchange.amount_to_precision(symbol, amount)
 
@@ -87,22 +119,21 @@ async def _place_trailing_stop_order(
         'reduceOnly': True,
     }
 
-    # 重试逻辑
     max_retries = 3
     for attempt in range(max_retries):
         try:
+            print(f"   >>> [REQ] 下单 {symbol} (Rate:{rate}%)...", flush=True)
             return await exchange.create_order(symbol, 'TRAILING_STOP_MARKET', side, amount_str, None, params)
         except Exception as e:
             err = str(e)
-            # 冲突或超限 -> 再清理一次
+            print(f"   !!! [ERR] 下单失败: {err}", flush=True)
+
+            # 冲突或超限 -> 清理
             if '-4045' in err or '-4130' in err or 'limit' in err:
-                print(f"--- [RETRY] {symbol} 下单拥堵，再次清理... ---")
                 await _ensure_no_open_orders_async(exchange, symbol, async_logger)
-                await asyncio.sleep(1.0)
-                continue  # 重试
+                continue
             else:
-                # 其他错误 (如参数错误) 直接记录
-                await async_logger(f"❌ {symbol} 移动止盈下单失败: {e}", "error")
+                await async_logger(f"❌ {symbol} 下单失败: {err}", "error")
                 return False
     return False
 
@@ -111,7 +142,7 @@ async def set_tp_sl_for_position_async(exchange: ccxt.binanceusdm, position: Pos
                                        stop_event: asyncio.Event) -> bool:
     full_symbol = position.full_symbol
 
-    # 1. 启动前先清理
+    # 1. 清理
     await _ensure_no_open_orders_async(exchange, full_symbol, async_logger)
 
     if stop_event.is_set(): return False
@@ -121,8 +152,8 @@ async def set_tp_sl_for_position_async(exchange: ccxt.binanceusdm, position: Pos
 
     enable_trailing = config.get(f'enable_{side_key}_trailing_stop', False)
 
+    # 2. 下单
     if enable_trailing:
-        # === 移动止盈 ===
         callback_rate = config.get(f'{side_key}_trailing_stop_callback_rate', 1.0)
         ts_side = 'sell' if is_long else 'buy'
 
@@ -136,11 +167,9 @@ async def set_tp_sl_for_position_async(exchange: ccxt.binanceusdm, position: Pos
         else:
             return False
 
-    # 如果没开启移动止盈，这里为了简单起见就不下固定止损了 (根据你之前的要求只保留移动止盈)
-    # 且因为前面执行了清理，相当于把旧的固定止损也撤了
     return True
 
 
 async def cleanup_orphan_sltp_orders_async(exchange: ccxt.binanceusdm, active_symbols: Set[str], async_logger):
     pass
-# 移除 _place_standard_stop_order，既然只要移动止盈，那个就没用了
+# 移除了 _place_standard_stop_order，只保留移动止盈
