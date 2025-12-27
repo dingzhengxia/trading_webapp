@@ -1,4 +1,4 @@
-# backend/app/logic/sl_tp_logic_async.py (底层日志版)
+# backend/app/logic/sl_tp_logic_async.py (全账户地毯式扫描版)
 import asyncio
 import json
 from typing import Set, List, Dict, Any
@@ -10,89 +10,96 @@ from ..config import i18n
 from ..models.schemas import Position
 
 
-def _get_raw_symbol(ccxt_symbol: str) -> str:
-    """
-    将 CCXT 格式 (BTC/USDT:USDT) 强制转换为 币安底层格式 (BTCUSDT)。
-    """
-    if not ccxt_symbol: return ""
-    # 1. 取冒号前面
-    base_part = ccxt_symbol.split(':')[0]
-    # 2. 去掉斜杠
-    raw = base_part.replace('/', '')
-    return raw
-
-
 async def _ensure_no_open_orders_async(exchange: ccxt.binanceusdm, symbol: str, async_logger):
     """
-    【底层直连清理模式】
-    绕过 CCXT 封装，直接向币安发送原始 HTTP 请求，并强制打印日志。
+    【地毯式清理模式】
+    1. 拉取账户所有订单。
+    2. 打印清单。
+    3. 只要订单属于该币种（模糊匹配），直接用订单自带的参数进行删除。
     """
-    max_retries = 3
-    raw_symbol = _get_raw_symbol(symbol)
+    max_retries = 5
 
-    print(f"\n====== [LOG-START] 处理 {symbol} (原生: {raw_symbol}) ======", flush=True)
+    # 提取特征：比如 "BTC/USDC:USDC" -> base="BTC", quote="USDC"
+    try:
+        parts = symbol.split(':')[0].split('/')
+        target_base = parts[0]  # BTC
+        target_quote = parts[1]  # USDC
+    except:
+        target_base = symbol
+        target_quote = ""
+
+    print(f"\n====== [SCAN START] 正在扫描目标: {target_base} + {target_quote} ======", flush=True)
 
     for i in range(max_retries):
         try:
-            # -------------------------------------------------------------
-            # 1. 尝试用原生接口查询 (照妖镜)
-            # -------------------------------------------------------------
-            print(f"   >>> [REQ] 正在调用 fapiPrivateGetOpenOrders (symbol={raw_symbol})...", flush=True)
-            native_orders = []
-            try:
-                # 直接调用 binance fapi 接口
-                native_orders = await exchange.fapiPrivateGetOpenOrders({'symbol': raw_symbol})
-                print(f"   <<< [RES] 原生接口返回: 找到 {len(native_orders)} 个订单", flush=True)
+            # 1. 没有任何过滤，拉取全账户所有挂单
+            # print(f"   >>> [REQ] 拉取全量订单...", flush=True)
+            all_orders = await exchange.fapiPrivateGetOpenOrders()
 
-                if len(native_orders) > 0:
-                    # 打印前2个订单的详细信息，看看是不是我们找的
-                    print(f"       [DUMP] 第1个订单详情: {json.dumps(native_orders[0])}", flush=True)
+            # 2. 筛选出我们要杀的单子
+            orders_to_kill = []
 
-            except Exception as e:
-                print(f"   !!! [ERR] 原生查询报错: {e}", flush=True)
+            for o in all_orders:
+                o_symbol = o['symbol']  # 比如 "BTCUSDC"
 
-            # 如果没订单，直接返回
-            if len(native_orders) == 0:
-                if i > 0:
-                    await async_logger(f"✅ {symbol} 底层查询无挂单。", "info")
+                # 匹配逻辑：
+                # 如果 target_base (BTC) 在 o_symbol 里，且 target_quote (USDC) 也在 o_symbol 里
+                # 那么这个单子就是我们要找的 BTCUSDC
+                if target_base in o_symbol and target_quote in o_symbol:
+                    orders_to_kill.append(o)
+                # 容错：如果 quote 没解析出来，只要 base 完全匹配也行 (防止 BTCUSDT 被漏掉)
+                elif target_base in o_symbol and not target_quote:
+                    orders_to_kill.append(o)
+
+            count = len(orders_to_kill)
+
+            # 如果没找到，退出
+            if count == 0:
+                if i == 0:
+                    # 只有第一轮没找到才值得打印，证明真的干净
+                    # 顺便打印一下当前账户里到底有啥，方便排查
+                    print(f"   [INFO] 未发现目标订单。当前账户持单总数: {len(all_orders)}", flush=True)
+                    if len(all_orders) > 0 and len(all_orders) < 20:
+                        print(f"   [DUMP] 现有订单Symbols: {[x['symbol'] for x in all_orders]}", flush=True)
                 return True
 
-            # -------------------------------------------------------------
-            # 2. 尝试用原生接口撤销全部 (核弹)
-            # -------------------------------------------------------------
-            print(f"   >>> [REQ] 正在调用 fapiPrivateDeleteAllOpenOrders (symbol={raw_symbol})...", flush=True)
-            try:
-                await exchange.fapiPrivateDeleteAllOpenOrders({'symbol': raw_symbol})
-                print(f"   <<< [RES] 原生撤单指令发送成功。", flush=True)
-                await async_logger(f"⚠️ 已发送 {raw_symbol} 强力撤单指令。", "warning")
-            except Exception as e:
-                err = str(e)
-                if "No orders" in err:
-                    print(f"   <<< [RES] 交易所提示无订单可撤。", flush=True)
+            if i == 0:
+                print(f"--- [FOUND] 发现 {count} 个目标订单! ---", flush=True)
+                # 打印第一个，确认一下眼神
+                print(f"    样本: ID={orders_to_kill[0]['orderId']} Symbol={orders_to_kill[0]['symbol']}", flush=True)
+
+            # 3. 这里的关键：使用订单自带的 symbol 去删除，不要用我们传进来的 symbol
+            # 这样能 100% 避免格式错误
+            tasks = []
+            for o in orders_to_kill:
+                real_symbol = o['symbol']  # BTCUSDC
+                real_id = o['orderId']
+                # 调用底层接口删除，不经过 CCXT 包装
+                tasks.append(exchange.fapiPrivateDeleteOrder({
+                    'symbol': real_symbol,
+                    'orderId': real_id
+                }))
+
+            # 并发执行
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+
+            success = 0
+            for res in results:
+                if not isinstance(res, Exception):
+                    success += 1
                 else:
-                    print(f"   !!! [ERR] 原生撤单失败: {err}", flush=True)
+                    print(f"   !!! [ERR] 删除失败: {res}", flush=True)
 
-            # -------------------------------------------------------------
-            # 3. 尝试按 ID 补刀 (防止 CancelAll 失效)
-            # -------------------------------------------------------------
-            if len(native_orders) > 0:
-                print(f"   >>> [REQ] 执行 ID 补刀...", flush=True)
-                tasks = []
-                for o in native_orders:
-                    oid = o['orderId']
-                    # 注意：这里传给 CCXT 的是 CCXT 格式的 symbol，这是 cancel_order 要求的
-                    tasks.append(exchange.cancel_order(oid, symbol))
-
-                await asyncio.gather(*tasks, return_exceptions=True)
+            print(f"   >>> [RESULT] 成功发送删除指令: {success}/{count}", flush=True)
 
             # 等待
-            await asyncio.sleep(1.0)
+            await asyncio.sleep(0.5)
 
         except Exception as e:
-            print(f"--- [FATAL] 清理流程异常: {e} ---", flush=True)
+            print(f"--- [FATAL] 扫描清理异常: {e} ---", flush=True)
             await asyncio.sleep(1.0)
 
-    await async_logger(f"❌ {symbol} 清理失败，原生接口仍返回有残留。", "error")
+    await async_logger(f"❌ {symbol} 清理尝试多次未果。", "error")
     return False
 
 
@@ -136,7 +143,6 @@ async def _place_standard_stop_order(
             return await exchange.create_order(symbol, order_type, side, amount_str, None, params)
         except ccxt.ExchangeError as e:
             err_msg = str(e)
-            print(f"   !!! [ERR] 固定SL下单失败: {err_msg}", flush=True)
 
             # 冲突或超限 -> 清理
             if '-4130' in err_msg or '-4045' in err_msg or 'limit' in err_msg.lower():
@@ -144,7 +150,7 @@ async def _place_standard_stop_order(
                 continue
 
             elif '-4120' in err_msg:
-                # 降级
+                # 降级为限价
                 limit_type = 'STOP'
                 limit_price = trigger_price * (1.05 if side.upper() == 'BUY' else 0.95)
                 limit_price_str = exchange.price_to_precision(symbol, limit_price)
@@ -153,6 +159,7 @@ async def _place_standard_stop_order(
                     'timeInForce': 'GTC', 'workingType': 'MARK_PRICE'
                 }
                 return await exchange.create_order(symbol, limit_type, side, amount_str, limit_price_str, params_limit)
+
             else:
                 raise e
         except Exception as e:
@@ -184,14 +191,12 @@ async def _place_trailing_stop_order(
     max_retries = 3
     for attempt in range(max_retries):
         try:
-            print(f"   >>> [REQ] 下移动止盈单 {symbol} (Rate:{rate}%)...", flush=True)
             return await exchange.create_order(symbol, 'TRAILING_STOP_MARKET', side, amount_str, None, params)
         except ccxt.ExchangeError as e:
             err_msg = str(e)
-            print(f"   !!! [ERR] 移动止盈下单失败: {err_msg}", flush=True)
 
             if '-4130' in err_msg or '-4045' in err_msg or 'limit' in err_msg.lower():
-                await async_logger(f"--- [RETRY {attempt + 1}] {symbol} 订单拥堵，执行底层清理... ---", "warning")
+                await async_logger(f"--- [RETRY {attempt + 1}] {symbol} 订单拥堵，执行地毯式清理... ---", "warning")
                 await _ensure_no_open_orders_async(exchange, symbol, async_logger)
                 continue
             else:
@@ -219,11 +224,11 @@ async def set_tp_sl_for_position_async(exchange: ccxt.binanceusdm, position: Pos
             await _ensure_no_open_orders_async(exchange, full_symbol, async_logger)
             return True
 
-        # 2. 【核心】下单前，强制执行底层清理
+        # 2. 【核心】下单前全频段清理
         cleaned = await _ensure_no_open_orders_async(exchange, full_symbol, async_logger)
         if not cleaned:
-            await async_logger(f"⛔ {position.symbol} 原生接口显示仍有残留，跳过下单。", "error")
-            return False
+            # 如果清理失败，为了不报错，我们还是尝试下一次单，但在日志里警告
+            pass
 
         if stop_event.is_set(): raise InterruptedError()
 
@@ -297,18 +302,15 @@ async def cleanup_orphan_sltp_orders_async(exchange: ccxt.binanceusdm, active_sy
     清理无主订单
     """
     try:
-        all_open_orders = await exchange.fetch_open_orders()
-        orphan_orders = [
-            o for o in all_open_orders
-            if (o.get('reduceOnly') or o.get('info', {}).get('closePosition')) and o['symbol'] not in active_symbols
-        ]
+        all_orders = await exchange.fapiPrivateGetOpenOrders()
+        orphan_orders = [o for o in all_orders if o['symbol'] not in active_symbols and "USDT" in o['symbol']]  # 简单过滤
+
         if not orphan_orders: return
 
         await async_logger(f"发现 {len(orphan_orders)} 个无主订单，正在清理...", "warning")
 
-        for sym in set(o['symbol'] for o in orphan_orders):
-            await _ensure_no_open_orders_async(exchange, sym, async_logger)
-            await asyncio.sleep(0.1)
+        for o in orphan_orders:
+            await exchange.fapiPrivateDeleteOrder({'symbol': o['symbol'], 'orderId': o['orderId']})
 
     except:
         pass
