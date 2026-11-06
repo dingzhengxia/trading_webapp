@@ -63,6 +63,13 @@ export interface ResolvedSymbol {
 export interface ResolveSymbolsResponse {
   symbols: ResolvedSymbol[]
 }
+
+// 手动交易页持久化预设（保存在后端 settings 中）
+export interface ManualTradePreset {
+  selected_coins: string[]
+  rows: ManualTradeItem[]
+  default_value: number
+}
 // --------------------------------------------
 
 export interface UserSettings {
@@ -115,6 +122,8 @@ export interface UserSettings {
   rebalance_bollinger_period: number
   rebalance_bollinger_std_dev: number
   rebalance_bollinger_width_spike_ratio: number
+
+  manual_trade_preset?: ManualTradePreset
 }
 
 export interface RebalanceCriteria {

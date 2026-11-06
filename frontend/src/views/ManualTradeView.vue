@@ -263,11 +263,13 @@ import api from '@/services/api'
 import type {
   ManualTradeAction,
   ManualTradeItem,
+  ManualTradePreset,
   Position,
   ResolveSymbolsResponse,
   ResolvedSymbol,
 } from '@/models/types'
 import { getErrorMessage } from '@/utils/errors'
+import { debounce } from '@/utils/debounce'
 import PnlSummary from '@/components/PnlSummary.vue'
 import PositionsTable from '@/components/PositionsTable.vue'
 
@@ -294,6 +296,83 @@ const defaultValue = ref(100)
 const resolvedSymbols = ref<Record<string, ResolvedSymbol>>({})
 
 let resolveSequence = 0
+// 持久化预设：是否已完成恢复、是否正在保存（防止恢复过程触发回写）
+let presetHydrated = false
+let presetSaving = false
+
+// ---- 持久化：恢复 + 防抖自动保存（存后端 SQLite，跨浏览器/设备生效） ----
+const PRESET_MAX_ROWS = 100
+
+const sanitizePreset = (): ManualTradePreset => {
+  const validRows = rows.value
+    .filter((row) => typeof row.symbol === 'string' && row.symbol)
+    .slice(0, PRESET_MAX_ROWS)
+    .map((row) => ({
+      symbol: row.symbol,
+      action: row.action,
+      value: Number.isFinite(Number(row.value)) ? Number(row.value) : 0,
+    }))
+  return {
+    selected_coins: selectedCoins.value.slice(0, PRESET_MAX_ROWS),
+    rows: validRows,
+    default_value: Number(defaultValue.value) || 0,
+  }
+}
+
+const savePreset = async (): Promise<void> => {
+  if (!presetHydrated || presetSaving) return
+  presetSaving = true
+  try {
+    await api.post('/api/settings', { manual_trade_preset: sanitizePreset() })
+  } catch (error: unknown) {
+    console.warn('保存手动交易预设失败:', getErrorMessage(error))
+  } finally {
+    presetSaving = false
+  }
+}
+
+const savePresetDebounced = debounce(savePreset, 800)
+
+const restorePreset = async (): Promise<void> => {
+  try {
+    if (!settingsStore.settings) {
+      await settingsStore.fetchSettings()
+    }
+  } catch {
+    // 获取失败时仍允许页面正常使用（空选择）
+    presetHydrated = true
+    return
+  }
+  const preset = settingsStore.settings?.manual_trade_preset
+  if (preset && typeof preset === 'object') {
+    const coins = Array.isArray(preset.selected_coins) ? preset.selected_coins : []
+    const savedRows = Array.isArray(preset.rows) ? preset.rows : []
+    const rowMap = new Map(
+      savedRows
+        .filter((row) => row && typeof row.symbol === 'string')
+        .map((row) => [row.symbol, row]),
+    )
+    const restored = coins
+      .filter((symbol) => typeof symbol === 'string')
+      .map((symbol) => {
+        const saved = rowMap.get(symbol)
+        return {
+          symbol,
+          action: (saved?.action ?? 'long') as ManualTradeAction,
+          value: Number.isFinite(Number(saved?.value)) && Number(saved?.value) > 0
+            ? Number(saved?.value)
+            : (Number(preset.default_value) > 0 ? Number(preset.default_value) : 100),
+        }
+      })
+    // 保留用户已删除出选择但 rows 中仍有记录的币种不恢复（以 selected_coins 为准）
+    if (Number(preset.default_value) > 0) {
+      defaultValue.value = Number(preset.default_value)
+    }
+    rows.value = restored
+    selectedCoins.value = [...coins]
+  }
+  presetHydrated = true
+}
 
 // 可用币种：优先使用总池；为空时合并多头/空头备选池
 const availableCoins = computed(() => {
@@ -434,6 +513,21 @@ watch(defaultValue, () => {
   })
 })
 
+// 持久化：币种/动作/价值/默认价值任一变化后防抖自动保存
+watch(selectedCoins, () => {
+  if (presetHydrated) savePresetDebounced()
+})
+watch(
+  rows,
+  () => {
+    if (presetHydrated) savePresetDebounced()
+  },
+  { deep: true },
+)
+watch(defaultValue, () => {
+  if (presetHydrated) savePresetDebounced()
+})
+
 // 任务结束后自动刷新持仓
 watch(
   () => uiStore.isRunning,
@@ -445,9 +539,7 @@ watch(
 )
 
 onMounted(() => {
-  if (!settingsStore.settings) {
-    void settingsStore.fetchSettings()
-  }
+  void restorePreset()
   if (positionStore.positions.length === 0) {
     void positionStore.fetchPositions()
   }
