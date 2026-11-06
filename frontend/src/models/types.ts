@@ -272,3 +272,63 @@ export interface ProtectionStatus {
   api: ProtectionApiStats
   config: ProtectionConfig
 }
+
+// ------------------------------------------------
+// 周期报告（自 monitor periodic_reports 并入）
+// ------------------------------------------------
+export interface ReportSentimentConfig {
+  enabled: boolean
+  rsi_period?: number
+  rsi_overbought?: number
+  rsi_oversold?: number
+}
+
+export interface PeriodicReportConfig {
+  report_name: string
+  enabled: boolean
+  run_interval: string
+  top_n_by_volume: number
+  top_n_gainers: number
+  top_n_volume_ratio: number
+  min_consecutive_candles: number
+  volume_ma_period: number
+  market_sentiment: ReportSentimentConfig
+}
+
+export interface ReportRow extends PeriodicReportConfig {
+  last_run: number | null
+  next_run: number | null
+  due_in_seconds: number
+  running: boolean
+  last_error: string | null
+  title: string | null
+  scanned: number | null
+}
+
+export interface ReportCounts {
+  gainers: number
+  volume_ratios: number
+  overbought: number
+  oversold: number
+  consecutive: number
+}
+
+export interface ReportResult {
+  report_name: string
+  title: string
+  markdown: string
+  generated_at: number
+  generated_at_text: string
+  scanned: number
+  symbols_total: number
+  counts: ReportCounts
+  trigger?: string
+}
+
+export interface ReportsStatus {
+  reports: ReportRow[]
+  dingtalk_configured: boolean
+  dingtalk_enabled: boolean
+  running: boolean
+  latest: Record<string, ReportResult>
+}

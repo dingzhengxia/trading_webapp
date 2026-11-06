@@ -49,6 +49,11 @@ def _get_market_data() -> MarketDataService:
     return market_data
 
 
+def get_market_data() -> MarketDataService:
+    """对外暴露行情服务单例（周期报告等模块复用同一缓存与限流器）。"""
+    return _get_market_data()
+
+
 def _get_auto_trader() -> SignalAutoTrader:
     global auto_trader
     if auto_trader is None:

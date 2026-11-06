@@ -27,3 +27,8 @@ data/
 *.db
 *.db-wal
 *.db-shm
+
+# 环境变量文件（含交易所密钥/钉钉 webhook，禁止入库）
+.env
+.env.*
+!.env.example

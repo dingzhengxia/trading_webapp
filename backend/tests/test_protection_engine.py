@@ -311,3 +311,77 @@ def test_algo_compat_cancels_legacy_order(fake_exchange):
 
     asyncio.run(algo_compat.cancel_algo_order(fake_exchange, SYMBOL, "123", {}, _FakeRest()))
     assert fake_exchange.cancel_order_calls[-1] == ("123", SYMBOL)
+
+
+# ---------------------------------------------------------------------------
+# monitor 引擎日志转发到 UI 日志抽屉（ui_log_sink）
+# ---------------------------------------------------------------------------
+# 说明：loguru 的过滤器按「调用日志的模块名」判定，测试文件里的 logger.info
+# 调用点不在 app.signals/app.protection 命名空间下，因此这里直接构造
+# loguru 记录对象驱动 _forward，验证转发路径与过滤规则本身。
+def test_ui_log_sink_forwards_engine_logs():
+    import asyncio
+    from types import SimpleNamespace
+
+    from app.core.ui_log_sink import _forward, install_ui_log_sink
+    from app.core.websocket_manager import LOG_HISTORY
+
+    install_ui_log_sink()
+
+    def make_record(name, text, level="INFO"):
+        return SimpleNamespace(
+            record={"name": name, "message": text, "level": SimpleNamespace(name=level)}
+        )
+
+    async def scenario():
+        before = len(LOG_HISTORY)
+        _forward(make_record("app.signals.scanner", "信号扫描循环已启动，间隔 60 秒。"))
+        await asyncio.sleep(0.05)  # _forward 内部 create_task，让出一轮让任务执行
+        return before
+
+    before = asyncio.run(scenario())
+    entries = list(LOG_HISTORY)[before:]
+    assert entries, "引擎日志未转发到 UI"
+    payload = entries[-1]["payload"]
+    assert "📡 [信号]" in payload["message"]
+    assert "间隔 60 秒" in payload["message"]
+    assert payload["level"] == "info"
+
+
+def test_ui_log_sink_skips_other_modules_and_duplicates():
+    import asyncio
+    from types import SimpleNamespace
+
+    from app.core.ui_log_sink import _forward, install_ui_log_sink
+    from app.core.websocket_manager import LOG_HISTORY
+
+    install_ui_log_sink()
+
+    def make_record(name, text, level="INFO"):
+        return SimpleNamespace(
+            record={"name": name, "message": text, "level": SimpleNamespace(name=level)}
+        )
+
+    async def scenario():
+        before = len(LOG_HISTORY)
+        _forward(make_record("app.core.trading_service", "普通日志不转发"))
+        _forward(make_record("app.protection.engine", "[BTC] 🛡️ [仓位保护] 已由 notifier 推送"))
+        _forward(make_record("app.signals.scanner", "DEBUG 级别跳过", level="DEBUG"))
+        await asyncio.sleep(0.05)
+        return before
+
+    before = asyncio.run(scenario())
+    new_texts = [e["payload"]["message"] for e in list(LOG_HISTORY)[before:]]
+    assert not new_texts, f"不应有新转发: {new_texts}"
+
+
+def test_ui_log_sink_install_is_idempotent():
+    from loguru import logger
+
+    from app.core.ui_log_sink import install_ui_log_sink
+
+    install_ui_log_sink()
+    sinks_before = len(logger._core.handlers)
+    install_ui_log_sink()
+    install_ui_log_sink()
+    assert len(logger._core.handlers) == sinks_before  # 重复安装不新增 sink

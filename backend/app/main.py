@@ -8,13 +8,18 @@ from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect, status
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from .api import positions, protection, rebalance, settings, signals, trading
+from .api import positions, protection, rebalance, reports, settings, signals, trading
 from .api import status as status_router  # status 模块与 fastapi.status 避免命名冲突
 from .core.exchange_manager import close_shared_exchange
 from .core.security import access_key_warning
+from .core.ui_log_sink import install_ui_log_sink
 from .core.websocket_manager import log_message, manager
 from .protection.service import shutdown_protection, startup_protection
+from .reports.service import shutdown_reports, startup_reports
 from .signals.service import shutdown_signals, startup_signals
+
+# monitor 引擎（信号/仓位保护）日志转发到网页日志抽屉（幂等）
+install_ui_log_sink()
 
 IS_DOCKER = os.environ.get("IS_DOCKER")
 STATIC_FILES_DIR = Path(__file__).resolve().parent / "frontend_dist"
@@ -40,8 +45,14 @@ async def lifespan(app: FastAPI):
         await startup_protection()
     except Exception as e:
         print(f"--- [WARNING] 仓位保护启动失败（不影响交易主功能）: {e} ---")
+    # 周期报告：默认 periodic_reports 全部 enabled=False，不发起任何行情请求
+    try:
+        await startup_reports()
+    except Exception as e:
+        print(f"--- [WARNING] 周期报告启动失败（不影响交易主功能）: {e} ---")
     print("---" * 20)
     yield
+    await shutdown_reports()
     await shutdown_protection()
     await shutdown_signals()
     await close_shared_exchange()
@@ -69,6 +80,7 @@ app.include_router(rebalance.router)
 app.include_router(status_router.router)
 app.include_router(signals.router)
 app.include_router(protection.router)
+app.include_router(reports.router)
 
 
 @app.websocket("/ws")

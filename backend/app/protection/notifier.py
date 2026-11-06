@@ -10,7 +10,9 @@ from typing import Optional
 
 from loguru import logger
 
+from ..config.config import load_settings
 from ..core.websocket_manager import log_message
+from ..reports import dingtalk
 
 _LEVEL_MAP = (
     ("止盈", "success"),
@@ -40,3 +42,9 @@ def send_alert(config=None, title: str = "", message: str = "", symbol: str = "N
     except RuntimeError:
         return
     loop.create_task(log_message(text, _level_of(title)))
+    # 钉钉推送（可选）：webhook/secret 走环境变量，总开关在设置页/报告页
+    try:
+        if dingtalk.is_configured() and bool(load_settings().get('dingtalk_enabled', False)):
+            loop.create_task(dingtalk.send_markdown(f"🛡️ {title} {symbol}", text))
+    except Exception as exc:  # noqa: BLE001 - 通知失败不影响风控主循环
+        logger.debug(f"仓位保护钉钉推送调度失败: {exc}")

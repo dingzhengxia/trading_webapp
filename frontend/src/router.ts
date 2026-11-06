@@ -7,6 +7,7 @@ const TradingView = () => import('@/views/TradingView.vue')
 const ManualTradeView = () => import('@/views/ManualTradeView.vue')
 const SignalsView = () => import('@/views/SignalsView.vue')
 const ProtectionView = () => import('@/views/ProtectionView.vue')
+const ReportsView = () => import('@/views/ReportsView.vue')
 const SettingsView = () => import('@/views/SettingsView.vue')
 
 // --- 核心修复：定义路由元信息的类型 ---
@@ -49,6 +50,12 @@ const routes: Array<RouteRecordRaw> = [
     name: 'protection',
     component: ProtectionView,
     meta: { title: '仓位保护', icon: 'mdi-shield-check-outline' },
+  },
+  {
+    path: '/reports',
+    name: 'reports',
+    component: ReportsView,
+    meta: { title: '周期报告', icon: 'mdi-newspaper-variant-outline' },
   },
   {
     path: '/settings',

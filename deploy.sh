@@ -31,8 +31,24 @@ sudo touch "$CONFIG_DIR/coin_lists.json"
 # SQLite 数据库目录（/app/data/app.db）：所有设置、币种池、信号/仓位保护状态都在这里，
 # 必须挂载持久卷，否则容器重建后配置全部丢失
 sudo mkdir -p "$CONFIG_DIR/data"
+
+# 环境变量文件（交易所密钥 / 钉钉 webhook）：不进代码仓库、不进镜像，运行时注入
+ENV_FILE="$CONFIG_DIR/.env"
+if [ ! -f "$ENV_FILE" ]; then
+    sudo tee "$ENV_FILE" > /dev/null <<'ENVEOF'
+# 填入真实值后重新执行本脚本；本文件仅存在于服务器，不会进入 Git
+BINANCE_API_KEY=
+BINANCE_API_SECRET=
+DINGTALK_WEBHOOK_URL=
+DINGTALK_SECRET=
+ENVEOF
+    echo -e "${YELLOW}已创建环境变量模板 $ENV_FILE，请先填入密钥再执行部署。${NC}"
+fi
+sudo chmod 600 "$ENV_FILE"
+
 # 赋予正确的权限，确保 Docker 容器可以读写
 sudo chmod -R 777 $CONFIG_DIR
+sudo chmod 600 "$ENV_FILE"
 echo -e "${GREEN}Config directory '$CONFIG_DIR' is ready.${NC}"
 echo ""
 
@@ -77,6 +93,7 @@ sudo docker run -d \
     -p 8000:8000 \
     --restart unless-stopped \
     --name $CONTAINER_NAME \
+    --env-file "$ENV_FILE" \
     -v "$CONFIG_DIR/user_settings.json":/app/user_settings.json:rw \
     -v "$CONFIG_DIR/coin_lists.json":/app/coin_lists.json:rw \
     -v "$CONFIG_DIR/data":/app/data:rw \

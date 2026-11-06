@@ -104,6 +104,39 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     # DEFAULT_CONFIG；这里只保留空字典以允许该配置项写入 settings 表。
     # 默认 enabled=False，前端「仓位保护」页打开开关后才会启动引擎。
     'position_protection': {},
+
+    # 周期报告（自 monitor periodic_reports 并入）：默认全部关闭，开启后按周期生成
+    # 热门合约涨幅榜/放量榜/连涨榜/RSI 超买超卖，并推送到网页日志（可选钉钉）
+    'periodic_reports': [
+        {
+            'enabled': False,
+            'report_name': '4小时热点报告',
+            'run_interval': '4h',
+            'top_n_by_volume': 100,
+            'top_n_gainers': 10,
+            'min_consecutive_candles': 5,
+            'volume_ma_period': 20,
+            'top_n_volume_ratio': 10,
+            'market_sentiment': {
+                'enabled': True, 'rsi_period': 14, 'rsi_overbought': 70, 'rsi_oversold': 30,
+            },
+        },
+        {
+            'enabled': False,
+            'report_name': '每日宏观复盘',
+            'run_interval': '1d',
+            'top_n_by_volume': 100,
+            'top_n_gainers': 10,
+            'min_consecutive_candles': 3,
+            'volume_ma_period': 20,
+            'top_n_volume_ratio': 10,
+            'market_sentiment': {
+                'enabled': True, 'rsi_period': 14, 'rsi_overbought': 75, 'rsi_oversold': 25,
+            },
+        },
+    ],
+    # 钉钉推送总开关（webhook/secret 只从环境变量读取，不写入此处）
+    'dingtalk_enabled': False,
 }
 
 # 内存中全局变量
