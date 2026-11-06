@@ -1,5 +1,5 @@
 # backend/app/logic/utils.py
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple
 
 import ccxt.async_support as ccxt
 
@@ -46,3 +46,25 @@ def resolve_full_symbol(exchange: ccxt.binanceusdm, base_coin: str) -> Optional[
     """返回基础币种对应的最终交易对（USDC 优先，其次 USDT），不存在时返回 None。"""
     full_symbol, _ = resolve_symbol_details(exchange, base_coin)
     return full_symbol
+
+
+def extract_tradeable_coins(markets: Optional[dict]) -> List[str]:
+    """从 ccxt markets 中提取全部可交易的 USDⓈ-M 永续基础币种（去重排序）。
+
+    只保留 USDT/USDC 报价的线性永续（swap + linear）且未下架的合约；
+    供手动交易页把可选币种扩展到「币种池 + 全交易所」。
+    """
+    coins = set()
+    for market in (markets or {}).values():
+        if not isinstance(market, dict):
+            continue
+        if not (market.get('swap') and market.get('linear')):
+            continue
+        if market.get('active') is False:
+            continue
+        if str(market.get('quote') or '').upper() not in ('USDT', 'USDC'):
+            continue
+        base = str(market.get('base') or '').strip().upper()
+        if base:
+            coins.add(base)
+    return sorted(coins)

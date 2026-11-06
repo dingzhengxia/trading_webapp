@@ -42,6 +42,15 @@ export const useUiStore = defineStore('ui', () => {
   const showWeightDialog = ref(false)
 
   let progressResetTimer: number
+  // 停止指令兜底：后端若因交易所请求卡住而未能广播 status(false)，必须恢复按钮可用
+  let stopGuardTimer: number | undefined
+
+  const clearStopGuard = () => {
+    if (stopGuardTimer !== undefined) {
+      clearTimeout(stopGuardTimer)
+      stopGuardTimer = undefined
+    }
+  }
 
   const statusColor = computed(() => {
     if (isStopping.value) return 'orange'
@@ -116,6 +125,7 @@ export const useUiStore = defineStore('ui', () => {
 
     if (running === false) {
       isStopping.value = false
+      clearStopGuard()
       if (progress.value.is_final) {
         clearTimeout(progressResetTimer)
         progressResetTimer = window.setTimeout(hideProgress, 3000)
@@ -140,6 +150,19 @@ export const useUiStore = defineStore('ui', () => {
     if (!isRunning.value) return
     isStopping.value = true
     statusMessage.value = '正在停止...'
+    clearStopGuard()
+    // 15s 内未收到后端 "isRunning=false" 就恢复交互，避免停止按钮永久不可用
+    stopGuardTimer = window.setTimeout(() => {
+      stopGuardTimer = undefined
+      if (!isStopping.value) return
+      isStopping.value = false
+      statusMessage.value = '停止指令未确认，请重试'
+      logStore.addLog({
+        message: '停止指令在 15 秒内未得到后端确认，已恢复界面交互，请重试或检查后端日志。',
+        level: 'warning',
+        timestamp: new Date().toLocaleTimeString(),
+      })
+    }, 15000)
   }
 
   async function checkInitialStatus(): Promise<boolean> {

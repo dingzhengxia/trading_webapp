@@ -59,10 +59,10 @@
             </v-tooltip>
           </div>
 
-          <v-select
+          <v-autocomplete
             v-model="settingsStore.availableLongCoins"
-            :items="filteredLongPoolItems"
-            label="从总池中选择做多备选币种"
+            :items="availableForLongPool"
+            label="从总池中选择做多备选币种（输入即搜索）"
             multiple
             clearable
             variant="outlined"
@@ -113,15 +113,6 @@
 
             <template v-slot:prepend-item>
               <div class="d-flex align-center px-4 pt-2 pb-1">
-                <v-text-field
-                  v-model="longSearch"
-                  placeholder="搜索币种..."
-                  variant="underlined"
-                  density="compact"
-                  hide-details
-                  class="mr-2"
-                  @click.stop
-                ></v-text-field>
                 <v-switch
                   v-model="longPoolShowAll"
                   label="显示已选"
@@ -146,7 +137,7 @@
                 </template>
               </v-list-item>
             </template>
-          </v-select>
+          </v-autocomplete>
         </v-card>
       </v-col>
 
@@ -171,10 +162,10 @@
             </v-tooltip>
           </div>
 
-          <v-select
+          <v-autocomplete
             v-model="settingsStore.availableShortCoins"
-            :items="filteredShortPoolItems"
-            label="从总池中选择做空备选币种"
+            :items="availableForShortPool"
+            label="从总池中选择做空备选币种（输入即搜索）"
             multiple
             clearable
             variant="outlined"
@@ -225,15 +216,6 @@
 
             <template v-slot:prepend-item>
               <div class="d-flex align-center px-4 pt-2 pb-1">
-                <v-text-field
-                  v-model="shortSearch"
-                  placeholder="搜索币种..."
-                  variant="underlined"
-                  density="compact"
-                  hide-details
-                  class="mr-2"
-                  @click.stop
-                ></v-text-field>
                 <v-switch
                   v-model="shortPoolShowAll"
                   label="显示已选"
@@ -258,7 +240,7 @@
                 </template>
               </v-list-item>
             </template>
-          </v-select>
+          </v-autocomplete>
         </v-card>
       </v-col>
     </v-row>
@@ -282,8 +264,6 @@ const isShortPoolExpanded = ref(false)
 const longPoolShowAll = ref(false)
 const shortPoolShowAll = ref(false)
 
-const longSearch = ref('')
-const shortSearch = ref('')
 const newCoinSymbol = ref('')
 const isAddingCoin = ref(false)
 
@@ -338,20 +318,6 @@ const availableForLongPool = computed(() => {
 const availableForShortPool = computed(() => {
   const longSet = new Set(settingsStore.availableLongCoins)
   return mapToSelectItems(allAvailableCoins.value.filter((coin) => !longSet.has(coin)))
-})
-
-const filteredLongPoolItems = computed(() => {
-  if (!longSearch.value) return availableForLongPool.value
-  return availableForLongPool.value.filter((item) =>
-    item.title.toLowerCase().includes(longSearch.value.toLowerCase()),
-  )
-})
-
-const filteredShortPoolItems = computed(() => {
-  if (!shortSearch.value) return availableForShortPool.value
-  return availableForShortPool.value.filter((item) =>
-    item.title.toLowerCase().includes(shortSearch.value.toLowerCase()),
-  )
 })
 
 const selectAllCoins = (poolType: 'long' | 'short') => {

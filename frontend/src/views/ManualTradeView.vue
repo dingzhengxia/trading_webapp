@@ -15,15 +15,16 @@
               <div>· 反手 = 先按当前持仓方向<strong>全平</strong>（确认无残留）后再反向限价开仓。</div>
               <div>· 反手时若无持仓会跳过并记录 warning 日志；同一币种多空持仓并存时同样跳过。</div>
               <div>· 每行「价值」为目标名义价值（USD）；反手行的价值即反向开仓后的目标价值。</div>
+              <div>· 币种列表 = 你的币种池 + 币安全部 USDT/USDC 永续，支持输入搜索，池外币种也可直接开仓。</div>
               <div>· 执行期间不可修改/提交，任务结束后会自动刷新下方持仓。</div>
             </v-alert>
 
             <v-row>
               <v-col cols="12" md="8">
-                <v-select
+                <v-autocomplete
                   v-model="selectedCoins"
-                  :items="filteredAvailableCoins"
-                  label="选择币种（可多选）"
+                  :items="availableCoins"
+                  label="选择币种（可多选，输入即搜索）"
                   multiple
                   chips
                   closable-chips
@@ -32,25 +33,12 @@
                   variant="outlined"
                   hide-details
                   :disabled="uiStore.isRunning"
-                  :menu-props="{ maxHeight: '360px' }"
+                  :menu-props="{ maxHeight: '420px' }"
                 >
-                  <template v-slot:prepend-item>
-                    <div class="px-4 pt-2 pb-1">
-                      <v-text-field
-                        v-model="coinSearch"
-                        placeholder="搜索币种..."
-                        variant="underlined"
-                        density="compact"
-                        hide-details
-                        @click.stop
-                      ></v-text-field>
-                    </div>
-                    <v-divider></v-divider>
-                  </template>
                   <template v-slot:no-data>
                     <v-list-item title="没有匹配的币种" />
                   </template>
-                </v-select>
+                </v-autocomplete>
               </v-col>
               <v-col cols="12" md="4">
                 <v-text-field
@@ -201,26 +189,64 @@
             <v-divider class="my-4"></v-divider>
 
             <div class="d-flex align-center flex-wrap ga-2">
-              <div class="text-caption text-grey">
-                共 {{ rows.length }} 个币种，预计总价值 ${{ formatNumber(totalValue) }}
-                <span v-if="hasInvalidValue" class="text-error ml-2">存在非法价值，无法执行</span>
-              </div>
-              <v-spacer></v-spacer>
-              <v-btn
-                color="primary"
-                variant="tonal"
-                prepend-icon="mdi-play"
-                :loading="uiStore.isRunning"
-                :disabled="!canExecute"
-                @click="executeManualTrade"
-              >
-                执行手动交易
-              </v-btn>
+            <div class="text-caption text-grey">
+              共 {{ rows.length }} 个币种，预计总价值 ${{ formatNumber(totalValue) }}
+              <span v-if="hasInvalidValue" class="text-error ml-2">存在非法价值，无法执行</span>
+              <span v-if="hasUnavailable" class="text-error ml-2">存在不可用交易对，请先移除</span>
             </div>
-          </v-card-text>
-        </v-card>
-      </v-col>
-    </v-row>
+            <v-spacer></v-spacer>
+            <v-btn
+              color="primary"
+              variant="tonal"
+              prepend-icon="mdi-play"
+              :loading="uiStore.isRunning"
+              :disabled="!canExecute"
+              @click="requestExecute"
+            >
+              执行手动交易
+            </v-btn>
+          </div>
+        </v-card-text>
+      </v-card>
+    </v-col>
+  </v-row>
+
+  <!-- 执行前确认：反手/批量下单风险较高，强制二次确认 -->
+  <v-dialog v-model="showConfirm" max-width="560">
+    <v-card>
+      <v-card-title class="text-h6">确认执行手动交易</v-card-title>
+      <v-divider></v-divider>
+      <v-card-text>
+        <v-alert v-if="reverseCount > 0" type="warning" variant="tonal" density="compact" class="mb-3 text-caption">
+          包含 {{ reverseCount }} 个「反手」操作：将先按当前持仓方向全平，确认无残留后再反向限价开仓。
+        </v-alert>
+        <div class="text-caption text-grey mb-2">
+          合计 {{ rows.length }} 个币种，总名义价值 ${{ formatNumber(totalValue) }}；全部为限价 post-only 单。
+        </div>
+        <v-table density="compact">
+          <thead>
+            <tr>
+              <th class="text-left">币种</th>
+              <th class="text-left">动作</th>
+              <th class="text-right">价值 (USD)</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="row in rows" :key="`confirm-${row.symbol}`">
+              <td>{{ row.symbol }}</td>
+              <td>{{ actionTitle(row.action) }}</td>
+              <td class="text-right">${{ formatNumber(Number(row.value)) }}</td>
+            </tr>
+          </tbody>
+        </v-table>
+      </v-card-text>
+      <v-card-actions>
+        <v-spacer></v-spacer>
+        <v-btn variant="text" @click="showConfirm = false">取消</v-btn>
+        <v-btn color="primary" variant="tonal" @click="executeManualTrade">确认执行</v-btn>
+      </v-card-actions>
+    </v-card>
+  </v-dialog>
 
     <v-row class="mt-2">
       <v-col cols="12">
@@ -291,9 +317,10 @@ const actionOptions: { title: string; value: ManualTradeAction }[] = [
 
 const selectedCoins = ref<string[]>([])
 const rows = ref<ManualRow[]>([])
-const coinSearch = ref('')
 const defaultValue = ref(100)
 const resolvedSymbols = ref<Record<string, ResolvedSymbol>>({})
+// 交易所全部可交易 USDⓈ-M 基础币种（进入页面时拉取一次；失败时回退为仅币种池）
+const exchangeCoins = ref<string[]>([])
 
 let resolveSequence = 0
 // 持久化预设：是否已完成恢复、是否正在保存（防止恢复过程触发回写）
@@ -323,7 +350,8 @@ const savePreset = async (): Promise<void> => {
   if (!presetHydrated || presetSaving) return
   presetSaving = true
   try {
-    await api.post('/api/settings', { manual_trade_preset: sanitizePreset() })
+    // 通过 store 统一写入：同时更新内存副本，避免其它页面保存整包设置时把旧预设写回
+    await settingsStore.patchSettings({ manual_trade_preset: sanitizePreset() })
   } catch (error: unknown) {
     console.warn('保存手动交易预设失败:', getErrorMessage(error))
   } finally {
@@ -374,19 +402,13 @@ const restorePreset = async (): Promise<void> => {
   presetHydrated = true
 }
 
-// 可用币种：优先使用总池；为空时合并多头/空头备选池
+// 可选币种 = 总池（为空时合并多/空备选池）∪ 交易所全部 USDⓈ-M 永续
 const availableCoins = computed(() => {
-  const base =
+  const pool =
     settingsStore.availableCoins.length > 0
       ? settingsStore.availableCoins
       : [...settingsStore.availableLongCoins, ...settingsStore.availableShortCoins]
-  return [...new Set(base)].sort()
-})
-
-const filteredAvailableCoins = computed(() => {
-  const keyword = coinSearch.value.trim().toUpperCase()
-  if (!keyword) return availableCoins.value
-  return availableCoins.value.filter((coin) => coin.toUpperCase().includes(keyword))
+  return [...new Set([...pool, ...exchangeCoins.value])].sort()
 })
 
 const isDefaultValueValid = computed(() => {
@@ -401,9 +423,33 @@ const isRowValueValid = (row: ManualRow): boolean => {
 
 const hasInvalidValue = computed(() => rows.value.some((row) => !isRowValueValid(row)))
 
-const canExecute = computed(
-  () => rows.value.length > 0 && !hasInvalidValue.value && !uiStore.isRunning,
+// 交易对不可用（如币安无该合约 / 解析失败）时禁止提交，避免后端逐条失败产生部分成交
+const hasUnavailable = computed(() =>
+  rows.value.some((row) => {
+    const resolved = resolvedSymbols.value[row.symbol]
+    return !!resolved && !resolved.available
+  }),
 )
+
+const canExecute = computed(
+  () =>
+    rows.value.length > 0 &&
+    !hasInvalidValue.value &&
+    !hasUnavailable.value &&
+    !uiStore.isRunning,
+)
+
+const showConfirm = ref(false)
+
+const reverseCount = computed(() => rows.value.filter((row) => row.action === 'reverse').length)
+
+const actionTitle = (action: ManualTradeAction): string =>
+  actionOptions.find((option) => option.value === action)?.title ?? action
+
+const requestExecute = (): void => {
+  if (!canExecute.value) return
+  showConfirm.value = true
+}
 
 const totalValue = computed(() =>
   rows.value.reduce((sum, row) => (isRowValueValid(row) ? sum + Number(row.value) : sum), 0),
@@ -485,6 +531,7 @@ const executeManualTrade = (): void => {
   if (isDefaultValueValid.value) {
     payload.default_value = Number(defaultValue.value)
   }
+  showConfirm.value = false
   uiStore.launchTask('/api/trading/manual', payload, '手动交易', items.length)
 }
 
@@ -538,8 +585,19 @@ watch(
   },
 )
 
+const fetchExchangeCoins = async (): Promise<void> => {
+  try {
+    const response = await api.get<{ coins: string[] }>('/api/trading/symbols')
+    exchangeCoins.value = Array.isArray(response.data.coins) ? response.data.coins : []
+  } catch (error: unknown) {
+    // 拉取失败不阻塞页面：回退为仅显示币种池
+    console.warn('获取交易所币种列表失败，仅使用币种池:', getErrorMessage(error))
+  }
+}
+
 onMounted(() => {
   void restorePreset()
+  void fetchExchangeCoins()
   if (positionStore.positions.length === 0) {
     void positionStore.fetchPositions()
   }

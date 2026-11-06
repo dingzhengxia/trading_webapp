@@ -1,4 +1,5 @@
 # backend/app/config/config.py (完整代码)
+import copy
 import os
 from pathlib import Path
 from typing import List, Dict, Any
@@ -140,7 +141,8 @@ def load_settings() -> Dict[str, Any]:
         config['api_secret'] = os.environ.get('BINANCE_API_SECRET', config.get('api_secret', ''))
 
         _cached_settings = config
-        return _cached_settings.copy()
+        # 深拷贝：嵌套的 list/dict 不能与缓存共享引用，否则调用方原地修改会污染全局配置
+        return copy.deepcopy(_cached_settings)
 
 
 def save_settings(current_config: Dict[str, Any]) -> bool:
@@ -151,10 +153,10 @@ def save_settings(current_config: Dict[str, Any]) -> bool:
     try:
         settings_to_write = {key: value for key, value in current_config.items() if key in DEFAULT_CONFIG}
 
-        for key, value in settings_to_write.items():
-            database.set_value('settings', key, value)
+        # 单事务批量写入：避免逐键 commit 导致“杠杆已改、止损未改”的半套配置
+        database.set_many('settings', settings_to_write)
 
-        print(f"--- [INFO] User settings successfully saved to SQLite. ---")
+        print("--- [INFO] User settings successfully saved to SQLite. ---")
 
         with _settings_lock:
             _cached_settings = None

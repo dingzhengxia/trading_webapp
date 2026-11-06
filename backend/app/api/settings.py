@@ -13,12 +13,77 @@ from ..models.schemas import AddCoinRequest, CoinPoolsUpdate, SettingsResponse
 
 router = APIRouter(prefix="/api/settings", tags=["Settings"], dependencies=[Depends(verify_api_key)])
 
+# 不回传明文的敏感字段
+SECRET_FIELDS = ("api_key", "api_secret")
+MASK_MARK = "****"
+
+# 交易相关数值项的安全范围（下限, 上限, 是否整数）
+# 这些字段直接进入下单/风控计算，接口可能被绕过前端直接调用，必须在服务端校验。
+NUMERIC_RANGES: Dict[str, tuple] = {
+    'leverage': (1, 125, True),
+    'total_long_position_value': (0, 1e9, False),
+    'total_short_position_value': (0, 1e9, False),
+    'long_stop_loss_percentage': (0, 1000, False),
+    'long_take_profit_percentage': (0, 1000, False),
+    'short_stop_loss_percentage': (0, 1000, False),
+    'short_take_profit_percentage': (0, 1000, False),
+    'long_trailing_stop_callback_rate': (0.1, 20, False),
+    'short_trailing_stop_callback_rate': (0.1, 20, False),
+    'open_maker_retries': (0, 10, True),
+    'close_maker_retries': (0, 10, True),
+    'open_order_fill_timeout_seconds': (1, 600, True),
+    'close_order_fill_timeout_seconds': (1, 600, True),
+    'signal_auto_trade_value_usd': (1, 1e7, False),
+    'signal_auto_trade_confirmations': (1, 10, True),
+    'signal_auto_trade_max_positions': (1, 100, True),
+    'signal_auto_trade_cooldown_seconds': (0, 86400, True),
+}
+
+
+def _validate_numeric_settings(updated: Dict[str, Any]) -> None:
+    """校验交易安全相关数值；非法值返回 400，避免 "" / 0 杠杆等写入数据库。"""
+    for key, (low, high, is_int) in NUMERIC_RANGES.items():
+        if key not in updated:
+            continue
+        raw = updated[key]
+        try:
+            # bool 是 int 子类，需显式排除
+            if isinstance(raw, bool):
+                raise ValueError
+            number = float(raw)
+            if is_int and number != int(number):
+                raise ValueError
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail=f"配置项 {key} 必须是有效数字。")
+        if not (low <= number <= high):
+            raise HTTPException(
+                status_code=400, detail=f"配置项 {key} 超出允许范围 [{low}, {high}]。")
+        updated[key] = int(number) if is_int else number
+
+
+def _mask_secret(value: Any) -> str:
+    """掩码展示密钥：保留首尾各 4 位，便于用户确认是哪一把 Key。"""
+    text = str(value or "")
+    if not text:
+        return ""
+    if len(text) <= 8:
+        return MASK_MARK
+    return f"{text[:4]}{MASK_MARK}{text[-4:]}"
+
+
+def _masked_settings(settings: Dict[str, Any]) -> Dict[str, Any]:
+    masked = dict(settings)
+    for field in SECRET_FIELDS:
+        if masked.get(field):
+            masked[field] = _mask_secret(masked[field])
+    return masked
+
 
 @router.get("", response_model=SettingsResponse)
 def get_settings(settings: Dict[str, Any] = Depends(get_settings_dependency)):
-    """获取所有用户配置和可选币种列表。"""
+    """获取所有用户配置和可选币种列表（交易所密钥以掩码返回，不回传明文）。"""
     return {
-        "user_settings": settings,
+        "user_settings": _masked_settings(settings),
         "available_coins": app_config.AVAILABLE_COINS,
         "available_long_coins": app_config.AVAILABLE_LONG_COINS,
         "available_short_coins": app_config.AVAILABLE_SHORT_COINS,
@@ -30,11 +95,21 @@ def update_settings(
         updated_settings: Dict[str, Any] = Body(...),
         current_settings: Dict[str, Any] = Depends(get_settings_dependency)
 ):
-    """保存用户配置到 user_settings.json 文件。"""
+    """保存用户配置到 SQLite。
+
+    掩码值（含 ****）视为“未修改”，保持原密钥不变，避免前端回写掩码覆盖真实 Key。
+    """
+    for field in SECRET_FIELDS:
+        value = updated_settings.get(field)
+        if isinstance(value, str) and MASK_MARK in value:
+            updated_settings.pop(field, None)
+
+    _validate_numeric_settings(updated_settings)
+
     current_settings.update(updated_settings)
     if app_config.save_settings(current_settings):
         return {"message": "Settings saved successfully"}
-    return {"error": "Failed to save settings"}
+    raise HTTPException(status_code=500, detail="保存配置失败，请查看服务器日志。")
 
 
 @router.post("/update-coin-pools", status_code=204)

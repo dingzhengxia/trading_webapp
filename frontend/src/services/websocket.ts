@@ -12,6 +12,8 @@ class WebSocketService {
   private ws: WebSocket | null = null
   private isConnecting: boolean = false
   private reconnectTimeoutId?: number
+  private reconnectAttempts = 0
+  private readonly MAX_RECONNECT_DELAY = 30000
 
   // REFACTOR: 添加心跳和连接超时相关属性
   private heartbeatIntervalId?: number
@@ -75,12 +77,19 @@ class WebSocketService {
     this.ws.onopen = () => {
       console.log('[WS] ✅ Connection established.')
       this.isConnecting = false
+      this.reconnectAttempts = 0
 
       const uiStore = useUiStore()
+      const positionStore = usePositionStore()
       if (!uiStore.isRunning) {
         uiStore.setStatus('已连接')
       }
       this.startHealthChecks() // 连接成功后启动健康检查
+
+      // 断线期间错过的持仓变更/任务结束事件无法重放，重连后必须做一次全量对账，
+      // 否则页面可能继续显示已被平掉的仓位。
+      void positionStore.fetchPositions()
+      void uiStore.checkInitialStatus()
     }
 
     this.ws.onmessage = (event) => {
@@ -118,7 +127,6 @@ class WebSocketService {
     }
 
     this.ws.onclose = () => {
-      console.error('[WS] ❌ Connection closed. Reconnecting in 5s...')
       this.stopHealthChecks() // 连接关闭时必须停止所有健康检查
       const uiStore = useUiStore()
 
@@ -129,8 +137,12 @@ class WebSocketService {
 
       this.ws = null
       this.isConnecting = false
+      // 指数退避重连：1s → 2s → 4s ... 上限 30s，避免后端重启时刷屏
+      const delay = Math.min(1000 * 2 ** this.reconnectAttempts, this.MAX_RECONNECT_DELAY)
+      this.reconnectAttempts += 1
+      console.warn(`[WS] ❌ Connection closed. Reconnecting in ${delay}ms...`)
       clearTimeout(this.reconnectTimeoutId)
-      this.reconnectTimeoutId = window.setTimeout(() => this.connect(), 5000)
+      this.reconnectTimeoutId = window.setTimeout(() => this.connect(), delay)
     }
 
     this.ws.onerror = (event) => {

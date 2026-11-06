@@ -1,7 +1,7 @@
 // frontend/src/stores/authStore.ts (最终安全版)
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
-import { useSettingsStore } from './settingsStore' // 导入 settings store 用于验证
+import api from '@/services/api'
 
 export const useAuthStore = defineStore('auth', () => {
   const accessKey = ref(localStorage.getItem('access_key') || '')
@@ -18,23 +18,20 @@ export const useAuthStore = defineStore('auth', () => {
     // 步骤 1: 临时将 key 存入内存中的 ref，以便下一个 API 请求可以使用它
     accessKey.value = newKey
 
-    // 步骤 2: 尝试执行一个需要认证的 API 请求作为“探针”
-    const settingsStore = useSettingsStore()
-
+    // 步骤 2: 用最简单的受保护接口做探针。
+    // 不能用 settingsStore.fetchSettings()：它内部 catch 掉错误，永远 resolve，
+    // 会导致无效 Key 也被写入 localStorage，之后每次刷新都带脏 Key 反复 403。
     try {
-      // fetchSettings() 会自动带上我们刚刚临时设置的 key
-      await settingsStore.fetchSettings()
+      await api.get('/api/status')
 
-      // 步骤 3: 如果上面的请求没有抛出错误 (即成功返回 200)，说明 key 是有效的
-      // 此时，才将 key 写入 localStorage 持久化
+      // 步骤 3: 请求成功（200）才把 Key 持久化
       localStorage.setItem('access_key', newKey)
       isLoading.value = false
       return true
     } catch (error) {
-      // 步骤 4: 如果请求失败 (例如返回403或请求本身就因无效字符失败)
-      // api.ts 中的拦截器会调用 clearAccessKey()，自动清空内存和 localStorage
-      // 我们在这里只需要处理最终状态
+      // 步骤 4: 403/网络错误 → 清除内存与 localStorage，返回失败
       console.error('Key validation failed:', error)
+      clearAccessKey()
       isLoading.value = false
       return false
     }

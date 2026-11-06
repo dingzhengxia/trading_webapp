@@ -29,17 +29,22 @@ async def cancel_all_orders_async(exchange: ccxt.binanceusdm, symbol: str, async
 
     ccxt 的 Binance 条件单需要传 {'stop': True} 才会走到撤销条件单的接口，
     因此这里保留两次调用；P1-7 已合并原先重复的两层包装与 3 次无谓循环。
+
+    返回值：两次调用都成功才为 True。调用方在下单前应检查返回值，
+    撤单失败时不得继续挂新单，否则会与旧条件单叠加。
     """
+    ok = True
     for stop_params in (None, {'stop': True}):
         try:
             if stop_params is None:
                 await exchange.cancel_all_orders(symbol)
             else:
                 await exchange.cancel_all_orders(symbol, stop_params)
-        except Exception:
-            # 单次撤销失败不阻塞主流程，最终以交易所持仓/挂单状态为准
-            pass
-    return True
+        except Exception as e:
+            ok = False
+            if async_logger:
+                await async_logger(f"⚠️ {symbol} 撤销挂单失败: {e}", "warning")
+    return ok
 
 
 async def _place_trailing_stop_order(
@@ -139,21 +144,43 @@ async def set_tp_sl_for_position_async(exchange: ccxt.binanceusdm, position: Pos
     """
     full_symbol = position.full_symbol
 
-    # 1. 启动前先清理该交易对上的历史挂单，避免重复/超量条件单
-    await cancel_all_orders_async(exchange, full_symbol, async_logger)
-
-    if stop_event.is_set():
-        return False
-
     is_long = str(position.side).lower() == constants.SIDE_LONG
     side_key = constants.SIDE_LONG if is_long else constants.SIDE_SHORT
     exit_side = constants.ORDER_SIDE_SELL if is_long else constants.ORDER_SIDE_BUY
 
-    # 2. 移动止盈分支保持原行为：优先且仅挂 TRAILING_STOP_MARKET
-    if config.get(f'enable_{side_key}_trailing_stop', False):
+    trailing_enabled = bool(config.get(f'enable_{side_key}_trailing_stop', False))
+    fixed_enabled = bool(config.get(f'enable_{side_key}_sl_tp', False))
+
+    # 1. 未启用任何保护：保持现状，不撤销已有挂单（P0：曾因先撤单后判断开关而清空保护）
+    if not trailing_enabled and not fixed_enabled:
+        await async_logger(
+            f"ℹ️ {position.symbol} 未启用止盈止损，保持现有挂单不变。", "info")
+        return True
+
+    contracts = float(position.contracts or 0)
+    if contracts <= 0:
+        await async_logger(f"⚠️ {position.symbol} 仓位数量无效，跳过止盈止损。", "warning")
+        return False
+
+    entry_price = float(position.entry_price or 0)
+    if not trailing_enabled and entry_price <= 0:
+        await async_logger(f"⚠️ {position.symbol} 入场价无效，跳过止盈止损。", "warning")
+        return False
+
+    # 2. 确认要重挂后才清理历史挂单；撤单失败则中止，避免新旧条件单叠加
+    if not await cancel_all_orders_async(exchange, full_symbol, async_logger):
+        await async_logger(
+            f"❌ {position.symbol} 撤销历史挂单失败，已中止本次止盈止损设置（避免条件单叠加）。", "error")
+        return False
+
+    if stop_event.is_set():
+        return False
+
+    # 3. 移动止盈分支保持原行为：优先且仅挂 TRAILING_STOP_MARKET
+    if trailing_enabled:
         callback_rate = config.get(f'{side_key}_trailing_stop_callback_rate', 1.0)
         res = await _place_trailing_stop_order(
-            exchange, full_symbol, exit_side, position.contracts, callback_rate, async_logger
+            exchange, full_symbol, exit_side, contracts, callback_rate, async_logger
         )
         if isinstance(res, dict) and res.get('id'):
             info = res.get('info') or {}
@@ -162,18 +189,10 @@ async def set_tp_sl_for_position_async(exchange: ccxt.binanceusdm, position: Pos
             return True
         return False
 
-    # 3. 固定止盈止损（enable_{side}_sl_tp 关闭时不下单）
-    if not config.get(f'enable_{side_key}_sl_tp', False):
-        return True
-
+    # 4. 固定止盈止损
     leverage = float(config.get('leverage', 1) or 1)
     if leverage <= 0:
         leverage = 1.0
-    entry_price = float(position.entry_price or 0)
-    contracts = float(position.contracts or 0)
-    if entry_price <= 0 or contracts <= 0:
-        await async_logger(f"⚠️ {position.symbol} 入场价或仓位数量无效，跳过止盈止损。", "warning")
-        return False
 
     success = True
 

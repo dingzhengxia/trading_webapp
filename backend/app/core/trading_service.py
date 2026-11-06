@@ -61,10 +61,18 @@ class TradingService:
                               "success")
             await update_status(f"'{task_name}' 已结束", is_running=False)
 
+    @staticmethod
+    def _discard_coro(task_coro: Awaitable) -> None:
+        """任务被拒绝时关闭未 await 的协程，避免 "coroutine was never awaited" 警告与资源泄漏。"""
+        close = getattr(task_coro, "close", None)
+        if callable(close):
+            close()
+
     def _start_task(self, task_name: str, task_coro: Awaitable, background_tasks: BackgroundTasks,
                     request_id: Optional[str] = None):
         with self._lock:
             if self._is_running:
+                self._discard_coro(task_coro)
                 if request_id and request_id == self._last_request_id:
                     return {"message": "重复的任务请求已被忽略。"}
                 raise HTTPException(status_code=400, detail="已有任务在运行中，请稍后再试。")
@@ -148,12 +156,22 @@ class TradingService:
         """
         with self._lock:
             if self._is_running:
+                self._discard_coro(task_coro)
                 return None
             self._is_running = True
             self._stop_event.clear()
             self._last_request_id = request_id
             self._task_progress = {"task_name": task_name}
-        asyncio.get_running_loop().create_task(self._execute_and_log_task(task_name, task_coro))
+        try:
+            asyncio.get_running_loop().create_task(self._execute_and_log_task(task_name, task_coro))
+        except RuntimeError:
+            # 无运行中的事件循环：回滚标志位，否则后续所有交易任务都会被永久拒绝
+            with self._lock:
+                self._is_running = False
+                self._task_progress = {}
+                self._last_request_id = None
+            self._discard_coro(task_coro)
+            raise
         return {"message": f"任务 '{task_name}' 已成功提交到后台。"}
 
     async def auto_open_from_signal(self, signal: Dict[str, Any], config: Dict[str, Any]) -> bool:

@@ -78,9 +78,11 @@ class MarketDataService:
             fut.set_result(data)
             self._ohlcv_cache[key] = (time.monotonic(), data)
             return data
-        except Exception as exc:
+        except BaseException as exc:
+            # CancelledError 属于 BaseException：必须把取消传给等待方，
+            # 否则共享 Future 永远不会完成，所有 await shield(fut) 的协程会永久挂起。
             if not fut.done():
-                fut.set_exception(exc)
+                fut.set_exception(exc if isinstance(exc, Exception) else asyncio.CancelledError())
             raise
         finally:
             self._ohlcv_inflight.pop(key, None)

@@ -113,3 +113,67 @@ def test_no_market_order_is_ever_submitted(fake_exchange, async_logger, stop_eve
     order_types = [call["type"] for call in fake_exchange.create_order_calls]
     assert order_types, "expected at least one order"
     assert all(order_type == "limit" for order_type in order_types), order_types
+
+
+def test_value_mode_recomputes_quantity_after_price_move(fake_exchange, async_logger, stop_event, fast_sleep):
+    """比率回归：价值模式重试时必须按「剩余价值 / 当前价」重算数量。
+
+    首轮盘口 bid=100，部分成交后超时撤单；第二轮价格涨到 bid=125。
+    目标价值 100 USD：首轮成交 0.4 × 100 = 40 USD；剩余 60 USD 应按新价
+    重算为 60/125 = 0.48（而不是沿用旧价算出的 0.6）。
+    """
+    books = iter([
+        {"bids": [[100.0, 10.0]], "asks": [[100.5, 10.0]]},
+        {"bids": [[125.0, 10.0]], "asks": [[125.5, 10.0]]},
+    ])
+    fake_exchange._order_book = lambda symbol: next(books)
+    fake_exchange._order_statuses = {
+        "fake-1": [{"status": "open", "amount": 1.0, "filled": 0.4, "remaining": 0.6}],
+        "fake-2": [{"status": "closed", "amount": 0.48, "filled": 0.48, "remaining": 0.0}],
+    }
+
+    ok = _run(_execute_maker_order_with_retry_async(
+        fake_exchange, SYMBOL, "buy", {}, 0.05, 2, async_logger, stop_event, value_to_trade=100.0,
+    ))
+
+    assert ok is True
+    calls = fake_exchange.create_order_calls
+    assert len(calls) == 2, calls
+    _assert_limit_post_only(calls[0])
+    _assert_limit_post_only(calls[1])
+    # 首轮：100 USD / 100 = 1.0
+    assert float(calls[0]["amount"]) == pytest.approx(1.0)
+    assert float(calls[0]["price"]) == pytest.approx(100.0)
+    # 重试轮：剩余 60 USD / 新价 125 = 0.48，而不是固定的 0.6
+    assert float(calls[1]["amount"]) == pytest.approx(0.48, abs=1e-9), (
+        "retry must recompute quantity from remaining value at the new price: %r" % (calls[1],)
+    )
+    assert float(calls[1]["price"]) == pytest.approx(125.0)
+
+
+def test_value_mode_final_notional_matches_target_on_fills(fake_exchange, async_logger, stop_event, fast_sleep):
+    """价值模式部分成交 + 最低下单量截断后，累计名义价值应贴合目标值。"""
+    books = iter([
+        {"bids": [[100.0, 10.0]], "asks": [[100.5, 10.0]]},
+        {"bids": [[80.0, 10.0]], "asks": [[80.5, 10.0]]},
+    ])
+    fake_exchange._order_book = lambda symbol: next(books)
+    fake_exchange._order_statuses = {
+        # 首轮 1.0 只成交 0.9（名义 90 USD），第二轮价格跌到 80 →
+        # 剩余 10 USD / 80 = 0.125，全部成交（名义 10 USD）
+        "fake-1": [{"status": "open", "amount": 1.0, "filled": 0.9, "remaining": 0.1}],
+        "fake-2": [{"status": "closed", "amount": 0.125, "filled": 0.125, "remaining": 0.0}],
+    }
+
+    ok = _run(_execute_maker_order_with_retry_async(
+        fake_exchange, SYMBOL, "buy", {}, 0.05, 2, async_logger, stop_event, value_to_trade=100.0,
+    ))
+
+    assert ok is True
+    calls = fake_exchange.create_order_calls
+    assert len(calls) == 2
+    assert float(calls[1]["amount"]) == pytest.approx(0.125, abs=1e-9), calls
+    assert float(calls[1]["price"]) == pytest.approx(80.0)
+    # 总名义价值 = 0.9×100 + 0.125×80 = 100.0
+    total_notional = 0.9 * 100.0 + 0.125 * 80.0
+    assert total_notional == pytest.approx(100.0)

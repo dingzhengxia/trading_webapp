@@ -96,9 +96,12 @@ async def fetch_positions_with_pnl_async(exchange: ccxt.binanceusdm, leverage: i
         if signed_contracts == 0:
             continue
 
+        # breakEvenPrice 在部分场景返回 "0"，不能仅用 None 判断，否则入场价恒为 0 导致 SL/TP 被跳过
         entry_price = _to_float(info.get('breakEvenPrice'))
-        if entry_price is None:
+        if entry_price is None or entry_price <= 0:
             entry_price = _to_float(raw_pos.get('entryPrice'), 0.0) or 0.0
+        if entry_price <= 0:
+            entry_price = _to_float(info.get('entryPrice'), 0.0) or 0.0
 
         mark_price = _to_float(info.get('markPrice'))
         if mark_price is None:
@@ -178,8 +181,10 @@ async def close_position_async(exchange: ccxt.binanceusdm, full_symbol_to_close:
             None,
         )
         if not target_pos:
-            await async_logger(f"平仓 {full_symbol_to_close} 时未找到持仓，可能已被手动关闭。", "info")
-            return True
+            # 返回 False（而非 True）：调用方会广播 position_closed 并让前端乐观删除仓位，
+            # 未实际平仓时不能报告成功；是否存在仓位以上一次持仓查询为准。
+            await async_logger(f"平仓 {full_symbol_to_close} 时未找到持仓，可能已被手动关闭。", "warning")
+            return False
 
         info = target_pos.get('info') or {}
         pos_amt = _to_float(info.get('positionAmt'))
@@ -187,15 +192,18 @@ async def close_position_async(exchange: ccxt.binanceusdm, full_symbol_to_close:
             contracts = abs(_to_float(target_pos.get('contracts'), 0.0) or 0.0)
             pos_amt = contracts if str(target_pos.get('side') or '').lower() == constants.SIDE_LONG else -contracts
         if pos_amt == 0:
-            await async_logger(f"平仓 {full_symbol_to_close} 时持仓数量为 0，跳过。", "info")
-            return True
+            await async_logger(f"平仓 {full_symbol_to_close} 时持仓数量为 0，跳过。", "warning")
+            return False
 
         config = load_settings()
         close_side = constants.ORDER_SIDE_SELL if pos_amt > 0 else constants.ORDER_SIDE_BUY
-        amount_to_close = _amount_to_precision(exchange, full_symbol_to_close, abs(pos_amt) * ratio)
+        raw_close_amount = abs(pos_amt) * ratio
+        amount_to_close = _amount_to_precision(exchange, full_symbol_to_close, raw_close_amount)
         if amount_to_close <= 0:
-            await async_logger(f"计算出的平仓数量为0，跳过 {full_symbol_to_close}。", "info")
-            return True
+            await async_logger(
+                f"❌ 计算出的平仓数量为 0（目标 {raw_close_amount}），无法平仓 {full_symbol_to_close}；"
+                f"请检查比例/最小下单量。", "error")
+            return False
 
         close_timeout = int(config.get('close_order_fill_timeout_seconds', 12) or 12)
         close_retries = int(config.get('close_maker_retries', 3) or 3)
@@ -274,6 +282,12 @@ async def _execute_maker_order_with_retry_async(exchange: ccxt.binanceusdm, symb
 
     P0-3：记录累计成交量，超时撤单后重试只下"目标数量 - 已成交量"的剩余量，
     剩余量低于最小下单量时停止，确保不会产生超额敞口。
+
+    比率修复：按价值（value_to_trade）开仓时，数量不再按第一次的盘口价一次性
+    固定——那会导致重试时若价格已变动，实际成交名义价值偏离设定值（价格涨了
+    开多、价格跌了开空）。现在每轮尝试都按「剩余价值 / 当前盘口价」重算数量，
+    并用各轮的限价精确累计已成交名义价值（post-only 单作为 maker 恰好按限价
+    成交），保证最终名义价值始终贴合设定值。
     """
     if contracts_to_trade is None and not value_to_trade:
         raise ValueError("下单数量或下单价值必须提供其一。")
@@ -281,7 +295,9 @@ async def _execute_maker_order_with_retry_async(exchange: ccxt.binanceusdm, symb
     params = dict(params or {})
     side = str(side).lower()
     target_amount: Optional[float] = float(contracts_to_trade) if contracts_to_trade else None
+    target_value: Optional[float] = float(value_to_trade) if value_to_trade else None
     total_filled = 0.0
+    filled_notional = 0.0
     max_attempts = max(int(retries), 0) + 1
     order_fill_timeout = float(timeout)
 
@@ -299,23 +315,36 @@ async def _execute_maker_order_with_retry_async(exchange: ccxt.binanceusdm, symb
             if price <= 0:
                 raise RetriableOrderError(f"{symbol} 盘口价格无效: {price}")
 
-            if target_amount is None:
-                target_amount = _amount_to_precision(exchange, symbol, float(value_to_trade) / price)
-                if target_amount <= 0:
-                    raise ValueError(f"根据价值 {value_to_trade} 计算出的下单数量为 0。")
-
-            remaining = _amount_to_precision(exchange, symbol, target_amount - total_filled)
+            if target_amount is not None:
+                # 数量模式（平仓）：目标数量固定，只补未成交的剩余量
+                remaining = _amount_to_precision(exchange, symbol, target_amount - total_filled)
+            else:
+                # 价值模式（开仓）：按剩余名义价值与当前价重算数量
+                remaining_value = (target_value or 0.0) - filled_notional
+                if remaining_value <= 1e-9:
+                    await async_logger(
+                        f"✅ {symbol} 已累计成交名义价值 {filled_notional:.2f}"
+                        f"/{target_value:.2f} USD，无需继续下单。", "success")
+                    return True
+                remaining = _amount_to_precision(exchange, symbol, remaining_value / price)
             if remaining <= 0:
-                await async_logger(
-                    f"✅ {symbol} 已按目标数量全部成交（{total_filled}/{target_amount}），无需继续下单。", "success")
-                return True
+                if target_amount is not None or filled_notional > 1e-12:
+                    await async_logger(
+                        f"✅ {symbol} 已按目标全部成交（已成交名义价值 "
+                        f"{filled_notional:.2f}/{target_value if target_value is not None else '-'} USD），无需继续下单。",
+                        "success")
+                    return True
+                raise ValueError(f"根据价值 {target_value} 计算出的下单数量为 0。")
 
             min_amount = _min_order_amount(exchange, symbol)
             if min_amount and remaining < min_amount:
                 if total_filled > 1e-12:
+                    progress = (f"{filled_notional:.2f}/{target_value:.2f} USD"
+                                if target_value is not None
+                                else f"{total_filled}/{target_amount}")
                     await async_logger(
                         f"⚠️ {symbol} 剩余数量 {remaining} 低于最小下单量 {min_amount}，停止重试"
-                        f"（已成交 {total_filled}/{target_amount}，避免超额敞口）。", "warning")
+                        f"（已成交 {progress}，避免超额敞口）。", "warning")
                     return True
                 raise ValueError(f"计算数量 {remaining} 小于最小下单量 {min_amount}。")
 
@@ -344,21 +373,34 @@ async def _execute_maker_order_with_retry_async(exchange: ccxt.binanceusdm, symb
                 await asyncio.sleep(2)
 
             if timed_out:
+                # P0：撤单失败意味着订单可能仍在簿上，若继续重下会造成双倍敞口 → 立即中止
                 try:
                     await exchange.cancel_order(order_id, symbol)
-                except Exception:
-                    pass
+                except Exception as cancel_error:
+                    await async_logger(
+                        f"❌ {symbol} 订单 {order_id} 撤单失败（{cancel_error}），"
+                        f"已中止本次执行以避免重复下单，请人工核对挂单。", "error")
+                    return False
                 # 撤单后重新读取最终成交量，避免漏算撤单前成交的部分
                 try:
                     fetched_order = await exchange.fetch_order(order_id, symbol)
                     order_filled = max(order_filled, _to_float((fetched_order or {}).get('filled'), 0.0) or 0.0)
-                except Exception:
-                    pass
+                except Exception as fetch_error:
+                    await async_logger(
+                        f"❌ {symbol} 撤单后无法确认订单 {order_id} 的成交状态（{fetch_error}），"
+                        f"已中止本次执行，请人工核对仓位。", "error")
+                    return False
 
             total_filled += order_filled
+            filled_notional += order_filled * price
 
             if not timed_out:
-                await async_logger(f"✅ {symbol} 订单 {order_id} 已成交！", "success")
+                if target_value is not None:
+                    await async_logger(
+                        f"✅ {symbol} 订单 {order_id} 已成交！"
+                        f"名义价值 {filled_notional:.2f}/{target_value:.2f} USD。", "success")
+                else:
+                    await async_logger(f"✅ {symbol} 订单 {order_id} 已成交！", "success")
                 return True
 
             raise RetriableOrderError(
@@ -450,8 +492,8 @@ async def process_order_with_sl_tp_async(exchange: ccxt.binanceusdm, plan: dict,
     if stop_event.is_set():
         return False
 
-    # P0-2：优先按 full_symbol（必要时加上方向）精确匹配刚成交的仓位，
-    # 避免同币种 USDC/USDT 合约或历史残留仓位导致止盈止损挂错。
+    # P0-2：只按 full_symbol + 方向精确匹配刚成交的仓位。
+    # 不再按 base coin 猜测：新单尚未反映到持仓接口时，猜测会命中旧仓/反向仓并挂错 SL/TP。
     expected_side = constants.SIDE_LONG if side == constants.ORDER_SIDE_BUY else constants.SIDE_SHORT
     final_pos = None
     for _ in range(5):
@@ -463,10 +505,6 @@ async def process_order_with_sl_tp_async(exchange: ccxt.binanceusdm, plan: dict,
              if p.full_symbol == full_symbol and str(p.side).lower() == expected_side),
             None,
         )
-        if not final_pos:
-            final_pos = next((p for p in positions if p.full_symbol == full_symbol), None)
-        if not final_pos:
-            final_pos = next((p for p in positions if str(p.symbol).upper() == base_coin), None)
         if final_pos:
             break
         await asyncio.sleep(2)
@@ -477,7 +515,13 @@ async def process_order_with_sl_tp_async(exchange: ccxt.binanceusdm, plan: dict,
     # 将 leverage 替换为实际成功的杠杆，保证金百分比计算依赖它
     effective_config = dict(config)
     effective_config['leverage'] = actual_leverage
-    await set_tp_sl_for_position_async(exchange, final_pos, effective_config, async_logger, stop_event)
+    sltp_ok = await set_tp_sl_for_position_async(
+        exchange, final_pos, effective_config, async_logger, stop_event)
+    if not sltp_ok:
+        await async_logger(
+            f"❌ {base_coin} 已开仓但止盈止损设置失败（交易对: {full_symbol}），"
+            f"当前仓位处于无保护状态，请立即人工处理。", "error")
+        return False
 
     await async_logger(
         f"✅ {base_coin} 订单流程完全成功！(交易对: {full_symbol}, 杠杆: {actual_leverage}x)", "success")

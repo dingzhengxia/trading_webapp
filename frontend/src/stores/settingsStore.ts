@@ -101,8 +101,15 @@ export const useSettingsStore = defineStore('settings', () => {
 
   async function saveGeneralSettings(newSettings: UserSettings | null) {
     if (!newSettings) return
+    // 过滤空字符串/NaN：输入框清空时 Vuetify 给出 ''，若原样落库会让杠杆、止损百分比变成非法值
+    const payload: Record<string, unknown> = {}
+    for (const [key, value] of Object.entries(newSettings)) {
+      if (value === '' || value === null || value === undefined) continue
+      if (typeof value === 'number' && !Number.isFinite(value)) continue
+      payload[key] = value
+    }
     try {
-      await api.post('/api/settings', newSettings)
+      await api.post('/api/settings', payload)
       uiStore.logStore.addLog({
         message: '通用配置已自动保存。',
         level: 'success',
@@ -118,6 +125,25 @@ export const useSettingsStore = defineStore('settings', () => {
     }
   }
 
+  /**
+   * 增量更新若干设置项（后端按 key 合并），并同步内存副本。
+   *
+   * 直接 POST 而不更新 store 会导致“下次任意页面保存整包设置时把旧值写回”，
+   * 因此所有局部设置写入都应走这里。
+   */
+  async function patchSettings(partial: Partial<UserSettings>): Promise<boolean> {
+    if (settings.value) {
+      Object.assign(settings.value, partial)
+    }
+    try {
+      await api.post('/api/settings', partial)
+      return true
+    } catch (error) {
+      console.error('Failed to patch settings:', error)
+      return false
+    }
+  }
+
   return {
     settings,
     availableCoins,
@@ -126,6 +152,7 @@ export const useSettingsStore = defineStore('settings', () => {
     loading,
     fetchSettings,
     saveGeneralSettings,
+    patchSettings,
     updateAvailablePools,
   }
 })

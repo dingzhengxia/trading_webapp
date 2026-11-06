@@ -28,10 +28,10 @@
                     :disabled="!settingsStore.settings.enable_long_trades"
                   ></v-text-field>
 
-                  <v-select
+                  <v-autocomplete
                     v-model="settingsStore.settings.long_coin_list"
-                    :items="filteredLongListItems"
-                    label="从备选池中选择做多币种"
+                    :items="longListItems"
+                    label="从备选池中选择做多币种（输入即搜索）"
                     multiple
                     :hide-selected="!longListShowAll"
                     :close-on-content-click="false"
@@ -79,15 +79,6 @@
 
                     <template v-slot:prepend-item>
                       <div class="d-flex align-center px-4 pt-2 pb-1">
-                        <v-text-field
-                          v-model="longListSearch"
-                          placeholder="搜索币种..."
-                          variant="underlined"
-                          density="compact"
-                          hide-details
-                          class="mr-2"
-                          @click.stop
-                        ></v-text-field>
                         <v-switch
                           v-model="longListShowAll"
                           label="显示已选"
@@ -100,7 +91,7 @@
                       </div>
                       <v-divider></v-divider>
                     </template>
-                  </v-select>
+                  </v-autocomplete>
 
                   <v-btn
                     size="small"
@@ -181,10 +172,10 @@
                     :disabled="!settingsStore.settings.enable_short_trades"
                   ></v-text-field>
 
-                  <v-select
+                  <v-autocomplete
                     v-model="settingsStore.settings.short_coin_list"
-                    :items="filteredShortListItems"
-                    label="从备选池中选择空头币种"
+                    :items="shortListItems"
+                    label="从备选池中选择空头币种（输入即搜索）"
                     multiple
                     :hide-selected="!shortListShowAll"
                     :close-on-content-click="false"
@@ -232,15 +223,6 @@
 
                     <template v-slot:prepend-item>
                       <div class="d-flex align-center px-4 pt-2 pb-1">
-                        <v-text-field
-                          v-model="shortListSearch"
-                          placeholder="搜索币种..."
-                          variant="underlined"
-                          density="compact"
-                          hide-details
-                          class="mr-2"
-                          @click.stop
-                        ></v-text-field>
                         <v-switch
                           v-model="shortListShowAll"
                           label="显示已选"
@@ -253,7 +235,7 @@
                       </div>
                       <v-divider></v-divider>
                     </template>
-                  </v-select>
+                  </v-autocomplete>
 
                   <v-divider class="my-4"></v-divider>
                   <v-switch
@@ -393,9 +375,9 @@
             </v-col>
             <v-col cols="12" md="6">
               <div v-if="settingsStore.settings.rebalance_method === 'multi_factor_weakest'">
-                <v-select
+                <v-autocomplete
                   v-model="settingsStore.settings.rebalance_benchmark_coin"
-                  :items="sortedLongListItems"
+                  :items="longListItems"
                   label="相对强度基准币种"
                   multiple
                   chips
@@ -403,7 +385,7 @@
                   persistent-hint
                   variant="outlined"
                   density="compact"
-                ></v-select>
+                ></v-autocomplete>
                 <v-text-field
                   v-model.number="settingsStore.settings.rebalance_abs_momentum_days"
                   label="绝对动量天数"
@@ -524,9 +506,6 @@ const modelValue = defineModel<string>()
 const settingsStore = useSettingsStore()
 const uiStore = useUiStore()
 
-const longListSearch = ref('')
-const shortListSearch = ref('')
-
 const MAX_VISIBLE_CHIPS = 3
 const isLongListExpanded = ref(false)
 const isShortListExpanded = ref(false)
@@ -534,24 +513,9 @@ const isShortListExpanded = ref(false)
 const longListShowAll = ref(false)
 const shortListShowAll = ref(false)
 
-const sortedLongListItems = computed(() => [...settingsStore.availableLongCoins].sort())
-const sortedShortListItems = computed(() => [...settingsStore.availableShortCoins].sort())
-
-const filteredLongListItems = computed(() => {
-  const source = sortedLongListItems.value
-  if (!longListSearch.value) return source
-  return source.filter((c) =>
-    c.toLowerCase().includes(longListSearch.value.toLowerCase()),
-  )
-})
-
-const filteredShortListItems = computed(() => {
-  const source = sortedShortListItems.value
-  if (!shortListSearch.value) return source
-  return source.filter((c) =>
-    c.toLowerCase().includes(shortListSearch.value.toLowerCase()),
-  )
-})
+// 多/空交易币种从各自备选池中选择；v-autocomplete 自带搜索过滤，无需手工过滤
+const longListItems = computed(() => [...settingsStore.availableLongCoins].sort())
+const shortListItems = computed(() => [...settingsStore.availableShortCoins].sort())
 
 const removeListItemValue = (listType: 'long' | 'short', value: string) => {
   if (!settingsStore.settings) return

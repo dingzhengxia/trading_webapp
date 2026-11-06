@@ -18,6 +18,7 @@ import os
 import sqlite3
 from pathlib import Path
 from threading import RLock
+from typing import Any, Dict
 
 # --- 路径定义（与 config.py 的 IS_DOCKER 判断逻辑保持一致）---
 if os.environ.get("IS_DOCKER"):
@@ -106,6 +107,29 @@ def set_value(table: str, key: str, value) -> None:
         try:
             conn.execute(f"INSERT OR REPLACE INTO {table} VALUES (?, ?)", (key, payload))
             conn.commit()
+        finally:
+            conn.close()
+
+
+def set_many(table: str, mapping: Dict[str, Any]) -> None:
+    """在同一连接、同一事务中批量写入多个键。
+
+    用于保存整份用户配置：逐键 set_value 会产生 N 次连接与 N 次 commit，
+    中途失败会留下“只写了一半”的风控参数。
+    """
+    _check_table(table)
+    if not mapping:
+        return
+    rows = [(key, json.dumps(value, ensure_ascii=False)) for key, value in mapping.items()]
+    with _lock:
+        conn = _connect()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            conn.executemany(f"INSERT OR REPLACE INTO {table} VALUES (?, ?)", rows)
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
         finally:
             conn.close()
 

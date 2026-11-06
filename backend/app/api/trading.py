@@ -1,11 +1,12 @@
 # backend/app/api/trading.py
 import ccxt.async_support as ccxt
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
+from typing import Optional
 
 from ..core.exchange_manager import get_exchange_dependency
 from ..core.security import verify_api_key
 from ..core.trading_service import trading_service
-from ..logic.utils import resolve_symbol_details
+from ..logic.utils import extract_tradeable_coins, resolve_symbol_details
 from ..models.schemas import (
     ManualTradeRequest,
     ResolveSymbolsResponse,
@@ -13,6 +14,9 @@ from ..models.schemas import (
     SyncSltpRequest,
     TradePlanRequest,
 )
+
+# 手动交易可选币种列表的缓存（随 markets 一次加载，进程内复用）
+_ALL_COINS_CACHE: Optional[list] = None
 
 router = APIRouter(prefix="/api/trading", tags=["Trading"], dependencies=[Depends(verify_api_key)])
 
@@ -36,6 +40,19 @@ def sync_sltp_task(settings: SyncSltpRequest, background_tasks: BackgroundTasks)
 def manual_trade_task(request: ManualTradeRequest, background_tasks: BackgroundTasks):
     """手动做多 / 做空 / 反手（限价 post-only；反手先全平再反向开仓）。"""
     return trading_service.manual_trade(request, background_tasks)
+
+
+@router.get("/symbols")
+async def list_tradeable_symbols(exchange: ccxt.binanceusdm = Depends(get_exchange_dependency)):
+    """返回交易所全部可交易的 USDⓈ-M 永续基础币种（USDT/USDC 线性合约）。
+
+    手动交易页用它把可选币种扩展到「币种池 + 全交易所」，池外的币种也可以直接开仓。
+    """
+    global _ALL_COINS_CACHE
+    if _ALL_COINS_CACHE is None:
+        markets = getattr(exchange, 'markets', None) or {}
+        _ALL_COINS_CACHE = extract_tradeable_coins(markets)
+    return {"coins": list(_ALL_COINS_CACHE)}
 
 
 @router.get("/resolve-symbols", response_model=ResolveSymbolsResponse)
