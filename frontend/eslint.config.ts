@@ -19,4 +19,12 @@ export default defineConfigWithVueTs(
   pluginVue.configs['flat/essential'],
   vueTsConfigs.recommended,
   skipFormatting,
+
+  {
+    name: 'app/rules',
+    rules: {
+      // Vuetify 数据表格使用 v-slot:item.xxx 写法，需要允许 slot 修饰符
+      'vue/valid-v-slot': ['error', { allowModifiers: true }],
+    },
+  },
 )

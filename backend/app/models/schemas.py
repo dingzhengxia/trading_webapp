@@ -1,5 +1,6 @@
-# backend/app/models/schemas.py (完整代码)
-from typing import List, Dict, Any, Optional
+# backend/app/models/schemas.py
+from enum import Enum
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -36,51 +37,33 @@ class BaseTaskRequest(BaseModel):
     request_id: Optional[str] = None
 
 
+# --- 交易任务请求（只保留交易执行实际使用的字段，再平衡参数走 RebalanceCriteria）---
 class TradePlanRequest(BaseTaskRequest):
-    leverage: int
-    total_long_position_value: float
-    total_short_position_value: float
-    long_coin_list: List[str]
-    short_coin_list: List[str]
-    long_custom_weights: Dict[str, float]
-    rebalance_method: str
-    rebalance_top_n: int
-    rebalance_min_volume_usd: float
-    rebalance_abs_momentum_days: int
-    rebalance_rel_strength_days: int
-    rebalance_foam_days: int
-    open_maker_retries: int
-    open_order_fill_timeout_seconds: int
-    close_maker_retries: int
-    close_order_fill_timeout_seconds: int
-    enable_long_trades: bool
-    enable_short_trades: bool
-    enable_long_sl_tp: bool
-    long_stop_loss_percentage: float
-    long_take_profit_percentage: float
-    enable_short_sl_tp: bool
-    short_stop_loss_percentage: float
-    short_take_profit_percentage: float
+    leverage: int = 1
+    total_long_position_value: float = 0.0
+    total_short_position_value: float = 0.0
+    long_coin_list: List[str] = Field(default_factory=list)
+    short_coin_list: List[str] = Field(default_factory=list)
+    long_custom_weights: Dict[str, float] = Field(default_factory=dict)
 
-    # --- 新增 ---
-    enable_long_trailing_stop: bool
-    long_trailing_stop_callback_rate: float
-    enable_short_trailing_stop: bool
-    short_trailing_stop_callback_rate: float
-    # -----------
+    open_maker_retries: int = 5
+    open_order_fill_timeout_seconds: int = 60
+    close_maker_retries: int = 3
+    close_order_fill_timeout_seconds: int = 12
 
-    rebalance_volume_ma_days: int
-    rebalance_volume_spike_ratio: float
-    rebalance_benchmark_coin: List[str]
+    enable_long_trades: bool = True
+    enable_short_trades: bool = True
+    enable_long_sl_tp: bool = True
+    long_stop_loss_percentage: float = 0.0
+    long_take_profit_percentage: float = 0.0
+    enable_short_sl_tp: bool = True
+    short_stop_loss_percentage: float = 0.0
+    short_take_profit_percentage: float = 0.0
 
-    enable_rebalance_filters: bool
-    rebalance_rsi_period: int
-    rebalance_rsi_threshold: float
-    rebalance_short_term_momentum_days: int
-    rebalance_short_term_momentum_threshold: float
-    rebalance_bollinger_period: int
-    rebalance_bollinger_std_dev: int
-    rebalance_bollinger_width_spike_ratio: float
+    enable_long_trailing_stop: bool = False
+    long_trailing_stop_callback_rate: float = 1.0
+    enable_short_trailing_stop: bool = False
+    short_trailing_stop_callback_rate: float = 1.0
 
 
 class SyncSltpRequest(BaseTaskRequest):
@@ -91,14 +74,12 @@ class SyncSltpRequest(BaseTaskRequest):
     short_stop_loss_percentage: float
     short_take_profit_percentage: float
 
-    # --- 新增 ---
-    enable_long_trailing_stop: bool
-    long_trailing_stop_callback_rate: float
-    enable_short_trailing_stop: bool
-    short_trailing_stop_callback_rate: float
-    # -----------
+    enable_long_trailing_stop: bool = False
+    long_trailing_stop_callback_rate: float = 1.0
+    enable_short_trailing_stop: bool = False
+    short_trailing_stop_callback_rate: float = 1.0
 
-    leverage: int
+    leverage: int = 1
 
 
 class ClosePositionRequest(BaseTaskRequest):
@@ -107,7 +88,7 @@ class ClosePositionRequest(BaseTaskRequest):
 
 
 class CloseBySideRequest(BaseTaskRequest):
-    side: str
+    side: Literal['long', 'short', 'all']
     ratio: float = Field(..., gt=0, le=1.0)
 
 
@@ -118,8 +99,8 @@ class CloseMultipleRequest(BaseTaskRequest):
 
 class ExecutionOrderItem(BaseModel):
     symbol: str
-    action: str
-    side: str
+    action: Literal['CLOSE', 'OPEN']
+    side: Optional[str] = None
     value_to_trade: Optional[float] = None
     close_ratio: Optional[float] = None
 
@@ -128,16 +109,44 @@ class ExecutionPlanRequest(BaseTaskRequest):
     orders: List[ExecutionOrderItem]
 
 
+# --- 手动做多 / 做空 / 反手 ---
+class ManualTradeAction(str, Enum):
+    LONG = 'long'
+    SHORT = 'short'
+    REVERSE = 'reverse'
+
+
+class ManualTradeItem(BaseModel):
+    symbol: str
+    action: ManualTradeAction
+    value: Optional[float] = None
+
+
+class ManualTradeRequest(BaseTaskRequest):
+    items: List[ManualTradeItem]
+    default_value: Optional[float] = None
+
+
+class ResolvedSymbol(BaseModel):
+    symbol: str
+    full_symbol: Optional[str] = None
+    quote: Optional[str] = None
+    available: bool
+
+
+class ResolveSymbolsResponse(BaseModel):
+    symbols: List[ResolvedSymbol]
+
+
 class RebalanceCriteria(BaseModel):
     method: str = "multi_factor_weakest"
     top_n: int = 50
     min_volume_usd: float = 20000000.0
     abs_momentum_days: int = 30
     rel_strength_days: int = 60
-    foam_days: int = 1
     rebalance_volume_ma_days: int = 20
     rebalance_volume_spike_ratio: float = 3.0
-    rebalance_benchmark_coin: List[str] = ['BTC']
+    rebalance_benchmark_coin: List[str] = Field(default_factory=lambda: ['BTC'])
 
     enable_rebalance_filters: bool = True
     rebalance_rsi_period: int = 14
@@ -157,3 +166,36 @@ class RebalancePlanResponse(BaseModel):
     positions_to_open: List[Dict[str, Any]]
     target_coin_list: List[str]
     error: Optional[str] = None
+
+
+# --- 信号扫描 / 自动开仓（Phase 2，MERGE_PLAN §6）---
+SIGNAL_TIMEFRAMES = {'1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d', '3d', '1w'}
+SIGNAL_STRATEGIES = {
+    'ema_cross', 'ma_breakout', 'kdj_cross', 'volatility_breakout', 'level_breakout',
+    'rsi_divergence', 'trend_channel_breakout', 'consecutive_candles',
+    'ob_luxalgo', 'ob_fluxcharts', 'high_funding_rate',
+}
+
+
+class SignalConfigUpdate(BaseModel):
+    """signal_* 配置项的部分更新模型（非法值由 API 层转 400）。"""
+    signal_scan_enabled: Optional[bool] = None
+    signal_scan_interval_seconds: Optional[int] = Field(None, ge=30, le=86400)
+    signal_scan_static_symbols: Optional[List[str]] = Field(None, max_length=100)
+    signal_scan_top_n: Optional[int] = Field(None, ge=1, le=500)
+    signal_scan_timeframes: Optional[List[str]] = Field(None, min_length=1, max_length=10)
+    signal_ticker_cache_seconds: Optional[int] = Field(None, ge=1, le=3600)
+    signal_ohlcv_cache_seconds: Optional[int] = Field(None, ge=1, le=3600)
+    signal_auto_trade_enabled: Optional[bool] = None
+    signal_auto_trade_directions: Optional[List[Literal['long', 'short']]] = Field(None, max_length=2)
+    signal_auto_trade_strategies: Optional[List[str]] = Field(None, min_length=1, max_length=11)
+    signal_auto_trade_timeframes: Optional[List[str]] = Field(None, min_length=1, max_length=10)
+    signal_auto_trade_confirmation_window_seconds: Optional[int] = Field(None, ge=1, le=86400)
+    signal_auto_trade_confirmations: Optional[int] = Field(None, ge=1, le=10)
+    signal_auto_trade_cooldown_seconds: Optional[int] = Field(None, ge=0, le=86400 * 7)
+    signal_auto_trade_max_positions: Optional[int] = Field(None, ge=1, le=50)
+    signal_auto_trade_value_usd: Optional[float] = Field(None, gt=0, le=1_000_000)
+
+
+class SignalAutoTradeToggle(BaseModel):
+    enabled: bool

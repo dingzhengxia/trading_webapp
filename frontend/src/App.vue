@@ -61,7 +61,7 @@
     <WeightConfigDialog v-model="uiStore.showWeightDialog" />
     <ProgressBar />
     <AccessKeyDialog />
-    <Snackbar />
+    <AppSnackbar />
   </v-app>
 </template>
 
@@ -81,7 +81,7 @@ import CloseDialog from '@/components/CloseDialog.vue'
 import WeightConfigDialog from '@/components/WeightConfigDialog.vue'
 import ProgressBar from '@/components/ProgressBar.vue'
 import AccessKeyDialog from '@/components/AccessKeyDialog.vue'
-import Snackbar from '@/components/Snackbar.vue'
+import AppSnackbar from '@/components/AppSnackbar.vue'
 
 const router = useRouter()
 const routes = router.getRoutes().filter((r) => r.meta && r.meta.title && r.meta.icon)

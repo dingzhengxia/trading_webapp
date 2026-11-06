@@ -1,0 +1,464 @@
+<!-- frontend/src/views/ManualTradeView.vue (手动做多/做空/反手) -->
+<template>
+  <div>
+    <v-row>
+      <v-col cols="12">
+        <v-card>
+          <v-card-title class="text-h6 d-flex align-center">
+            <v-icon start>mdi-hand-coin-outline</v-icon>
+            <span>手动交易（做多 / 做空 / 反手）</span>
+          </v-card-title>
+          <v-divider></v-divider>
+          <v-card-text>
+            <v-alert type="info" variant="tonal" density="compact" class="mb-4 text-caption">
+              <div>· 所有开仓均为<strong>限价 post-only 单</strong>，不会使用市价单。</div>
+              <div>· 反手 = 先按当前持仓方向<strong>全平</strong>（确认无残留）后再反向限价开仓。</div>
+              <div>· 反手时若无持仓会跳过并记录 warning 日志；同一币种多空持仓并存时同样跳过。</div>
+              <div>· 每行「价值」为目标名义价值（USD）；反手行的价值即反向开仓后的目标价值。</div>
+              <div>· 执行期间不可修改/提交，任务结束后会自动刷新下方持仓。</div>
+            </v-alert>
+
+            <v-row>
+              <v-col cols="12" md="8">
+                <v-select
+                  v-model="selectedCoins"
+                  :items="filteredAvailableCoins"
+                  label="选择币种（可多选）"
+                  multiple
+                  chips
+                  closable-chips
+                  clearable
+                  density="compact"
+                  variant="outlined"
+                  hide-details
+                  :disabled="uiStore.isRunning"
+                  :menu-props="{ maxHeight: '360px' }"
+                >
+                  <template v-slot:prepend-item>
+                    <div class="px-4 pt-2 pb-1">
+                      <v-text-field
+                        v-model="coinSearch"
+                        placeholder="搜索币种..."
+                        variant="underlined"
+                        density="compact"
+                        hide-details
+                        @click.stop
+                      ></v-text-field>
+                    </div>
+                    <v-divider></v-divider>
+                  </template>
+                  <template v-slot:no-data>
+                    <v-list-item title="没有匹配的币种" />
+                  </template>
+                </v-select>
+              </v-col>
+              <v-col cols="12" md="4">
+                <v-text-field
+                  v-model.number="defaultValue"
+                  label="默认每币种价值 (USD)"
+                  type="number"
+                  min="0"
+                  step="10"
+                  density="compact"
+                  variant="outlined"
+                  hide-details
+                  prefix="$"
+                  :disabled="uiStore.isRunning"
+                  :error="!isDefaultValueValid"
+                  :messages="isDefaultValueValid ? '新增币种时自动填充该价值' : '默认价值必须大于 0'"
+                ></v-text-field>
+              </v-col>
+            </v-row>
+
+            <div class="d-flex flex-wrap align-center ga-2 my-3">
+              <v-btn
+                color="success"
+                variant="tonal"
+                size="small"
+                prepend-icon="mdi-arrow-up-bold"
+                :disabled="rows.length === 0 || uiStore.isRunning"
+                @click="applyActionToAll('long')"
+              >
+                全部做多
+              </v-btn>
+              <v-btn
+                color="error"
+                variant="tonal"
+                size="small"
+                prepend-icon="mdi-arrow-down-bold"
+                :disabled="rows.length === 0 || uiStore.isRunning"
+                @click="applyActionToAll('short')"
+              >
+                全部做空
+              </v-btn>
+              <v-btn
+                color="warning"
+                variant="tonal"
+                size="small"
+                prepend-icon="mdi-swap-vertical-bold"
+                :disabled="rows.length === 0 || uiStore.isRunning"
+                @click="applyActionToAll('reverse')"
+              >
+                全部反手
+              </v-btn>
+              <v-spacer></v-spacer>
+              <v-btn
+                variant="text"
+                size="small"
+                prepend-icon="mdi-close-circle-outline"
+                :disabled="rows.length === 0 || uiStore.isRunning"
+                @click="clearSelection"
+              >
+                清空选择
+              </v-btn>
+            </div>
+
+            <v-table v-if="rows.length > 0" density="compact" class="manual-table">
+              <thead>
+                <tr>
+                  <th class="text-left">币种</th>
+                  <th class="text-left">当前持仓</th>
+                  <th class="text-left" style="width: 150px">动作</th>
+                  <th class="text-left" style="width: 180px">价值 (USD)</th>
+                  <th class="text-left" style="width: 120px">报价</th>
+                  <th class="text-right" style="width: 60px">操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="row in rows" :key="row.symbol">
+                  <td class="font-weight-medium">{{ row.symbol }}</td>
+                  <td>
+                    <template v-if="positionsOf(row.symbol).length === 0">
+                      <span class="text-caption text-grey">未持仓</span>
+                    </template>
+                    <template v-else>
+                      <v-chip
+                        v-for="position in positionsOf(row.symbol)"
+                        :key="position.full_symbol"
+                        size="small"
+                        variant="tonal"
+                        :color="position.side === 'long' ? 'success' : 'error'"
+                        class="mr-1 my-1"
+                      >
+                        {{ position.side === 'long' ? '多' : '空' }}
+                        ${{ formatNumber(position.notional) }}
+                      </v-chip>
+                    </template>
+                  </td>
+                  <td>
+                    <v-select
+                      v-model="row.action"
+                      :items="actionOptions"
+                      item-title="title"
+                      item-value="value"
+                      density="compact"
+                      variant="outlined"
+                      hide-details
+                      :disabled="uiStore.isRunning"
+                    ></v-select>
+                  </td>
+                  <td>
+                    <v-text-field
+                      v-model.number="row.value"
+                      type="number"
+                      min="0"
+                      step="10"
+                      density="compact"
+                      variant="outlined"
+                      hide-details
+                      prefix="$"
+                      :error="!isRowValueValid(row)"
+                      :disabled="uiStore.isRunning"
+                    ></v-text-field>
+                  </td>
+                  <td>
+                    <v-chip
+                      v-if="resolvedSymbols[row.symbol]"
+                      size="small"
+                      variant="tonal"
+                      :color="quoteColor(resolvedSymbols[row.symbol])"
+                    >
+                      {{ quoteLabel(resolvedSymbols[row.symbol]) }}
+                    </v-chip>
+                    <span v-else class="text-caption text-grey">解析中...</span>
+                  </td>
+                  <td class="text-right">
+                    <v-btn
+                      icon="mdi-close"
+                      size="x-small"
+                      variant="text"
+                      :disabled="uiStore.isRunning"
+                      @click="removeRow(row.symbol)"
+                    ></v-btn>
+                  </td>
+                </tr>
+              </tbody>
+            </v-table>
+            <v-alert v-else type="info" variant="text" density="compact" class="text-caption">
+              请先选择一个或多个币种，再配置每个币种的动作与价值。
+            </v-alert>
+
+            <v-divider class="my-4"></v-divider>
+
+            <div class="d-flex align-center flex-wrap ga-2">
+              <div class="text-caption text-grey">
+                共 {{ rows.length }} 个币种，预计总价值 ${{ formatNumber(totalValue) }}
+                <span v-if="hasInvalidValue" class="text-error ml-2">存在非法价值，无法执行</span>
+              </div>
+              <v-spacer></v-spacer>
+              <v-btn
+                color="primary"
+                variant="tonal"
+                prepend-icon="mdi-play"
+                :loading="uiStore.isRunning"
+                :disabled="!canExecute"
+                @click="executeManualTrade"
+              >
+                执行手动交易
+              </v-btn>
+            </div>
+          </v-card-text>
+        </v-card>
+      </v-col>
+    </v-row>
+
+    <v-row class="mt-2">
+      <v-col cols="12">
+        <PnlSummary />
+      </v-col>
+    </v-row>
+
+    <v-row>
+      <v-col cols="12">
+        <PositionsTable
+          title="▲ 多头仓位"
+          side="long"
+          :positions="positionStore.longPositions"
+          :loading="positionStore.loading"
+          @refresh="positionStore.fetchPositions()"
+        />
+      </v-col>
+    </v-row>
+
+    <v-row>
+      <v-col cols="12">
+        <PositionsTable
+          title="▼ 空头仓位"
+          side="short"
+          :positions="positionStore.shortPositions"
+          :loading="positionStore.loading"
+          @refresh="positionStore.fetchPositions()"
+        />
+      </v-col>
+    </v-row>
+  </div>
+</template>
+
+<script setup lang="ts">
+import { computed, onMounted, ref, watch } from 'vue'
+import { useSettingsStore } from '@/stores/settingsStore'
+import { usePositionStore } from '@/stores/positionStore'
+import { useUiStore } from '@/stores/uiStore'
+import api from '@/services/api'
+import type {
+  ManualTradeAction,
+  ManualTradeItem,
+  Position,
+  ResolveSymbolsResponse,
+  ResolvedSymbol,
+} from '@/models/types'
+import { getErrorMessage } from '@/utils/errors'
+import PnlSummary from '@/components/PnlSummary.vue'
+import PositionsTable from '@/components/PositionsTable.vue'
+
+interface ManualRow {
+  symbol: string
+  action: ManualTradeAction
+  value: number
+}
+
+const uiStore = useUiStore()
+const settingsStore = useSettingsStore()
+const positionStore = usePositionStore()
+
+const actionOptions: { title: string; value: ManualTradeAction }[] = [
+  { title: '做多', value: 'long' },
+  { title: '做空', value: 'short' },
+  { title: '反手', value: 'reverse' },
+]
+
+const selectedCoins = ref<string[]>([])
+const rows = ref<ManualRow[]>([])
+const coinSearch = ref('')
+const defaultValue = ref(100)
+const resolvedSymbols = ref<Record<string, ResolvedSymbol>>({})
+
+let resolveSequence = 0
+
+// 可用币种：优先使用总池；为空时合并多头/空头备选池
+const availableCoins = computed(() => {
+  const base =
+    settingsStore.availableCoins.length > 0
+      ? settingsStore.availableCoins
+      : [...settingsStore.availableLongCoins, ...settingsStore.availableShortCoins]
+  return [...new Set(base)].sort()
+})
+
+const filteredAvailableCoins = computed(() => {
+  const keyword = coinSearch.value.trim().toUpperCase()
+  if (!keyword) return availableCoins.value
+  return availableCoins.value.filter((coin) => coin.toUpperCase().includes(keyword))
+})
+
+const isDefaultValueValid = computed(() => {
+  const value = Number(defaultValue.value)
+  return Number.isFinite(value) && value > 0
+})
+
+const isRowValueValid = (row: ManualRow): boolean => {
+  const value = Number(row.value)
+  return Number.isFinite(value) && value > 0
+}
+
+const hasInvalidValue = computed(() => rows.value.some((row) => !isRowValueValid(row)))
+
+const canExecute = computed(
+  () => rows.value.length > 0 && !hasInvalidValue.value && !uiStore.isRunning,
+)
+
+const totalValue = computed(() =>
+  rows.value.reduce((sum, row) => (isRowValueValid(row) ? sum + Number(row.value) : sum), 0),
+)
+
+const formatNumber = (value: number): string => {
+  const num = Number(value)
+  if (!Number.isFinite(num)) return '0.00'
+  return num.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+}
+
+const positionsOf = (symbol: string): Position[] =>
+  positionStore.positions.filter(
+    (position) => position.symbol.toUpperCase() === symbol.toUpperCase(),
+  )
+
+const quoteLabel = (resolved: ResolvedSymbol | undefined): string => {
+  if (!resolved) return '解析中...'
+  if (!resolved.available) return '不可用'
+  return resolved.quote ?? '未知'
+}
+
+const quoteColor = (resolved: ResolvedSymbol | undefined): string => {
+  if (!resolved || !resolved.available) return 'grey'
+  return resolved.quote === 'USDC' ? 'teal' : 'blue-grey'
+}
+
+const defaultRowValue = (): number => {
+  const value = Number(defaultValue.value)
+  return Number.isFinite(value) && value > 0 ? value : 0
+}
+
+const fetchResolvedSymbols = async (): Promise<void> => {
+  const symbols = [...selectedCoins.value]
+  if (symbols.length === 0) {
+    resolvedSymbols.value = {}
+    return
+  }
+  const sequence = ++resolveSequence
+  try {
+    const response = await api.get<ResolveSymbolsResponse>('/api/trading/resolve-symbols', {
+      params: { symbols: symbols.join(',') },
+    })
+    if (sequence !== resolveSequence) return
+    const map: Record<string, ResolvedSymbol> = {}
+    for (const entry of response.data.symbols) {
+      map[entry.symbol] = entry
+    }
+    resolvedSymbols.value = map
+  } catch (error: unknown) {
+    if (sequence !== resolveSequence) return
+    console.warn('解析交易对失败:', getErrorMessage(error))
+  }
+}
+
+const applyActionToAll = (action: ManualTradeAction): void => {
+  rows.value.forEach((row) => {
+    row.action = action
+  })
+}
+
+const clearSelection = (): void => {
+  selectedCoins.value = []
+}
+
+const removeRow = (symbol: string): void => {
+  selectedCoins.value = selectedCoins.value.filter((coin) => coin !== symbol)
+}
+
+const executeManualTrade = (): void => {
+  if (!canExecute.value) return
+  const items: ManualTradeItem[] = rows.value.map((row) => ({
+    symbol: row.symbol,
+    action: row.action,
+    value: Number(row.value),
+  }))
+  // default_value 非法时不传递（后端每条 item 都已有显式 value），避免提交无效默认值
+  const payload: { items: ManualTradeItem[]; default_value?: number } = { items }
+  if (isDefaultValueValid.value) {
+    payload.default_value = Number(defaultValue.value)
+  }
+  uiStore.launchTask('/api/trading/manual', payload, '手动交易', items.length)
+}
+
+// 选中币种变化时：已选币种保留原有动作与价值，新币种按默认价值初始化
+watch(selectedCoins, (coins) => {
+  const existing = new Map(rows.value.map((row) => [row.symbol, row]))
+  rows.value = coins.map(
+    (symbol) =>
+      existing.get(symbol) ?? {
+        symbol,
+        action: 'long' as ManualTradeAction,
+        value: defaultRowValue(),
+      },
+  )
+  void fetchResolvedSymbols()
+})
+
+// 默认价值变化时，仅补充尚未填写有效价值的行
+watch(defaultValue, () => {
+  const fallback = defaultRowValue()
+  if (!fallback) return
+  rows.value.forEach((row) => {
+    if (!isRowValueValid(row)) {
+      row.value = fallback
+    }
+  })
+})
+
+// 任务结束后自动刷新持仓
+watch(
+  () => uiStore.isRunning,
+  (running, previous) => {
+    if (previous && !running) {
+      void positionStore.fetchPositions()
+    }
+  },
+)
+
+onMounted(() => {
+  if (!settingsStore.settings) {
+    void settingsStore.fetchSettings()
+  }
+  if (positionStore.positions.length === 0) {
+    void positionStore.fetchPositions()
+  }
+})
+</script>
+
+<style scoped>
+.manual-table :deep(th) {
+  white-space: nowrap;
+}
+.manual-table :deep(td) {
+  vertical-align: middle;
+}
+</style>

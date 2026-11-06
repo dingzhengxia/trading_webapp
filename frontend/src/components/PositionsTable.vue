@@ -101,12 +101,10 @@ import { usePositionStore } from '@/stores/positionStore'
 
 type TDataTableHeader = {
   key: string
-  value?: any
   title: string
   align?: 'start' | 'center' | 'end'
   sortable?: boolean
   width?: string | number
-  [key: string]: any
 }
 
 const props = defineProps<{

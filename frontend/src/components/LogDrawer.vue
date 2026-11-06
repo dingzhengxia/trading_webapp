@@ -11,11 +11,11 @@
 
     <!-- 日志列表显示逻辑保持不变 -->
     <v-virtual-scroll :items="logStore.logs" height="calc(100vh - 48px)">
-      <template v-slot:default="{ item: log, index }">
+      <template v-slot:default="{ item, index }">
         <v-list-item :key="index" class="py-1 px-2">
-          <div class="log-entry" :class="logLevelColor(log.level)">
-            <span class="log-timestamp text-grey">[{{ log.timestamp }}]</span>
-            <span class="log-message">{{ log.message }}</span>
+          <div class="log-entry" :class="logLevelColor(toLogEntry(item).level)">
+            <span class="log-timestamp text-grey">[{{ toLogEntry(item).timestamp }}]</span>
+            <span class="log-message">{{ toLogEntry(item).message }}</span>
           </div>
         </v-list-item>
       </template>
@@ -24,9 +24,11 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
 import { useLogStore } from '@/stores/logStore'
-import type { LogEntry } from '@/models/types' // <-- 修正为 LogEntry
+import type { LogEntry } from '@/models/types'
+
+// v-virtual-scroll 的 slot item 类型为 unknown，这里收窄为 LogEntry
+const toLogEntry = (item: unknown): LogEntry => item as LogEntry
 
 // --- 核心修改在这里 ---
 // 使用 defineModel 来创建一个双向绑定的 v-model

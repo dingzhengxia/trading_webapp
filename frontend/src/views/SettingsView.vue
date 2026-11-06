@@ -106,7 +106,7 @@
 
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
-import { useDisplay } from 'vuetify' // REFACTOR: 导入 useDisplay
+import { useDisplay, useLayout } from 'vuetify' // REFACTOR: 导入 useDisplay/useLayout
 import { useSettingsStore } from '@/stores/settingsStore'
 import CoinPoolsManager from '@/components/CoinPoolsManager.vue'
 
@@ -115,14 +115,16 @@ const activeTab = ref('general')
 const coinPoolsManagerRef = ref<InstanceType<typeof CoinPoolsManager> | null>(null)
 
 // REFACTOR: 增加用于动态计算 footer 位置的逻辑
+// useDisplay() 上没有 application，侧边栏宽度需从 useLayout().mainRect 获取
 const vuetifyDisplay = useDisplay()
+const vuetifyLayout = useLayout()
 const footerStyle = computed(() => {
   const styles: { bottom: string; left: string } = {
     bottom: vuetifyDisplay.smAndDown.value ? '56px' : '0px',
     left: '0px',
   }
-  if (vuetifyDisplay.mdAndUp.value && vuetifyDisplay.application) {
-    styles.left = `${vuetifyDisplay.application.left}px`
+  if (vuetifyDisplay.mdAndUp.value) {
+    styles.left = `${vuetifyLayout.mainRect.value.left}px`
   }
   return styles
 })

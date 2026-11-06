@@ -11,7 +11,7 @@ export interface Position {
   mark_price: number
 }
 
-export interface Log {
+export interface LogEntry {
   message: string
   level: 'normal' | 'info' | 'success' | 'warning' | 'error'
   timestamp: string
@@ -43,6 +43,27 @@ export interface ProgressState {
   show: boolean
   is_final: boolean
 }
+
+// --- 手动交易（做多/做空/反手）相关类型 ---
+export type ManualTradeAction = 'long' | 'short' | 'reverse'
+
+export interface ManualTradeItem {
+  symbol: string
+  action: ManualTradeAction
+  value: number
+}
+
+export interface ResolvedSymbol {
+  symbol: string
+  full_symbol: string | null
+  quote: string | null
+  available: boolean
+}
+
+export interface ResolveSymbolsResponse {
+  symbols: ResolvedSymbol[]
+}
+// --------------------------------------------
 
 export interface UserSettings {
   api_key: string
@@ -76,45 +97,100 @@ export interface UserSettings {
   open_order_fill_timeout_seconds: number
   close_maker_retries: number
   close_order_fill_timeout_seconds: number
-  rebalance_method: 'multi_factor_weakest' | 'foam'
+  // 后端仅实现了 multi_factor_weakest 策略，前端不再暴露未实现的策略
+  rebalance_method: 'multi_factor_weakest'
   rebalance_top_n: number
   rebalance_min_volume_usd: number
   rebalance_abs_momentum_days: number
   rebalance_rel_strength_days: number
-  rebalance_foam_days: number
   rebalance_volume_ma_days: number
   rebalance_volume_spike_ratio: number
   rebalance_benchmark_coin: string[]
 
-  enable_rebalance_filters: boolean;
-  rebalance_rsi_period: number;
-  rebalance_rsi_threshold: number;
-  rebalance_short_term_momentum_days: number;
-  rebalance_short_term_momentum_threshold: number;
-  rebalance_bollinger_period: number;
-  rebalance_bollinger_std_dev: number;
-  rebalance_bollinger_width_spike_ratio: number;
+  enable_rebalance_filters: boolean
+  rebalance_rsi_period: number
+  rebalance_rsi_threshold: number
+  rebalance_short_term_momentum_days: number
+  rebalance_short_term_momentum_threshold: number
+  rebalance_bollinger_period: number
+  rebalance_bollinger_std_dev: number
+  rebalance_bollinger_width_spike_ratio: number
 }
 
 export interface RebalanceCriteria {
-  method: string
+  method: 'multi_factor_weakest'
   top_n: number
   min_volume_usd: number
   abs_momentum_days: number
   rel_strength_days: number
-  foam_days: number
   rebalance_volume_ma_days: number
   rebalance_volume_spike_ratio: number
   rebalance_benchmark_coin: string[]
 
-  enable_rebalance_filters: boolean;
-  rebalance_rsi_period: number;
-  rebalance_rsi_threshold: number;
-  rebalance_short_term_momentum_days: number;
-  rebalance_short_term_momentum_threshold: number;
-  rebalance_bollinger_period: number;
-  rebalance_bollinger_std_dev: number;
-  rebalance_bollinger_width_spike_ratio: number;
+  enable_rebalance_filters: boolean
+  rebalance_rsi_period: number
+  rebalance_rsi_threshold: number
+  rebalance_short_term_momentum_days: number
+  rebalance_short_term_momentum_threshold: number
+  rebalance_bollinger_period: number
+  rebalance_bollinger_std_dev: number
+  rebalance_bollinger_width_spike_ratio: number
 
-  manual_target_ratio_perc?: number;
+  manual_target_ratio_perc?: number
 }
+
+// --- Phase 2：信号监控（/signals）相关类型 ---
+export type SignalDirection = 'long' | 'short' | 'neutral'
+
+export interface SignalRecord {
+  id: string
+  created_at: string | null
+  symbol: string
+  full_symbol: string | null
+  timeframe: string
+  strategy: string
+  strategy_index: number
+  direction: SignalDirection
+  price: number
+  title: string
+  message: string
+}
+
+export interface SignalStatus {
+  enabled: boolean
+  running: boolean
+  last_scan_at: string | null
+  next_scan_at: string | null
+  scanned_symbols: number
+  emitted_count: number
+  error_count: number
+  last_error: string | null
+  auto_trade_enabled: boolean
+  last_auto_open: string | Record<string, unknown> | null
+}
+
+export interface SignalConfig {
+  signal_scan_enabled: boolean
+  signal_scan_interval_seconds: number
+  signal_scan_static_symbols: string[]
+  signal_scan_top_n: number
+  signal_scan_timeframes: string[]
+  signal_auto_trade_enabled: boolean
+  signal_auto_trade_directions: string[]
+  signal_auto_trade_strategies: string[]
+  signal_auto_trade_timeframes: string[]
+  signal_auto_trade_confirmations: number
+  signal_auto_trade_confirmation_window_seconds: number
+  signal_auto_trade_cooldown_seconds: number
+  signal_auto_trade_max_positions: number
+  signal_auto_trade_value_usd: number
+  signal_ticker_cache_seconds: number
+  signal_ohlcv_cache_seconds: number
+}
+
+export interface SignalsResponse {
+  status: SignalStatus
+  signals: SignalRecord[]
+  config: Partial<SignalConfig>
+}
+// ------------------------------------------------

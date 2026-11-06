@@ -42,7 +42,6 @@ const defaultSettings: UserSettings = {
   rebalance_min_volume_usd: 20000000,
   rebalance_abs_momentum_days: 30,
   rebalance_rel_strength_days: 60,
-  rebalance_foam_days: 1,
   rebalance_volume_ma_days: 20,
   rebalance_volume_spike_ratio: 3.0,
   rebalance_benchmark_coin: ['BTC'],
@@ -119,34 +118,6 @@ export const useSettingsStore = defineStore('settings', () => {
     }
   }
 
-  async function saveSelectedCoinLists(longList: string[], shortList: string[]) {
-    if (!settings.value) return
-    try {
-      const payload = {
-        ...settings.value,
-        long_coin_list: longList,
-        short_coin_list: shortList,
-      }
-      await api.post('/api/settings', payload)
-      uiStore.logStore.addLog({
-        message: '交易终端币种列表已自动保存。',
-        level: 'info',
-        timestamp: new Date().toLocaleTimeString(),
-      })
-      if (settings.value) {
-        settings.value.long_coin_list = longList
-        settings.value.short_coin_list = shortList
-      }
-    } catch (error) {
-      console.error('Failed to save selected coin lists:', error)
-      uiStore.logStore.addLog({
-        message: '自动保存币种列表失败！',
-        level: 'error',
-        timestamp: new Date().toLocaleTimeString(),
-      })
-    }
-  }
-
   return {
     settings,
     availableCoins,
@@ -155,7 +126,6 @@ export const useSettingsStore = defineStore('settings', () => {
     loading,
     fetchSettings,
     saveGeneralSettings,
-    saveSelectedCoinLists,
     updateAvailablePools,
   }
 })

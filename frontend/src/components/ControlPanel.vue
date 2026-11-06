@@ -2,11 +2,7 @@
 <template>
   <v-card v-if="settingsStore.settings">
     <v-card-title class="text-h6">交易参数</v-card-title>
-    <v-tabs
-      :model-value="modelValue"
-      @update:modelValue="$emit('update:modelValue', $event)"
-      bg-color="primary"
-    >
+    <v-tabs v-model="modelValue" bg-color="primary">
       <v-tab value="general">通用开仓设置</v-tab>
       <v-tab value="rebalance">智能再平衡</v-tab>
     </v-tabs>
@@ -41,7 +37,7 @@
                     :close-on-content-click="false"
                     :disabled="!settingsStore.settings.enable_long_trades"
                   >
-                    <template v-slot:selection="{ item, index }">
+                    <template v-slot:selection="{ index }">
                       <div
                         v-if="index === 0"
                         class="selection-wrapper"
@@ -194,7 +190,7 @@
                     :close-on-content-click="false"
                     :disabled="!settingsStore.settings.enable_short_trades"
                   >
-                    <template v-slot:selection="{ item, index }">
+                    <template v-slot:selection="{ index }">
                       <div
                         v-if="index === 0"
                         class="selection-wrapper"
@@ -423,15 +419,6 @@
                   density="compact"
                 ></v-text-field>
               </div>
-              <div v-if="settingsStore.settings.rebalance_method === 'foam'">
-                <v-text-field
-                  v-model.number="settingsStore.settings.rebalance_foam_days"
-                  label="FOAM动量天数"
-                  type="number"
-                  variant="outlined"
-                  density="compact"
-                ></v-text-field>
-              </div>
               <v-text-field
                 v-model.number="settingsStore.settings.rebalance_volume_spike_ratio"
                 label="成交量放大过滤倍数"
@@ -524,15 +511,13 @@
     </v-card-text>
   </v-card>
   <v-skeleton-loader v-else type="card, article"></v-skeleton-loader>
-  <WeightConfigDialog v-if="settingsStore.settings" v-model="uiStore.showWeightDialog" />
 </template>
 
 <script setup lang="ts">
 import { ref, watch, computed } from 'vue'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { useUiStore } from '@/stores/uiStore'
-import WeightConfigDialog from './WeightConfigDialog.vue'
-import { debounce } from 'lodash-es'
+import { debounce } from '@/utils/debounce'
 
 const modelValue = defineModel<string>()
 
@@ -580,10 +565,7 @@ const removeListItemValue = (listType: 'long' | 'short', value: string) => {
   }
 }
 
-const rebalanceMethods = [
-  { value: 'multi_factor_weakest', text: '多因子弱势策略' },
-  { value: 'foam', text: 'FOAM强势动量' },
-]
+const rebalanceMethods = [{ value: 'multi_factor_weakest', text: '多因子弱势策略' }]
 
 const saveSettingsDebounced = debounce(() => {
   if (settingsStore.settings) {

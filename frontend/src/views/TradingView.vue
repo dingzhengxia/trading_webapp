@@ -63,18 +63,20 @@
 
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
-import { useDisplay } from 'vuetify'
+import { useDisplay, useLayout } from 'vuetify'
 import { useUiStore } from '@/stores/uiStore'
 import { usePositionStore } from '@/stores/positionStore'
 import { useSettingsStore } from '@/stores/settingsStore'
 import ControlPanel from '@/components/ControlPanel.vue'
 import apiClient from '@/services/api'
 import type { RebalanceCriteria } from '@/models/types'
+import { getErrorMessage } from '@/utils/errors'
 
 const uiStore = useUiStore()
 const positionStore = usePositionStore()
 const settingsStore = useSettingsStore()
 const vuetifyDisplay = useDisplay()
+const vuetifyLayout = useLayout()
 
 const activeTab = ref('general')
 const isGeneratingPlan = ref(false)
@@ -84,8 +86,8 @@ const footerStyle = computed(() => {
     bottom: vuetifyDisplay.smAndDown.value ? '56px' : '0px',
     left: '0px',
   }
-  if (vuetifyDisplay.mdAndUp.value && vuetifyDisplay.application) {
-    styles.left = `${vuetifyDisplay.application.left}px`
+  if (vuetifyDisplay.mdAndUp.value) {
+    styles.left = `${vuetifyLayout.mainRect.value.left}px`
   }
   return styles
 })
@@ -155,7 +157,6 @@ const onGenerateRebalancePlan = () => {
       min_volume_usd: settingsStore.settings.rebalance_min_volume_usd,
       abs_momentum_days: settingsStore.settings.rebalance_abs_momentum_days,
       rel_strength_days: settingsStore.settings.rebalance_rel_strength_days,
-      foam_days: settingsStore.settings.rebalance_foam_days,
       rebalance_volume_ma_days: settingsStore.settings.rebalance_volume_ma_days,
       rebalance_volume_spike_ratio: settingsStore.settings.rebalance_volume_spike_ratio,
       rebalance_benchmark_coin: settingsStore.settings.rebalance_benchmark_coin,
@@ -193,8 +194,8 @@ const handleGenerateRebalancePlan = async (criteria: RebalanceCriteria) => {
       uiStore.rebalancePlan = planData
       uiStore.showRebalanceDialog = true
     }
-  } catch (error: any) {
-    const errorMsg = error.response?.data?.detail || error.message
+  } catch (error: unknown) {
+    const errorMsg = getErrorMessage(error)
     uiStore.logStore.addLog({
       message: `[后端] ❌ 生成计划请求失败: ${errorMsg}`,
       level: 'error',

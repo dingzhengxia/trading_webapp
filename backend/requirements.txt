@@ -8,3 +8,5 @@ aiohttp>=3.9.5
 numpy
 gunicorn
 pandas
+loguru>=0.7.2
+pandas-ta>=0.3.14b0

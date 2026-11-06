@@ -1,55 +1,45 @@
-# backend/app/logic/sl_tp_logic_async.py (最终精准版)
+# backend/app/logic/sl_tp_logic_async.py
 import asyncio
-from typing import Set, List, Dict, Any
+from typing import Set
+
 import ccxt.async_support as ccxt
-from ..config import i18n
+
+from ..config import constants
 from ..models.schemas import Position
 
 
-async def _ensure_no_open_orders_async(exchange: ccxt.binanceusdm, symbol: str, async_logger):
-    """
-    【精准清理模式】
-    只清理传入的 symbol。
-    关键点：调用两次 cancel_all_orders，第二次必须传入 {'stop': True} 以撤销条件单。
-    """
-    # 用户指令：不需要拼装，只用传入的 symbol
-    target_sym = symbol
+def _amount_to_precision(exchange: ccxt.binanceusdm, symbol: str, amount: float) -> str:
+    """数量精度转换，兼容离线 fake exchange 未实现该方法的场景。"""
+    try:
+        return str(exchange.amount_to_precision(symbol, amount))
+    except Exception:
+        return str(amount)
 
-    # 循环尝试 3 次，防止网络抖动
-    for i in range(3):
+
+def _price_to_precision(exchange: ccxt.binanceusdm, symbol: str, price: float) -> str:
+    """价格精度转换，兼容离线 fake exchange 未实现该方法的场景。"""
+    try:
+        return str(exchange.price_to_precision(symbol, price))
+    except Exception:
+        return str(price)
+
+
+async def cancel_all_orders_async(exchange: ccxt.binanceusdm, symbol: str, async_logger=None) -> bool:
+    """撤销指定交易对上的全部挂单（普通单 + 条件单）。
+
+    ccxt 的 Binance 条件单需要传 {'stop': True} 才会走到撤销条件单的接口，
+    因此这里保留两次调用；P1-7 已合并原先重复的两层包装与 3 次无谓循环。
+    """
+    for stop_params in (None, {'stop': True}):
         try:
-            # --- 第一刀：撤销普通订单 (Limit/Market) ---
-            try:
-                await exchange.cancel_all_orders(target_sym)
-            except Exception:
-                pass
-
-            # --- 第二刀：撤销条件订单 (Trailing Stop/Stop Loss) ---
-            # 【这是关键！】必须传 {'stop': True} CCXT 才会去调撤销条件单的接口
-            try:
-                await exchange.cancel_all_orders(target_sym, {'stop': True})
-            except Exception:
-                pass
-
+            if stop_params is None:
+                await exchange.cancel_all_orders(symbol)
+            else:
+                await exchange.cancel_all_orders(symbol, stop_params)
         except Exception:
+            # 单次撤销失败不阻塞主流程，最终以交易所持仓/挂单状态为准
             pass
-
-        # 稍等一下让交易所撮合引擎处理
-        await asyncio.sleep(0.5)
-
     return True
-
-
-# --- 兼容性包装器 ---
-async def _cancel_sl_tp_orders_async(exchange: ccxt.binanceusdm, symbol: str, async_logger):
-    return await _ensure_no_open_orders_async(exchange, symbol, async_logger)
-
-
-async def _force_cancel_all_orders(exchange: ccxt.binanceusdm, symbol: str, async_logger):
-    return await _ensure_no_open_orders_async(exchange, symbol, async_logger)
-
-
-# ------------------
 
 
 async def _place_trailing_stop_order(
@@ -60,16 +50,13 @@ async def _place_trailing_stop_order(
         callback_rate: float,
         async_logger
 ):
-    """
-    移动止盈下单 (阶梯式降级)
-    """
-    amount_str = exchange.amount_to_precision(symbol, amount)
+    """移动止盈下单（阶梯式降级）。"""
+    amount_str = _amount_to_precision(exchange, symbol, amount)
 
-    # --- 构建重试阶梯 (10.0 -> 9.0 -> ... -> 5.0 -> 2.0) ---
     user_rate = max(0.1, min(20.0, float(callback_rate)))
     rates_to_try = [user_rate]
 
-    # 如果用户设定的大于 5.0，进行细粒度降级
+    # 用户设定大于 5.0 时进行细粒度降级：10 -> 9 -> ... -> 5
     if user_rate > 5.0:
         curr = user_rate - 1.0
         while curr > 5.0:
@@ -80,35 +67,29 @@ async def _place_trailing_stop_order(
     # 添加保底
     if 2.0 not in rates_to_try and user_rate > 2.0:
         rates_to_try.append(2.0)
-    # ------------------
 
     for rate in rates_to_try:
         params = {
             'callbackRate': rate,
             'reduceOnly': True,
         }
-
-        # 每个比率尝试 2 次
         for attempt in range(2):
             try:
-                return await exchange.create_order(symbol, 'TRAILING_STOP_MARKET', side, amount_str, None, params)
-
+                return await exchange.create_order(
+                    symbol, constants.ORDER_TYPE_TRAILING_STOP, side, amount_str, None, params
+                )
             except Exception as e:
                 err = str(e)
-
-                # 情况A: 交易所明确拒绝这个比率 (-2007)
+                # 情况A: 交易所明确拒绝这个比率 (-2007)，降级到下一个比率
                 if '-2007' in err or 'Invalid callBack rate' in err:
-                    print(f"   [WARN] {symbol} {rate}% 被拒，尝试降低...")
-                    break  # 跳出内层循环，试下一个比率
-
-                # 情况B: 订单拥堵 (-4045 / -4130) -> 清理并重试当前比率
-                elif '-4045' in err or '-4130' in err or 'limit' in err:
-                    # print(f"   [RETRY] {symbol} 拥堵，清理后重试 {rate}%...")
-                    await _ensure_no_open_orders_async(exchange, symbol, async_logger)
+                    await async_logger(f"⚠️ {symbol} 移动止盈回调率 {rate}% 被拒，尝试降级。", "warning")
+                    break
+                # 情况B: 订单拥堵 (-4045 / -4130)，清理后重试当前比率
+                elif '-4045' in err or '-4130' in err:
+                    await cancel_all_orders_async(exchange, symbol, async_logger)
                     await asyncio.sleep(1.0)
                     continue
-
-                    # 情况C: 其他错误
+                # 情况C: 其他错误
                 else:
                     await async_logger(f"❌ {symbol} 移动止盈出错: {err}", "error")
                     return False
@@ -117,21 +98,18 @@ async def _place_trailing_stop_order(
     return False
 
 
-async def _place_standard_stop_order(
+async def _place_conditional_order_async(
         exchange: ccxt.binanceusdm,
         symbol: str,
         side: str,
         amount: float,
         trigger_price: float,
-        is_stop_loss: bool,
+        order_type: str,
         async_logger
 ):
-    """
-    标准止损 (备用)
-    """
-    order_type = 'STOP_MARKET'
-    price_str = exchange.price_to_precision(symbol, trigger_price)
-    amount_str = exchange.amount_to_precision(symbol, amount)
+    """提交 reduce-only 条件单（STOP_MARKET / TAKE_PROFIT_MARKET）。"""
+    price_str = _price_to_precision(exchange, symbol, trigger_price)
+    amount_str = _amount_to_precision(exchange, symbol, amount)
     params = {'stopPrice': price_str, 'reduceOnly': True, 'workingType': 'MARK_PRICE'}
 
     for attempt in range(3):
@@ -140,66 +118,123 @@ async def _place_standard_stop_order(
         except Exception as e:
             err = str(e)
             if '-4045' in err or '-4130' in err or 'limit' in err:
-                await _ensure_no_open_orders_async(exchange, symbol, async_logger)
+                await cancel_all_orders_async(exchange, symbol, async_logger)
                 await asyncio.sleep(1.0)
                 continue
+            await async_logger(f"❌ {symbol} 条件单 {order_type} 下单失败: {err}", "error")
             return False
+    await async_logger(f"❌ {symbol} 条件单 {order_type} 重试后仍失败。", "error")
     return False
 
 
 async def set_tp_sl_for_position_async(exchange: ccxt.binanceusdm, position: Position, config: dict, async_logger,
                                        stop_event: asyncio.Event) -> bool:
+    """为一个仓位设置止盈止损。
+
+    固定模式：同时挂 STOP_MARKET（止损）与 TAKE_PROFIT_MARKET（止盈），
+    均为 reduceOnly 条件单，trigger 价格按 leverage 换算百分比：
+      long  止损 entry*(1-sl%/100/lev)  止盈 entry*(1+tp%/100/lev)
+      short 止损 entry*(1+sl%/100/lev)  止盈 entry*(1-tp%/100/lev)
+    移动止盈模式：只挂 TRAILING_STOP_MARKET（保持原行为）。
+    """
     full_symbol = position.full_symbol
 
-    # 1. 启动前先清理
-    await _ensure_no_open_orders_async(exchange, full_symbol, async_logger)
+    # 1. 启动前先清理该交易对上的历史挂单，避免重复/超量条件单
+    await cancel_all_orders_async(exchange, full_symbol, async_logger)
 
-    if stop_event.is_set(): return False
+    if stop_event.is_set():
+        return False
 
-    is_long = position.side == i18n.SIDE_LONG
-    side_key = "long" if is_long else "short"
+    is_long = str(position.side).lower() == constants.SIDE_LONG
+    side_key = constants.SIDE_LONG if is_long else constants.SIDE_SHORT
+    exit_side = constants.ORDER_SIDE_SELL if is_long else constants.ORDER_SIDE_BUY
 
-    enable_trailing = config.get(f'enable_{side_key}_trailing_stop', False)
-
-    # 2. 下单
-    if enable_trailing:
+    # 2. 移动止盈分支保持原行为：优先且仅挂 TRAILING_STOP_MARKET
+    if config.get(f'enable_{side_key}_trailing_stop', False):
         callback_rate = config.get(f'{side_key}_trailing_stop_callback_rate', 1.0)
-        ts_side = 'sell' if is_long else 'buy'
-
         res = await _place_trailing_stop_order(
-            exchange, full_symbol, ts_side, position.contracts, callback_rate, async_logger
+            exchange, full_symbol, exit_side, position.contracts, callback_rate, async_logger
         )
-
         if isinstance(res, dict) and res.get('id'):
-            # 获取最终成功的比率 (可能被降级了)
-            final_rate = res.get('info', {}).get('priceRate')
-            if not final_rate: final_rate = callback_rate
-
+            info = res.get('info') or {}
+            final_rate = info.get('priceRate') or callback_rate
             await async_logger(f"✅ {position.symbol} 移动止盈成功 (Rate:{final_rate}%)", "success")
             return True
+        return False
+
+    # 3. 固定止盈止损（enable_{side}_sl_tp 关闭时不下单）
+    if not config.get(f'enable_{side_key}_sl_tp', False):
+        return True
+
+    leverage = float(config.get('leverage', 1) or 1)
+    if leverage <= 0:
+        leverage = 1.0
+    entry_price = float(position.entry_price or 0)
+    contracts = float(position.contracts or 0)
+    if entry_price <= 0 or contracts <= 0:
+        await async_logger(f"⚠️ {position.symbol} 入场价或仓位数量无效，跳过止盈止损。", "warning")
+        return False
+
+    success = True
+
+    sl_perc = float(config.get(f'{side_key}_stop_loss_percentage', 0) or 0)
+    if sl_perc > 0:
+        sl_ratio = sl_perc / 100 / leverage
+        sl_trigger = entry_price * (1 - sl_ratio) if is_long else entry_price * (1 + sl_ratio)
+        res = await _place_conditional_order_async(
+            exchange, full_symbol, exit_side, contracts, sl_trigger,
+            constants.ORDER_TYPE_STOP_MARKET, async_logger
+        )
+        if isinstance(res, dict) and res.get('id'):
+            await async_logger(f"✅ {position.symbol} 固定止损成功 (触发价: {sl_trigger:.8g})", "success")
         else:
-            return False
+            await async_logger(f"❌ {position.symbol} 固定止损下单失败", "error")
+            success = False
 
-    # 3. 备用固定止损
-    else:
-        if config.get(f'enable_{side_key}_sl_tp', False):
-            sl_perc = config.get(f'{side_key}_stop_loss_percentage', 0)
-            leverage = config.get('leverage', 1)
+    tp_perc = float(config.get(f'{side_key}_take_profit_percentage', 0) or 0)
+    if tp_perc > 0:
+        tp_ratio = tp_perc / 100 / leverage
+        tp_trigger = entry_price * (1 + tp_ratio) if is_long else entry_price * (1 - tp_ratio)
+        res = await _place_conditional_order_async(
+            exchange, full_symbol, exit_side, contracts, tp_trigger,
+            constants.ORDER_TYPE_TAKE_PROFIT_MARKET, async_logger
+        )
+        if isinstance(res, dict) and res.get('id'):
+            await async_logger(f"✅ {position.symbol} 固定止盈成功 (触发价: {tp_trigger:.8g})", "success")
+        else:
+            await async_logger(f"❌ {position.symbol} 固定止盈下单失败", "error")
+            success = False
 
-            if sl_perc > 0:
-                sl_ratio = float(sl_perc) / 100 / leverage
-                target_sl = position.entry_price * (1 - sl_ratio) if is_long else position.entry_price * (1 + sl_ratio)
-                sl_side = 'sell' if is_long else 'buy'
-
-                res = await _place_standard_stop_order(
-                    exchange, full_symbol, sl_side, position.contracts, target_sl, True, async_logger
-                )
-                if isinstance(res, dict) and res.get('id'):
-                    await async_logger(f"✅ {position.symbol} 固定止损成功", "success")
-                    return True
-
-    return True
+    return success
 
 
-async def cleanup_orphan_sltp_orders_async(exchange: ccxt.binanceusdm, active_symbols: Set[str], async_logger):
-    pass
+async def cleanup_orphan_sltp_orders_async(exchange: ccxt.binanceusdm, active_symbols: Set[str], async_logger) -> int:
+    """清理"已无持仓的交易对"上残留的条件单/挂单。
+
+    实现 P0-6：拉取全部挂单，撤销 symbol 不在当前持仓集合中的挂单。
+    任何查询/撤销失败都只记录日志，不影响同步 SL/TP 主流程。
+    """
+    active_upper = {str(symbol).upper() for symbol in (active_symbols or set())}
+    try:
+        open_orders = await exchange.fetch_open_orders()
+    except Exception as e:
+        await async_logger(f"⚠️ 获取全部挂单失败，跳过孤儿条件单清理: {e}", "warning")
+        return 0
+
+    orphan_orders = []
+    for order in open_orders or []:
+        symbol = str((order or {}).get('symbol') or '')
+        if symbol and symbol.upper() not in active_upper:
+            orphan_orders.append(order)
+
+    cancelled_count = 0
+    for order in orphan_orders:
+        try:
+            await exchange.cancel_order(order.get('id'), order.get('symbol'))
+            cancelled_count += 1
+        except Exception as e:
+            await async_logger(f"⚠️ 撤销孤儿挂单失败 {order.get('symbol')} {order.get('id')}: {e}", "warning")
+
+    if cancelled_count:
+        await async_logger(f"🧹 已清理 {cancelled_count} 个无持仓交易对的孤儿条件单。", "info")
+    return cancelled_count

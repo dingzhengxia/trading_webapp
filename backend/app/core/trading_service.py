@@ -1,19 +1,28 @@
-# backend/app/core/trading_service.py (最终完整版)
+# backend/app/core/trading_service.py
 import asyncio
 import threading
 import time
-from typing import Dict, Any, List, Tuple, Callable, Awaitable, Optional
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 
-from fastapi import HTTPException, BackgroundTasks
+from fastapi import BackgroundTasks, HTTPException
 
 from .exchange_manager import get_exchange_for_task
-from .websocket_manager import log_message, update_status, broadcast_progress_details, manager as ws_manager
+from .websocket_manager import broadcast_progress_details, log_message, manager as ws_manager, update_status
 from ..config.config import load_settings
-from ..logic.exchange_logic_async import process_order_with_sl_tp_async, close_position_async, \
-    InterruptedError, fetch_positions_with_pnl_async
+from ..logic.exchange_logic_async import (
+    InterruptedError,
+    close_position_async,
+    fetch_positions_with_pnl_async,
+    process_order_with_sl_tp_async,
+)
+from ..logic.manual_trade_logic import (
+    build_manual_trade_tasks,
+    normalize_action,
+    validate_manual_items,
+)
 from ..logic.plan_calculator import calculate_trade_plan
-from ..logic.sl_tp_logic_async import set_tp_sl_for_position_async, cleanup_orphan_sltp_orders_async
-from ..models.schemas import ExecutionPlanRequest, TradePlanRequest, SyncSltpRequest
+from ..logic.sl_tp_logic_async import cleanup_orphan_sltp_orders_async, set_tp_sl_for_position_async
+from ..models.schemas import ExecutionPlanRequest, ManualTradeRequest, SyncSltpRequest, TradePlanRequest
 
 
 class TradingService:
@@ -54,14 +63,10 @@ class TradingService:
 
     def _start_task(self, task_name: str, task_coro: Awaitable, background_tasks: BackgroundTasks,
                     request_id: Optional[str] = None):
-        print(f"[LOG] 接收到启动 '{task_name}' 的请求 (ID: {request_id})...")
         with self._lock:
             if self._is_running:
                 if request_id and request_id == self._last_request_id:
-                    print(f"[LOG] ⚠️ 捕获到重复的请求ID '{request_id}'，已忽略。")
                     return {"message": "重复的任务请求已被忽略。"}
-                print(
-                    f"[LOG] ❌ 启动 '{task_name}' 失败：已有任务 '{self._task_progress.get('task_name', '未知')}' 在运行。")
                 raise HTTPException(status_code=400, detail="已有任务在运行中，请稍后再试。")
 
             self._is_running = True
@@ -69,7 +74,6 @@ class TradingService:
             self._last_request_id = request_id
             self._task_progress = {"task_name": task_name}
             background_tasks.add_task(self._execute_and_log_task, task_name, task_coro)
-            print(f"[LOG] ✅ 任务 '{task_name}' (ID: {request_id}) 已成功提交到后台队列。")
 
         return {"message": f"任务 '{task_name}' 已成功提交到后台。"}
 
@@ -88,9 +92,11 @@ class TradingService:
 
         async def worker_wrapper(item):
             nonlocal success_count, failure_count
-            if self._stop_event.is_set(): return
+            if self._stop_event.is_set():
+                return
             async with semaphore:
-                if self._stop_event.is_set(): return
+                if self._stop_event.is_set():
+                    return
                 is_success = False
                 try:
                     is_success = await worker_func(item)
@@ -110,7 +116,8 @@ class TradingService:
         tasks = [asyncio.create_task(worker_wrapper(item)) for item in items]
         await asyncio.wait(tasks)
 
-        if self._stop_event.is_set(): raise InterruptedError()
+        if self._stop_event.is_set():
+            raise InterruptedError()
 
         status_text = "部分成功" if failure_count > 0 else "全部成功"
         final_progress = self._task_progress.copy()
@@ -126,13 +133,66 @@ class TradingService:
                                 plan_request.request_id)
 
     async def stop_trading(self):
-        if not self._is_running: return {"message": "No active task."}
+        if not self._is_running:
+            return {"message": "No active task."}
         await log_message("收到停止信号，任务将在当前子项完成后停止。", "warning")
         self._stop_event.set()
         return {"message": "Stop event set. Task will terminate shortly."}
 
+    # --- 信号自动开仓（MERGE_PLAN §5）---
+    def schedule_task(self, task_name: str, task_coro: Awaitable,
+                      request_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        """不经 FastAPI BackgroundTasks 的任务提交入口（信号自动开仓用）。
+
+        与 _start_task 一样受全局任务锁互斥：_is_running 时返回 None（调用方 skip）。
+        """
+        with self._lock:
+            if self._is_running:
+                return None
+            self._is_running = True
+            self._stop_event.clear()
+            self._last_request_id = request_id
+            self._task_progress = {"task_name": task_name}
+        asyncio.get_running_loop().create_task(self._execute_and_log_task(task_name, task_coro))
+        return {"message": f"任务 '{task_name}' 已成功提交到后台。"}
+
+    async def auto_open_from_signal(self, signal: Dict[str, Any], config: Dict[str, Any]) -> bool:
+        """信号驱动的自动开仓入口。
+
+        复用现有 process_order_with_sl_tp_async（限价 post-only、USDC 优先、开仓后挂 SL/TP）；
+        与用户任务互斥：_is_running 时记 warning 并 skip（不打断用户任务）。
+        """
+        if self._is_running:
+            await log_message("已有交易任务在运行，跳过本次信号自动开仓。", "warning")
+            return False
+
+        direction = str(signal.get('direction') or '').lower()
+        side = 'buy' if direction == 'long' else 'sell'
+        plan = {
+            'coin': str(signal.get('symbol') or '').upper(),
+            'value': float(config.get('signal_auto_trade_value_usd', 100.0) or 100.0),
+            'side': side,
+        }
+        signal_desc = f"{plan['coin']} {direction} ({signal.get('strategy')} @ {signal.get('timeframe')})"
+
+        submitted = self.schedule_task(
+            "信号自动开仓", self._auto_open_task(plan, config))
+        if submitted is None:
+            await log_message("已有交易任务在运行，跳过本次信号自动开仓。", "warning")
+            return False
+        await log_message(f"信号自动开仓任务已提交: {signal_desc}，"
+                          f"金额 {plan['value']} USD。", "info")
+        return True
+
+    async def _auto_open_task(self, plan: Dict[str, Any], config: Dict[str, Any]):
+        config = dict(config)
+        config.setdefault('leverage', 1)
+        async with get_exchange_for_task() as exchange:
+            return await process_order_with_sl_tp_async(
+                exchange, plan, config, log_message, self._stop_event)
+
     async def _trading_loop_task(self, config: Dict[str, Any]):
-        # long_plan, short_plan = calculate_trade_plan(config, config.get('long_custom_weights', {}))
+        # P1-1 / P1-5：整个任务只创建一个 exchange，worker 共享
         long_plan, short_plan = calculate_trade_plan(config)
         order_plan = [item for item in (
             [{'coin': c, 'value': v, 'side': 'buy'} for c, v in long_plan.items()] if config.get(
@@ -140,11 +200,12 @@ class TradingService:
         ) + ([{'coin': c, 'value': v, 'side': 'sell'} for c, v in short_plan.items()] if config.get(
             'enable_short_trades') else [])]
 
-        async def worker(plan_item):
-            async with get_exchange_for_task() as exchange:
-                return await process_order_with_sl_tp_async(exchange, plan_item, config, log_message, self._stop_event)
+        async with get_exchange_for_task() as exchange:
+            async def worker(plan_item):
+                return await process_order_with_sl_tp_async(
+                    exchange, plan_item, config, log_message, self._stop_event)
 
-        await self._run_task_loop(order_plan, worker, self.CONCURRENT_OPEN_TASKS, "自动开仓")
+            await self._run_task_loop(order_plan, worker, self.CONCURRENT_OPEN_TASKS, "自动开仓")
 
     def dispatch_tasks(self, task_name: str, tasks_data: List[Tuple[str, float]], task_type: str,
                        config: Dict[str, Any], background_tasks: BackgroundTasks, request_id: Optional[str] = None):
@@ -152,18 +213,19 @@ class TradingService:
         return self._start_task(task_name, task_coro, background_tasks, request_id)
 
     async def _generic_task_loop(self, tasks_data: List, task_type: str, config: Dict[str, Any], task_name: str):
-        async def worker(task_item):
-            if task_type == 'CLOSE_ORDER':
-                full_symbol, ratio = task_item
-                async with get_exchange_for_task() as exchange:
-                    is_success = await close_position_async(exchange, full_symbol, ratio, log_message, self._stop_event)
+        async with get_exchange_for_task() as exchange:
+            async def worker(task_item):
+                if task_type == 'CLOSE_ORDER':
+                    full_symbol, ratio = task_item
+                    is_success = await close_position_async(
+                        exchange, full_symbol, ratio, log_message, self._stop_event)
                     if is_success:
                         await ws_manager.broadcast(
                             {"type": "position_closed", "payload": {"full_symbol": full_symbol, "ratio": ratio}})
                     return is_success
-            return False
+                return False
 
-        await self._run_task_loop(tasks_data, worker, self.CONCURRENT_CLOSE_TASKS, task_name)
+            await self._run_task_loop(tasks_data, worker, self.CONCURRENT_CLOSE_TASKS, task_name)
 
     def sync_all_sltp(self, settings: SyncSltpRequest, background_tasks: BackgroundTasks):
         return self._start_task("同步所有止盈止损", self._sync_sltp_task(settings.model_dump()), background_tasks,
@@ -182,6 +244,62 @@ class TradingService:
                 active_symbols = {p.full_symbol for p in positions}
                 await cleanup_orphan_sltp_orders_async(exchange, active_symbols, log_message)
 
+    # --- 手动做多 / 做空 / 反手 ---
+    def manual_trade(self, request: ManualTradeRequest, background_tasks: BackgroundTasks):
+        payload = {
+            "request_id": request.request_id,
+            "default_value": request.default_value,
+            "items": [
+                {"symbol": item.symbol, "action": normalize_action(item.action), "value": item.value}
+                for item in request.items
+            ],
+        }
+        try:
+            validate_manual_items(payload["items"])
+        except ValueError as e:
+            # API 层转换为 400，且不创建 exchange / 不触达交易所
+            raise HTTPException(status_code=400, detail=str(e))
+
+        return self._start_task("手动交易", self._manual_trade_task(payload), background_tasks,
+                                request.request_id)
+
+    async def _manual_trade_task(self, payload: Dict[str, Any]):
+        config = load_settings()
+        items = payload.get("items") or []
+        default_value = payload.get("default_value")
+
+        # 反手必须先平后开，所有 worker 共用同一个 exchange（1 个任务 1 个实例）
+        async with get_exchange_for_task() as exchange:
+            positions = await fetch_positions_with_pnl_async(exchange, config.get('leverage', 1))
+            tasks = build_manual_trade_tasks(items, positions, config, default_value=default_value)
+
+            async def worker(task):
+                if task.skip_reason:
+                    await log_message(f"⚠️ {task.coin}: {task.skip_reason}", "warning")
+                    return False
+
+                if task.close_full_symbols:
+                    for full_symbol in task.close_full_symbols:
+                        if self._stop_event.is_set():
+                            raise InterruptedError()
+                        closed = await close_position_async(
+                            exchange, full_symbol, 1.0, log_message, self._stop_event)
+                        if not closed:
+                            await log_message(
+                                f"❌ {task.coin}: 平仓 {full_symbol} 失败或仍有残留，已取消反手开仓。", "error")
+                            return False
+                        await ws_manager.broadcast(
+                            {"type": "position_closed",
+                             "payload": {"full_symbol": full_symbol, "ratio": 1.0}})
+                        if self._stop_event.is_set():
+                            raise InterruptedError()
+
+                plan = {"coin": task.coin, "value": task.value, "side": task.side}
+                return await process_order_with_sl_tp_async(
+                    exchange, plan, config, log_message, self._stop_event)
+
+            await self._run_task_loop(tasks, worker, self.CONCURRENT_OPEN_TASKS, "手动交易")
+
     def execute_rebalance_plan(self, plan: ExecutionPlanRequest, background_tasks: BackgroundTasks):
         return self._start_task("执行仓位再平衡", self._rebalance_execution_task(plan), background_tasks,
                                 plan.request_id)
@@ -190,36 +308,37 @@ class TradingService:
         config = load_settings()
         task_name = "执行再平衡"
 
-        # 获取一次持仓快照，用于查找平仓的全名
-        async with get_exchange_for_task() as exchange_for_snapshot:
-            all_positions = await fetch_positions_with_pnl_async(exchange_for_snapshot, config.get('leverage', 1))
+        # 统一使用一个 exchange：持仓快照与 worker 共用，避免重复 load_markets
+        async with get_exchange_for_task() as exchange:
+            all_positions = await fetch_positions_with_pnl_async(exchange, config.get('leverage', 1))
             position_map = {p.symbol: p.full_symbol for p in all_positions}
 
-        async def worker(order_item):
-            if self._stop_event.is_set(): return False
-            async with get_exchange_for_task() as exchange:
+            async def worker(order_item):
+                if self._stop_event.is_set():
+                    return False
                 if order_item.action == 'CLOSE':
                     base_symbol = order_item.symbol
                     full_symbol = position_map.get(base_symbol)
-
                     if not full_symbol:
-                        await log_message(f"⚠️ 无法为 {base_symbol} 找到当前持仓的完整交易对名称，跳过平仓。", "warning")
+                        await log_message(f"⚠️ 无法为 {base_symbol} 找到当前持仓的完整交易对名称，跳过平仓。",
+                                          "warning")
                         return False
 
-                    is_success = await close_position_async(exchange, full_symbol, order_item.close_ratio, log_message,
-                                                            self._stop_event)
+                    is_success = await close_position_async(
+                        exchange, full_symbol, order_item.close_ratio, log_message, self._stop_event)
                     if is_success:
-                        await ws_manager.broadcast({"type": "position_closed", "payload": {"full_symbol": full_symbol,
-                                                                                           "ratio": order_item.close_ratio}})
+                        await ws_manager.broadcast(
+                            {"type": "position_closed",
+                             "payload": {"full_symbol": full_symbol, "ratio": order_item.close_ratio}})
                     return is_success
                 elif order_item.action == 'OPEN':
                     order_plan_item = {'coin': order_item.symbol, 'value': order_item.value_to_trade,
                                        'side': order_item.side}
-                    return await process_order_with_sl_tp_async(exchange, order_plan_item, config, log_message,
-                                                                self._stop_event)
-            return False
+                    return await process_order_with_sl_tp_async(
+                        exchange, order_plan_item, config, log_message, self._stop_event)
+                return False
 
-        await self._run_task_loop(plan.orders, worker, self.CONCURRENT_OPEN_TASKS, task_name)
+            await self._run_task_loop(plan.orders, worker, self.CONCURRENT_OPEN_TASKS, task_name)
 
 
 trading_service = TradingService()

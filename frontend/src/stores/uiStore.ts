@@ -66,7 +66,7 @@ export const useUiStore = defineStore('ui', () => {
   }
 
   // (其他函数保持不变)
-  function launchTask(endpoint: string, payload: any, taskName: string, totalTasks: number) {
+  function launchTask(endpoint: string, payload: object, taskName: string, totalTasks: number) {
     if (isRunning.value) {
       logStore.addLog({
         message: '已有任务在运行中，请稍后再试。',

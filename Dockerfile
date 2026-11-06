@@ -21,6 +21,12 @@ ENV IS_DOCKER=1
 
 WORKDIR /app
 
+# 信号策略配置（/app/signal_config.json，signals/scanner.py 读取；缺失时自动用兜底配置）
+COPY signal_config.json .
+
+# SQLite 数据目录（config.py / database.py 运行时写入 /app/data/app.db，建议运行时挂载卷持久化）
+RUN mkdir -p /app/data
+
 COPY backend/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 

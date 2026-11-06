@@ -136,7 +136,7 @@ const executeClose = () => {
 
   const ratio = closeRatio.value / 100
   let endpoint = ''
-  let payload: any = {}
+  let payload: Record<string, unknown> = {}
   let taskName = ''
   let totalTasks = 0
 
@@ -153,10 +153,11 @@ const executeClose = () => {
     else if (target.side === 'short') totalTasks = positionStore.shortPositions.length
     else totalTasks = positionStore.positions.length
   } else if (target.type === 'selected') {
+    const fullSymbols = target.positions.map((p) => p.full_symbol)
     endpoint = '/api/positions/close-multiple'
-    payload = { full_symbols: target.positions.map((p) => p.full_symbol), ratio }
-    taskName = `平掉选中`
-    totalTasks = payload.full_symbols.length
+    payload = { full_symbols: fullSymbols, ratio }
+    taskName = '平掉选中'
+    totalTasks = fullSymbols.length
   }
 
   closeDialog()

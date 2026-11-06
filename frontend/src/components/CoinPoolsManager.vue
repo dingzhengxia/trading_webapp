@@ -73,7 +73,7 @@
             :hide-selected="!longPoolShowAll"
             :close-on-content-click="false"
           >
-            <template v-slot:selection="{ item, index }">
+            <template v-slot:selection="{ index }">
               <div
                 v-if="index === 0"
                 class="selection-wrapper"
@@ -185,7 +185,7 @@
             :hide-selected="!shortPoolShowAll"
             :close-on-content-click="false"
           >
-            <template v-slot:selection="{ item, index }">
+            <template v-slot:selection="{ index }">
               <div
                 v-if="index === 0"
                 class="selection-wrapper"
@@ -270,7 +270,8 @@ import { ref, computed, watch } from 'vue'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { useSnackbarStore } from '@/stores/snackbar'
 import apiClient from '@/services/api'
-import { debounce } from 'lodash-es' // 导入 debounce
+import { debounce } from '@/utils/debounce'
+import { getErrorMessage } from '@/utils/errors'
 
 const settingsStore = useSettingsStore()
 const snackbarStore = useSnackbarStore()
@@ -372,9 +373,8 @@ const savePools = async (isAutoSave = false) => {
     } else {
         console.log("Coin pools auto-saved successfully.")
     }
-  } catch (error: any) {
-    const errorMsg = error.response?.data?.detail || error.message
-    snackbarStore.show({ message: `保存币种备选池失败: ${errorMsg}`, color: 'error' })
+  } catch (error: unknown) {
+    snackbarStore.show({ message: `保存币种备选池失败: ${getErrorMessage(error)}`, color: 'error' })
   }
 }
 
@@ -388,9 +388,8 @@ const addCoin = async () => {
     settingsStore.availableCoins.splice(0, settingsStore.availableCoins.length, ...response.data)
     newCoinSymbol.value = ''
     snackbarStore.show({ message: `币种 '${symbol}' 添加成功！`, color: 'success' })
-  } catch (error: any) {
-    const errorMsg = error.response?.data?.detail || error.message
-    snackbarStore.show({ message: `添加失败: ${errorMsg}`, color: 'error' })
+  } catch (error: unknown) {
+    snackbarStore.show({ message: `添加失败: ${getErrorMessage(error)}`, color: 'error' })
   } finally {
     isAddingCoin.value = false
   }

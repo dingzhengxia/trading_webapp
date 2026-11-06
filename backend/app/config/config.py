@@ -1,5 +1,4 @@
 # backend/app/config/config.py (完整代码)
-import json
 import os
 from pathlib import Path
 from typing import List, Dict, Any
@@ -11,9 +10,17 @@ if os.environ.get("IS_DOCKER"):
 else:
     _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 
+# 旧 JSON 文件路径：仅作为一次性迁移到 SQLite 的来源保留（迁移后文件不动）
 USER_SETTINGS_FILE = _PROJECT_ROOT / 'user_settings.json'
 COIN_LISTS_FILE = _PROJECT_ROOT / 'coin_lists.json'
 # --- 路径定义结束 ---
+
+from ..core import database  # noqa: E402  SQLite 存储层（任务 A）
+
+# 注入迁移源路径（与本项目根一致），并初始化数据库（幂等：建表 + 一次性迁移）
+database.USER_SETTINGS_FILE = USER_SETTINGS_FILE
+database.COIN_LISTS_FILE = COIN_LISTS_FILE
+database.init_db()
 
 STABLECOIN_PREFERENCE = ['USDC', 'USDT']
 
@@ -43,12 +50,13 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     'open_order_fill_timeout_seconds': 60,
     'close_maker_retries': 3,
     'close_order_fill_timeout_seconds': 12,
-    'rebalance_method': 'multi_factor_weakness',
+    'rebalance_method': 'multi_factor_weakest',
     'rebalance_top_n': 10,
     'rebalance_min_volume_usd': 5000000.0,
     'rebalance_abs_momentum_days': 21,
     'rebalance_rel_strength_days': 21,
-    'rebalance_foam_days': 21,
+    'rebalance_short_ratio_max': 0.70,
+    'rebalance_short_ratio_min': 0.35,
     'enable_proxy': False,
     'proxy_url': 'http://127.0.0.1:7890',
     'long_coin_list': [],
@@ -66,6 +74,27 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     'rebalance_bollinger_period': 20,
     'rebalance_bollinger_std_dev': 2,
     'rebalance_bollinger_width_spike_ratio': 2.0,
+
+    # --- 信号扫描 / 自动开仓配置（Phase 2，全部默认关闭，启动不触达交易所）---
+    'signal_scan_enabled': False,
+    'signal_scan_interval_seconds': 300,
+    'signal_scan_static_symbols': ['BTC', 'ETH', 'BNB'],
+    'signal_scan_top_n': 100,
+    'signal_scan_timeframes': ['1h', '4h'],
+    'signal_ticker_cache_seconds': 30,
+    'signal_ohlcv_cache_seconds': 30,
+    'signal_auto_trade_enabled': False,
+    'signal_auto_trade_directions': ['long', 'short'],
+    'signal_auto_trade_strategies': [
+        'ema_cross', 'ma_breakout', 'kdj_cross', 'level_breakout',
+        'rsi_divergence', 'trend_channel_breakout', 'ob_luxalgo', 'ob_fluxcharts',
+    ],
+    'signal_auto_trade_timeframes': ['1h', '4h'],
+    'signal_auto_trade_confirmation_window_seconds': 300,
+    'signal_auto_trade_confirmations': 1,
+    'signal_auto_trade_cooldown_seconds': 900,
+    'signal_auto_trade_max_positions': 5,
+    'signal_auto_trade_value_usd': 100.0,
 }
 
 # 内存中全局变量
@@ -75,35 +104,25 @@ AVAILABLE_SHORT_COINS: List[str] = []
 
 _cached_settings: Dict[str, Any] | None = None
 _settings_lock = RLock()
-_coin_list_lock = RLock()  # 为币种列表文件添加专用的锁
+_coin_list_lock = RLock()  # 为币种池读写添加专用的锁
 
 
 def load_coin_lists() -> None:
-    """加载 coin_lists.json 文件到内存中的全局变量。"""
+    """从 SQLite coin_pools 表加载币种池到内存中的全局变量。"""
     global AVAILABLE_COINS, AVAILABLE_LONG_COINS, AVAILABLE_SHORT_COINS
     with _coin_list_lock:
-        if not COIN_LISTS_FILE.exists():
-            print(f"--- [WARNING] {COIN_LISTS_FILE} not found. Creating a new one.")
-            with open(COIN_LISTS_FILE, 'w', encoding='utf-8') as f:
-                json.dump({"coins_pool": [], "long_coins_pool": [], "short_coins_pool": []}, f, indent=4)
-            AVAILABLE_COINS, AVAILABLE_LONG_COINS, AVAILABLE_SHORT_COINS = [], [], []
-            return
-
-        try:
-            with open(COIN_LISTS_FILE, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-                AVAILABLE_COINS = data.get('coins_pool', [])
-                AVAILABLE_LONG_COINS = data.get('long_coins_pool', [])
-                AVAILABLE_SHORT_COINS = data.get('short_coins_pool', [])
-            print(
-                f"--- [INFO] Loaded coin lists from '{COIN_LISTS_FILE}'. Total: {len(AVAILABLE_COINS)}, Long: {len(AVAILABLE_LONG_COINS)}, Short: {len(AVAILABLE_SHORT_COINS)} ---")
-        except json.JSONDecodeError as e:
-            print(f"--- [ERROR] Failed to decode JSON from {COIN_LISTS_FILE}: {e} ---")
+        pools = database.get_all('coin_pools')
+        AVAILABLE_COINS = list(pools.get('coins_pool', []))
+        AVAILABLE_LONG_COINS = list(pools.get('long_coins_pool', []))
+        AVAILABLE_SHORT_COINS = list(pools.get('short_coins_pool', []))
+        print(
+            f"--- [INFO] Loaded coin pools from SQLite. Total: {len(AVAILABLE_COINS)}, "
+            f"Long: {len(AVAILABLE_LONG_COINS)}, Short: {len(AVAILABLE_SHORT_COINS)} ---")
 
 
 def load_settings() -> Dict[str, Any]:
     """
-    加载用户配置，如果不存在则使用默认值。
+    加载用户配置（SQLite settings 表），不存在时使用默认值。
     """
     global _cached_settings
     with _settings_lock:
@@ -111,34 +130,28 @@ def load_settings() -> Dict[str, Any]:
             return _cached_settings.copy()
 
         config = DEFAULT_CONFIG.copy()
-        if USER_SETTINGS_FILE.exists():
-            try:
-                with open(USER_SETTINGS_FILE, 'r', encoding='utf-8') as f:
-                    user_settings = json.load(f)
-                    config.update(user_settings)
-            except json.JSONDecodeError as e:
-                print(f"--- [ERROR] Failed to load {USER_SETTINGS_FILE}: {e}. Using default settings. ---")
+        stored = database.get_all('settings')
+        config.update(stored)
 
         config['api_key'] = os.environ.get('BINANCE_API_KEY', config.get('api_key', ''))
         config['api_secret'] = os.environ.get('BINANCE_API_SECRET', config.get('api_secret', ''))
 
         _cached_settings = config
-        print(f"--- [DEBUG] Settings loaded and cached. Leverage={_cached_settings.get('leverage')} ---")
         return _cached_settings.copy()
 
 
 def save_settings(current_config: Dict[str, Any]) -> bool:
     """
-    保存用户配置到文件。
+    保存用户配置到 SQLite settings 表。
     """
     global _cached_settings
     try:
         settings_to_write = {key: value for key, value in current_config.items() if key in DEFAULT_CONFIG}
 
-        with open(USER_SETTINGS_FILE, 'w', encoding='utf-8') as f:
-            json.dump(settings_to_write, f, indent=4, ensure_ascii=False)
+        for key, value in settings_to_write.items():
+            database.set_value('settings', key, value)
 
-        print(f"--- [INFO] User settings successfully saved to '{USER_SETTINGS_FILE}'. ---")
+        print(f"--- [INFO] User settings successfully saved to SQLite. ---")
 
         with _settings_lock:
             _cached_settings = None
@@ -150,7 +163,7 @@ def save_settings(current_config: Dict[str, Any]) -> bool:
 
 def add_coin_to_pool(coin_symbol: str) -> List[str]:
     """
-    添加新币种到总池中，并保存到文件。
+    添加新币种到总池中，并保存到 SQLite。
     """
     global AVAILABLE_COINS
     if not coin_symbol or not isinstance(coin_symbol, str):
@@ -161,25 +174,57 @@ def add_coin_to_pool(coin_symbol: str) -> List[str]:
         raise ValueError("Coin symbol cannot be empty.")
 
     with _coin_list_lock:
-        try:
-            with open(COIN_LISTS_FILE, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-        except (FileNotFoundError, json.JSONDecodeError):
-            data = {"coins_pool": [], "long_coins_pool": [], "short_coins_pool": []}
-
-        current_pool = set(data.get('coins_pool', []))
+        current_pool = set(AVAILABLE_COINS) | set(database.get_value('coin_pools', 'coins_pool', []))
         if symbol_upper in current_pool:
             raise ValueError(f"'{symbol_upper}' already exists in the coin pool.")
 
         current_pool.add(symbol_upper)
-        data['coins_pool'] = sorted(list(current_pool))
+        new_pool = sorted(list(current_pool))
+        database.set_value('coin_pools', 'coins_pool', new_pool)
 
-        with open(COIN_LISTS_FILE, 'w', encoding='utf-8') as f:
-            json.dump(data, f, indent=4, ensure_ascii=False)
-
-        AVAILABLE_COINS = data['coins_pool']
+        AVAILABLE_COINS = new_pool
         print(f"--- [INFO] Added '{symbol_upper}' to coin pool. Total now: {len(AVAILABLE_COINS)} ---")
         return AVAILABLE_COINS
+
+
+def _normalize_coin_pool(pool: List[str]) -> List[str]:
+    """去除空白、统一大写、去重并排序，过滤非法值。"""
+    normalized = set()
+    for coin in pool or []:
+        if not isinstance(coin, str):
+            continue
+        symbol = coin.strip().upper()
+        if symbol:
+            normalized.add(symbol)
+    return sorted(normalized)
+
+
+def save_coin_pools(long_coins_pool: List[str], short_coins_pool: List[str]) -> Dict[str, List[str]]:
+    """线程安全地保存做多/做空币种池到 SQLite，并同步刷新内存中的全局变量。
+
+    这是 update-coin-pools API 的唯一写入口，避免绕过锁直接写存储导致
+    内存与存储不一致、与其他任务写操作竞争。
+    """
+    global AVAILABLE_COINS, AVAILABLE_LONG_COINS, AVAILABLE_SHORT_COINS
+
+    long_pool = _normalize_coin_pool(long_coins_pool)
+    short_pool = _normalize_coin_pool(short_coins_pool)
+
+    with _coin_list_lock:
+        database.set_value('coin_pools', 'coins_pool', list(AVAILABLE_COINS))
+        database.set_value('coin_pools', 'long_coins_pool', long_pool)
+        database.set_value('coin_pools', 'short_coins_pool', short_pool)
+
+        AVAILABLE_LONG_COINS = long_pool
+        AVAILABLE_SHORT_COINS = short_pool
+        print(
+            f"--- [INFO] Coin pools saved successfully. Long: {len(AVAILABLE_LONG_COINS)}, Short: {len(AVAILABLE_SHORT_COINS)} ---")
+
+    return {
+        "coins_pool": list(AVAILABLE_COINS),
+        "long_coins_pool": list(long_pool),
+        "short_coins_pool": list(short_pool),
+    }
 
 
 # 首次加载

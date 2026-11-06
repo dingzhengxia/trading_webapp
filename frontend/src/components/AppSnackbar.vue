@@ -1,4 +1,4 @@
-<!-- 文件路径: frontend/src/components/Snackbar.vue (新文件) -->
+<!-- 文件路径: frontend/src/components/AppSnackbar.vue (全局消息提示，多词组件名) -->
 <template>
   <v-snackbar
     v-model="snackbarStore.visible"

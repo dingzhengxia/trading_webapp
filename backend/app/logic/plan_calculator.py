@@ -1,76 +1,137 @@
-# backend/app/logic/plan_calculator.py (已修复)
+# backend/app/logic/plan_calculator.py
+"""自动开仓计划计算（纯函数，无 IO / 无打印）。
 
-def calculate_trade_plan(config):
-    long_plan, short_plan = {}, {}
+规则：
+- 币种列表去空白、统一大写、去重、过滤非法值；
+- 自定义权重只保留合法币种 + 正权重；权重总和不等于 100 时按比例归一；
+- 自定义权重全部非法/为 0 时回退默认分配；
+- 默认分配保留 BTC 40% / ETH 30%（同时存在卫星币时）语义，其余均分。
+"""
+from typing import Any, Dict, List, Tuple
 
-    # --- 诊断日志 4：打印传入 plan_calculator 的关键配置 ---
-    print("\n--- [BACKEND DEBUG 4] Inside plan_calculator ---")
-    print(f"    'enable_long_trades' received: {config.get('enable_long_trades')}")
-    print(f"    'enable_short_trades' received: {config.get('enable_short_trades')}")
-    # --- 核心修复：增加权重日志，方便调试 ---
-    print(f"    'long_custom_weights' received: {config.get('long_custom_weights')}")
-    print("------------------------------------------\n")
-    # ---------------------------------------------------------
+TOTAL_WEIGHT_BASE = 100.0
+BTC_DEFAULT_WEIGHT = 0.40
+ETH_DEFAULT_WEIGHT = 0.30
+BTC_ETH_ONLY_WEIGHT = {'BTC': 0.60, 'ETH': 0.40}
 
-    # --- 核心修复：从 config 中获取权重，而不是依赖第二个参数 ---
-    custom_weights = config.get('long_custom_weights', {})
 
-    if config.get('enable_long_trades', True) and config.get('total_long_position_value', 0) > 0:
-        long_coin_list = config.get('long_coin_list', [])
-        if not long_coin_list:
-            return {}, {}
+def _normalize_coin_list(coins: Any) -> List[str]:
+    if not isinstance(coins, (list, tuple, set)):
+        return []
+    normalized: List[str] = []
+    seen = set()
+    for coin in coins:
+        if not isinstance(coin, str):
+            continue
+        symbol = coin.strip().upper()
+        if not symbol or symbol in seen:
+            continue
+        seen.add(symbol)
+        normalized.append(symbol)
+    return normalized
 
-        total_long_value = config['total_long_position_value']
-        long_coin_list = [c.strip().upper() for c in long_coin_list if isinstance(c, str) and c.strip()]
 
-        if not long_coin_list:
-            return {}, {}
+def _positive_float(value: Any) -> float:
+    try:
+        result = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    if result != result or result in (float('inf'), float('-inf')):
+        return 0.0
+    return result if result > 0 else 0.0
 
-        if custom_weights:
-            assigned_coins = {c: w for c, w in custom_weights.items() if c in long_coin_list and w > 0}
-            unassigned_coins = [c for c in long_coin_list if c not in assigned_coins]
-            assigned_weight_total = sum(assigned_coins.values())
-            final_weights = {}
 
-            if unassigned_coins and assigned_weight_total < 100:
-                remaining_weight = 100.0 - assigned_weight_total
-                weight_per_unassigned = remaining_weight / len(unassigned_coins)
-                final_weights.update(assigned_coins)
-                for coin in unassigned_coins:
-                    final_weights[coin] = weight_per_unassigned
-            else:
-                final_weights = assigned_coins
+def _normalize_custom_weights(weights: Any, coin_set: set) -> Dict[str, float]:
+    """过滤非法币种/非法权重，合并重复并统一大写。"""
+    result: Dict[str, float] = {}
+    if not isinstance(weights, dict):
+        return result
+    for coin, weight in weights.items():
+        if not isinstance(coin, str):
+            continue
+        symbol = coin.strip().upper()
+        if symbol not in coin_set:
+            continue
+        value = _positive_float(weight)
+        if value <= 0:
+            continue
+        result[symbol] = result.get(symbol, 0.0) + value
+    return result
 
-            total_final_weight = sum(final_weights.values())
-            if total_final_weight > 0:
-                for coin, weight in final_weights.items():
-                    long_plan[coin] = total_long_value * (weight / total_final_weight)
-        else:
-            btc_in_list = 'BTC' in long_coin_list
-            eth_in_list = 'ETH' in long_coin_list
-            satellite_coins = [c for c in long_coin_list if c not in ['BTC', 'ETH']]
-            if (btc_in_list or eth_in_list) and satellite_coins:
-                remaining_value = float(total_long_value)
-                if btc_in_list: long_plan['BTC'] = total_long_value * 0.40; remaining_value -= long_plan['BTC']
-                if eth_in_list: long_plan['ETH'] = total_long_value * 0.30; remaining_value -= long_plan['ETH']
-                if satellite_coins:
-                    value_per_satellite = max(0, remaining_value) / len(satellite_coins)
-                    for coin in satellite_coins: long_plan[coin] = value_per_satellite
-            elif btc_in_list and eth_in_list and not satellite_coins:
-                long_plan['BTC'] = total_long_value * 0.60
-                long_plan['ETH'] = total_long_value * 0.40
-            else:
-                value_per_coin = total_long_value / len(long_coin_list)
-                for coin in long_coin_list: long_plan[coin] = value_per_coin
 
-    if config.get('enable_short_trades', True) and config.get('total_short_position_value', 0) > 0:
-        short_coin_list = config.get('short_coin_list', [])
-        if not short_coin_list:
-            return long_plan, {}
+def _allocate_by_weights(total_value: float, coins: List[str], weights: Dict[str, float]) -> Dict[str, float]:
+    """按权重分配总价值；未分配币种在剩余权重中均分。"""
+    if not weights or total_value <= 0:
+        return {}
 
-        short_coin_list = [c.strip().upper() for c in short_coin_list if isinstance(c, str) and c.strip()]
-        if short_coin_list:
-            value_per_short = config['total_short_position_value'] / len(short_coin_list)
-            for coin in short_coin_list: short_plan[coin] = value_per_short
+    final_weights: Dict[str, float] = dict(weights)
+    assigned_total = sum(weights.values())
+    unassigned = [coin for coin in coins if coin not in weights]
+    if unassigned and assigned_total < TOTAL_WEIGHT_BASE:
+        per_coin = (TOTAL_WEIGHT_BASE - assigned_total) / len(unassigned)
+        for coin in unassigned:
+            final_weights[coin] = per_coin
+
+    total_weight = sum(final_weights.values())
+    if total_weight <= 0:
+        return {}
+    return {coin: total_value * weight / total_weight for coin, weight in final_weights.items()}
+
+
+def _default_allocation(total_value: float, coins: List[str]) -> Dict[str, float]:
+    """默认分配：BTC 40% + ETH 30%（有卫星币时），仅 BTC+ETH 时 60/40，其余均分。"""
+    if total_value <= 0 or not coins:
+        return {}
+
+    has_btc = 'BTC' in coins
+    has_eth = 'ETH' in coins
+    satellite_coins = [coin for coin in coins if coin not in ('BTC', 'ETH')]
+
+    if (has_btc or has_eth) and satellite_coins:
+        plan: Dict[str, float] = {}
+        remaining_value = total_value
+        if has_btc:
+            plan['BTC'] = total_value * BTC_DEFAULT_WEIGHT
+            remaining_value -= plan['BTC']
+        if has_eth:
+            plan['ETH'] = total_value * ETH_DEFAULT_WEIGHT
+            remaining_value -= plan['ETH']
+        value_per_satellite = max(remaining_value, 0.0) / len(satellite_coins)
+        for coin in satellite_coins:
+            plan[coin] = value_per_satellite
+        return plan
+
+    if has_btc and has_eth and not satellite_coins:
+        return {
+            'BTC': total_value * BTC_ETH_ONLY_WEIGHT['BTC'],
+            'ETH': total_value * BTC_ETH_ONLY_WEIGHT['ETH'],
+        }
+
+    value_per_coin = total_value / len(coins)
+    return {coin: value_per_coin for coin in coins}
+
+
+def calculate_trade_plan(config: Dict[str, Any]) -> Tuple[Dict[str, float], Dict[str, float]]:
+    """根据配置计算 (long_plan, short_plan)，值为目标 USD 名义价值。"""
+    if not isinstance(config, dict):
+        return {}, {}
+
+    long_plan: Dict[str, float] = {}
+    short_plan: Dict[str, float] = {}
+
+    long_coins = _normalize_coin_list(config.get('long_coin_list'))
+    total_long_value = _positive_float(config.get('total_long_position_value'))
+    if config.get('enable_long_trades', True) and long_coins and total_long_value > 0:
+        custom_weights = _normalize_custom_weights(config.get('long_custom_weights'), set(long_coins))
+        long_plan = _allocate_by_weights(total_long_value, long_coins, custom_weights)
+        if not long_plan:
+            # 自定义权重非法/总为 0：回退默认分配，不再静默返回空计划
+            long_plan = _default_allocation(total_long_value, long_coins)
+
+    short_coins = _normalize_coin_list(config.get('short_coin_list'))
+    total_short_value = _positive_float(config.get('total_short_position_value'))
+    if config.get('enable_short_trades', True) and short_coins and total_short_value > 0:
+        value_per_short = total_short_value / len(short_coins)
+        short_plan = {coin: value_per_short for coin in short_coins}
 
     return long_plan, short_plan
