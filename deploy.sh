@@ -28,6 +28,9 @@ sudo mkdir -p $CONFIG_DIR
 # 确保文件存在，如果不存在则创建一个空的
 sudo touch "$CONFIG_DIR/user_settings.json"
 sudo touch "$CONFIG_DIR/coin_lists.json"
+# SQLite 数据库目录（/app/data/app.db）：所有设置、币种池、信号/仓位保护状态都在这里，
+# 必须挂载持久卷，否则容器重建后配置全部丢失
+sudo mkdir -p "$CONFIG_DIR/data"
 # 赋予正确的权限，确保 Docker 容器可以读写
 sudo chmod -R 777 $CONFIG_DIR
 echo -e "${GREEN}Config directory '$CONFIG_DIR' is ready.${NC}"
@@ -68,12 +71,15 @@ echo ""
 
 echo -e "${YELLOW}===== [STEP 5/6] Starting new container with volume mounts... =====${NC}"
 # --- 核心修改：从固定的配置目录挂载数据卷 ---
+# JSON 文件仅用于首次启动时的 SQLite 一次性迁移（迁移完成后不再读写，可保留兜底）；
+# 真正的持久化数据在 SQLite：宿主机 /root/config/data ↔ 容器 /app/data
 sudo docker run -d \
     -p 8000:8000 \
     --restart unless-stopped \
     --name $CONTAINER_NAME \
     -v "$CONFIG_DIR/user_settings.json":/app/user_settings.json:rw \
     -v "$CONFIG_DIR/coin_lists.json":/app/coin_lists.json:rw \
+    -v "$CONFIG_DIR/data":/app/data:rw \
     $APP_NAME
 # ---------------------------------------------------
 echo -e "${GREEN}New container started successfully.${NC}"
