@@ -13,7 +13,8 @@ RUN npm run build
 # =================================================================
 # STAGE 2: Final Production Image
 # =================================================================
-FROM python:3.10-slim
+# python 3.12：pandas-ta 0.4.67b0 要求 Python>=3.12（与本机验证环境一致）
+FROM python:3.12-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
