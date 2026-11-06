@@ -175,8 +175,10 @@ def load_settings() -> Dict[str, Any]:
         stored = database.get_all('settings')
         config.update(stored)
 
-        config['api_key'] = os.environ.get('BINANCE_API_KEY', config.get('api_key', ''))
-        config['api_secret'] = os.environ.get('BINANCE_API_SECRET', config.get('api_secret', ''))
+        # 用 or 而非默认参数：.env 里留空的 `BINANCE_API_KEY=` 会被 python-dotenv
+        # 写成空字符串，用默认参数会让空值覆盖数据库里已保存的真实密钥（导致 -2015）。
+        config['api_key'] = os.environ.get('BINANCE_API_KEY') or config.get('api_key', '')
+        config['api_secret'] = os.environ.get('BINANCE_API_SECRET') or config.get('api_secret', '')
 
         _cached_settings = config
         # 深拷贝：嵌套的 list/dict 不能与缓存共享引用，否则调用方原地修改会污染全局配置
