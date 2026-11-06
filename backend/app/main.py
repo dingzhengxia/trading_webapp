@@ -8,11 +8,12 @@ from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect, status
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from .api import positions, rebalance, settings, signals, trading
+from .api import positions, protection, rebalance, settings, signals, trading
 from .api import status as status_router  # status 模块与 fastapi.status 避免命名冲突
 from .core.exchange_manager import close_shared_exchange
 from .core.security import access_key_warning
 from .core.websocket_manager import log_message, manager
+from .protection.service import shutdown_protection, startup_protection
 from .signals.service import shutdown_signals, startup_signals
 
 IS_DOCKER = os.environ.get("IS_DOCKER")
@@ -34,8 +35,14 @@ async def lifespan(app: FastAPI):
         await startup_signals()
     except Exception as e:
         print(f"--- [WARNING] 信号引擎启动失败（不影响交易主功能）: {e} ---")
+    # 仓位保护：默认 position_protection.enabled=False，只有打开开关才会轮询交易所
+    try:
+        await startup_protection()
+    except Exception as e:
+        print(f"--- [WARNING] 仓位保护启动失败（不影响交易主功能）: {e} ---")
     print("---" * 20)
     yield
+    await shutdown_protection()
     await shutdown_signals()
     await close_shared_exchange()
     print("--- Application shutdown complete. ---")
@@ -61,6 +68,7 @@ app.include_router(trading.router)
 app.include_router(rebalance.router)
 app.include_router(status_router.router)
 app.include_router(signals.router)
+app.include_router(protection.router)
 
 
 @app.websocket("/ws")

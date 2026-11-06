@@ -203,3 +203,72 @@ export interface SignalsResponse {
   config: Partial<SignalConfig>
 }
 // ------------------------------------------------
+
+// ------------------------------------------------
+// 仓位保护（Phase 3，自 monitor 并入）
+// ------------------------------------------------
+export interface ProtectionPositionRow {
+  symbol: string
+  side: 'long' | 'short'
+  contracts: number
+  entry_price: number
+  mark_price: number
+  stop_price: number | null
+  protected_stop: number | null
+  tp1_price: number | null
+  tp2_price: number | null
+  tp3_price: number | null
+  t1_done: boolean
+  t2_done: boolean
+  t3_done: boolean
+  tp1_done: boolean
+  tp2_done: boolean
+  tp3_done: boolean
+  risk_cycle_started_at: number | null
+  position_version: number | null
+}
+
+export interface ProtectionApiStats {
+  request_count: number
+  error_count: number
+  failures: number
+  circuit_open: boolean
+  circuit_open_until: number
+  cooldown_until: number
+}
+
+export interface ProtectionConfig {
+  enabled: boolean
+  timeframe: string
+  tp1_r_multiple: number
+  tp2_r_multiple: number
+  tp3_r_multiple: number
+  tp1_ratio: number
+  tp2_ratio: number
+  t1_structure_lookback: number
+  t2_structure_lookback: number
+  t3_structure_lookback: number
+  structure_buffer_atr: number
+  t1_atr_confirmation: number
+  t2_atr_confirmation: number
+  t3_atr_confirmation: number
+  profit_protection_enabled: boolean
+  profit_protection_trigger_r: number
+  emergency_enabled: boolean
+  exchange_hard_stop_enabled: boolean
+  hard_stop_min_distance_pct: number
+  hard_stop_atr_multiplier: number
+  dynamic_stop_max_distance_pct: number
+  [key: string]: unknown
+}
+
+export interface ProtectionStatus {
+  enabled: boolean
+  running: boolean
+  started_at: number | null
+  last_error: string | null
+  timeframe: string | null
+  positions: ProtectionPositionRow[]
+  api: ProtectionApiStats
+  config: ProtectionConfig
+}

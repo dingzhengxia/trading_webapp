@@ -1,0 +1,1998 @@
+"""Binance USD-M Futures Position Protection（自 monitor 项目并入，Phase 3）。
+
+Single-file production version.
+T1: 2h / 7-bar structure / 0.5 ATR confirmation / real-time trigger.
+T2/T3: closed-candle structure confirmation.
+TP: fixed-R staged maker-only reduce orders with retry/cycling.
+Position lifecycle is isolated for every manual close/reopen cycle.
+
+与独立 monitor 项目的差异（并入后端时仅做以下改造，风控判定逻辑零改动）：
+- 配置来源：SQLite settings 的 position_protection 字典（默认值见本文件 DEFAULT_CONFIG），
+  不再读取 config/config.json；
+- 状态持久化：SQLite 的 protection_state 表（key='state'），不再写 JSON 文件；
+- 告警：改为 WebApp 的 notifier（UI 日志 + loguru），不再依赖钉钉/桌面通知；
+- REST 限流复用 backend/app/core/rest_guardian.py，删除本文件内嵌的重复实现。
+"""
+
+import asyncio
+import math
+import random
+import time
+import uuid
+import copy
+
+import pandas as pd
+from loguru import logger
+
+from ..config.config import load_settings
+from ..core.database import get_value, set_value
+from ..core.rest_guardian import CircuitBreakerException, RestGuardian
+from .algo_compat import (
+    cancel_algo_order,
+    create_close_position_stop,
+    fetch_open_algo_orders,
+    supports_algo,
+)
+from .notifier import send_alert
+
+# 风控动作运行时锁：防止异步循环/并发检查导致 TP/T1/T2/T3 重复执行
+_ACTION_EXECUTION_LOCK = set()
+
+def _risk_action_lock_key(symbol, side, pos_state, action):
+    return f"{symbol}:{side}:{pos_state.get('risk_cycle_id', 'unknown')}:{action}"
+
+def _try_lock_risk_action(symbol, side, pos_state, action):
+    key = _risk_action_lock_key(symbol, side, pos_state, action)
+    if key in _ACTION_EXECUTION_LOCK:
+        return False
+    _ACTION_EXECUTION_LOCK.add(key)
+    return True
+
+
+CLIENT_ALGO_PREFIX = "PM_WS_SL_"
+
+DEFAULT_CONFIG = {
+    # 并入 WebApp 后默认关闭：只有前端「仓位保护」页打开开关才会轮询交易所
+    "position_protection": {'enabled': False,
+ 'timeframe': '2h',
+ 'ema_fast_period': 26,
+ 'ema_slow_period': 83,
+ 'structure_lookback': 12,
+ 'structure_buffer_atr': 0.5,
+ 't1_structure_lookback': 7,
+ 't1_atr_confirmation': 0.5,
+ 't2_structure_lookback': 26,
+ 't2_atr_confirmation': 0.5,
+ 't3_structure_lookback': 83,
+ 'entry_classification_lookback_bars': 500,
+ 'take_profit_enabled': True,
+ 'tp1_r_multiple': 1.0,
+ 'tp2_r_multiple': 2.0,
+ 'tp3_r_multiple': 3.0,
+ 'tp1_ratio': 0.2,
+ 'tp2_ratio': 0.3,
+ 'tp3_ratio': None,
+ 'tp_maker_only': True,
+ 'tp_limit_max_retries': 0,
+ 'tp_limit_timeout_sec': 10.0,
+ 'tp_limit_check_interval_sec': 1.0,
+ 'tp_breakeven_buffer_pct': 0.002,
+ 'tp_profit_lock_buffer_pct': 0.001,
+ 'profit_protection_enabled': True,
+ 'profit_protection_trigger_r': 0.5,
+ 'tier1_ratio': 0.2,
+ 'tier2_ratio': 0.3,
+ 'ma_atr_period': 14,
+ 'emergency_enabled': True,
+ 'emergency_timeframe': '15m',
+ 'emergency_atr_period': 14,
+ 'emergency_atr_multiplier': 3.0,
+ 'emergency_structure_lookback': 4,
+ 'exchange_hard_stop_enabled': True,
+ 'hard_stop_timeframe': '1h',
+ 'hard_stop_atr_period': 14,
+ 'hard_stop_min_distance_pct': 0.05,
+ 'hard_stop_atr_multiplier': 6.0,
+ 'dynamic_stop_max_distance_pct': 0.12,
+ 'positions_cache_ttl_sec': 5.0,
+ 'ticker_cache_ttl_sec': 3.0,
+ 'orders_cache_ttl_sec': 10.0,
+ 'ohlcv_cache_ttl_sec': 30.0,
+ 'api_max_retries': 5,
+ 'api_failure_threshold': 5,
+ 'api_circuit_breaker_cooldown_sec': 30,
+ 'api_min_interval_sec': 0.08,
+ 'api_429_base_backoff_sec': 2.0,
+ 'api_418_cooldown_sec': 60.0,
+ 'stop_maintenance_interval_sec': 5.0,
+ 'stop_min_update_pct': 0.0005,
+ 'stop_min_update_atr_ratio': 0.05,
+ 'price_source_tolerance_pct': 0.01}
+}
+
+
+def _deep_merge_defaults(defaults, user_value):
+    """递归合并配置，旧 config.json 缺少的新字段自动使用默认值。"""
+    result = copy.deepcopy(defaults)
+    if not isinstance(user_value, dict):
+        return result
+    for key, value in user_value.items():
+        if isinstance(value, dict) and isinstance(result.get(key), dict):
+            result[key] = _deep_merge_defaults(result[key], value)
+        else:
+            result[key] = value
+    return result
+
+
+def _load_config():
+    """读取仓位保护配置：DEFAULT_CONFIG 与 SQLite 中的用户覆盖值深合并。"""
+    try:
+        stored = load_settings().get("position_protection")
+    except Exception as exc:
+        logger.warning(f"读取仓位保护配置失败，使用默认值: {exc}")
+        stored = None
+    return {"position_protection": _deep_merge_defaults(
+        DEFAULT_CONFIG["position_protection"], stored)}
+
+
+def _f(value, default=None):
+    try:
+        return default if value is None else float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _load_state():
+    """从 SQLite（protection_state 表，key='state'）读取仓位保护状态。"""
+    try:
+        data = get_value("protection_state", "state", {})
+        return data if isinstance(data, dict) else {}
+    except Exception as exc:
+        logger.warning(f"读取仓位保护状态失败: {exc}")
+        return {}
+
+
+def _save_state(state):
+    """写入 SQLite。失败时返回 False，运行时状态仍保存在进程内，避免旧周期被读回。"""
+    try:
+        set_value("protection_state", "state", state)
+        return True
+    except Exception as exc:
+        logger.error(f"保存仓位保护状态失败: {exc}")
+        return False
+
+
+def _state_key(symbol, side):
+    return f"{symbol}_{side}"
+
+
+def _position_side(position):
+    if not position:
+        return None
+    side = str(position.get("side") or "").lower()
+    if side in ("long", "short"):
+        return side
+    info = position.get("info") or {}
+    ps = str(info.get("positionSide") or "").upper()
+    if ps == "LONG":
+        return "long"
+    if ps == "SHORT":
+        return "short"
+    amount = _f(info.get("positionAmt"), 0.0) or 0.0
+
+    if amount > 0:
+        return "long"
+    elif amount < 0:
+        return "short"
+    else:
+        return None
+
+
+def _position_size(position):
+    if not position:
+        return 0.0
+    v = _f(position.get("contracts"))
+    if v is not None:
+        return abs(v)
+    return abs(_f((position.get("info") or {}).get("positionAmt"), 0.0) or 0.0)
+
+
+def _raw_position_side(position):
+    ps = str((position.get("info") or {}).get("positionSide") or "BOTH").upper()
+    if ps in ("BOTH", "LONG", "SHORT"):
+        return ps
+    return "BOTH"
+
+
+def _timeframe_ms(tf):
+    unit = tf[-1].lower()
+    n = int(tf[:-1])
+    multiplier = {"m": 60_000, "h": 3_600_000, "d": 86_400_000}
+    return n * multiplier[unit]
+
+
+def _current_candle_close_ms(timeframe, now_ms=None):
+    now_ms = int(now_ms or time.time() * 1000)
+    size = _timeframe_ms(timeframe)
+    return ((now_ms // size) + 1) * size
+
+
+def _algo_methods(exchange):
+    """检查条件单接口可用性。
+
+    新版 ccxt 有 Algo Order 接口时直接使用；旧版没有则退回标准条件单
+    （见 algo_compat.py），不再抛异常导致整个引擎无法启动。
+    """
+    if not supports_algo(exchange):
+        logger.warning("⚠️ 当前 CCXT 缺少 Binance Algo Order 接口，回退旧版条件单（功能等价）")
+
+
+# ---------------------------------------------------------------------------
+# Global REST protection, cache and action locks
+# ---------------------------------------------------------------------------
+
+class Runtime:
+    def __init__(self):
+        self.rest = RestGuardian()
+        self.action_locks = {}
+        self.positions_cache = (0.0, None)
+        self.global_positions_map = {}
+        self.ticker_cache = {}
+        self.orders_cache = {}
+        self.ohlcv_cache = {}
+        self.last_circuit_notice = 0.0
+        # 仓位生命周期保护：防止“手动平仓 -> 数小时后重新开仓”继承旧风险周期。
+        self.previous_active_keys = set()
+        self.force_new_cycle_keys = set()
+        # 运行时一次性动作闩锁；即使状态文件短暂写入失败，也不能重复推送/减仓。
+        self.risk_action_latches = set()
+        # 状态文件不可写时，新周期仍保存在进程内，避免下一轮又读回旧周期。
+        self.runtime_position_states = {}
+
+    def action_lock(self, symbol, side):
+        key = (symbol, side)
+        if key not in self.action_locks:
+            self.action_locks[key] = asyncio.Lock()
+        return self.action_locks[key]
+
+
+RUNTIME = Runtime()
+
+
+async def _rest(exchange, method_name, *args, priority="NORMAL", conf=None, **kwargs):
+    return await RUNTIME.rest.call(getattr(exchange, method_name), *args, priority=priority, conf=conf, **kwargs)
+
+
+async def _fetch_positions(exchange, conf, symbols=None, priority="NORMAL", force=False):
+    ttl = float(conf.get("positions_cache_ttl_sec", 5))
+    now = time.monotonic()
+    ts, cached = RUNTIME.positions_cache
+    if not force and symbols is None and cached is not None and now - ts < ttl:
+        return cached
+
+    target_symbols = None if not symbols else symbols
+    positions = await _rest(exchange, "fetch_positions", target_symbols, priority=priority, conf=conf)
+
+    if symbols is None:
+        RUNTIME.positions_cache = (time.monotonic(), positions)
+    return positions
+
+
+async def _fetch_ticker(exchange, symbol, conf, priority="NORMAL", force=False):
+    ttl = float(conf.get("ticker_cache_ttl_sec", 3))
+    now = time.monotonic()
+    cached = RUNTIME.ticker_cache.get(symbol)
+    if not force and cached and now - cached[0] < ttl:
+        return cached[1]
+
+    ticker = await _rest(exchange, "fetch_ticker", symbol, priority=priority, conf=conf)
+    RUNTIME.ticker_cache[symbol] = (time.monotonic(), ticker)
+    return ticker
+
+
+async def _fetch_ohlcv(exchange, symbol, timeframe, limit, conf, priority="LOW", force=False):
+    key = (symbol, timeframe, limit)
+    # 【核心优化】使用 30s 的 OHLCV 高缓存，彻底杜绝 1h K线引起的 429 限流
+    ttl = float(conf.get("ohlcv_cache_ttl_sec", 30.0))
+    now = time.monotonic()
+    cached = RUNTIME.ohlcv_cache.get(key)
+    if not force and cached and now - cached[0] < ttl:
+        return cached[1]
+
+    rows = await _rest(exchange, "fetch_ohlcv", symbol, timeframe, None, limit, priority=priority, conf=conf)
+    RUNTIME.ohlcv_cache[key] = (time.monotonic(), rows)
+    return rows
+
+
+# ---------------------------------------------------------------------------
+# Exchange algo orders & Market Functions
+# ---------------------------------------------------------------------------
+
+def _make_client_algo_id(symbol, side):
+    compact = symbol.replace("/", "").replace(":", "")
+    suffix = "L" if side == "long" else "S"
+    return f"{CLIENT_ALGO_PREFIX}{compact}_{suffix}_{uuid.uuid4().hex[:8]}"[:36]
+
+
+def _algo_status(order):
+    return str(order.get("algoStatus") or order.get("status") or "").upper()
+
+
+def _algo_trigger(order):
+    return _f(order.get("triggerPrice") or order.get("stopPrice"))
+
+
+def _is_program_stop(order, side, position_side, current_price=None):
+    if not isinstance(order, dict):
+        return False
+
+    client_id = str(order.get("clientAlgoId") or order.get("clientOrderId") or "")
+    if not client_id.startswith(CLIENT_ALGO_PREFIX):
+        return False
+
+    type_upper = str(order.get("orderType") or order.get("type") or "").upper()
+    if type_upper != "STOP_MARKET":
+        return False
+
+    status = _algo_status(order)
+    if status and status not in ("NEW", "TRIGGER_PENDING", "UNTRIGGERED", "PARTIALLY_FILLED", ""):
+        return False
+
+    expected = "SELL" if side == "long" else "BUY"
+    if str(order.get("side") or "").upper() != expected:
+        return False
+
+    return True
+
+
+async def _get_open_algo_orders(exchange, symbol, conf, force=False):
+    ttl = float(conf.get("orders_cache_ttl_sec", 10))
+    now = time.monotonic()
+    cached = RUNTIME.orders_cache.get(symbol)
+    if not force and cached and now - cached[0] < ttl:
+        return cached[1]
+
+    orders = await fetch_open_algo_orders(exchange, symbol, conf, RUNTIME.rest)
+    RUNTIME.orders_cache[symbol] = (time.monotonic(), orders)
+    return orders
+
+
+async def _find_stop_orders(exchange, symbol, side, position, current_price, conf, force=False):
+    raw_ps = _raw_position_side(position)
+    orders = await _get_open_algo_orders(exchange, symbol, conf, force=force)
+    return [o for o in orders if _is_program_stop(o, side, raw_ps, current_price)]
+
+
+async def _cancel_algo(exchange, symbol, algo_id, conf):
+    result = await cancel_algo_order(exchange, symbol, algo_id, conf, RUNTIME.rest)
+    RUNTIME.orders_cache.pop(symbol, None)
+    return result
+
+
+async def _cancel_stop_orders(exchange, symbol, stops, conf):
+    for order in stops:
+        algo_id = order.get("algoId") or order.get("id")
+        if not algo_id:
+            continue
+        try:
+            await _cancel_algo(exchange, symbol, algo_id, conf)
+        except Exception:
+            pass
+
+
+async def _cancel_program_stops_for_flat(exchange, symbol, side, conf):
+    """仓位已经归零时，清理本机器人旧的 STOP，防止重新开仓后继承旧兜底单。"""
+    try:
+        orders = await _get_open_algo_orders(exchange, symbol, conf, force=True)
+        stops = [o for o in orders if _is_program_stop(o, side, "BOTH")]
+        if stops:
+            await _cancel_stop_orders(exchange, symbol, stops, conf)
+            logger.warning(f"[{symbol}/{side}] 🧹 仓位归零，清理旧保护STOP {len(stops)} 张。")
+    except Exception as exc:
+        logger.warning(f"[{symbol}/{side}] 清理旧保护STOP失败: {exc}")
+
+
+async def _create_full_close_stop(exchange, symbol, position, side, stop_price, conf):
+    trigger_str = exchange.price_to_precision(symbol, stop_price)
+    result = await create_close_position_stop(
+        exchange, symbol, side, _raw_position_side(position), stop_price,
+        _make_client_algo_id(symbol, side), conf, RUNTIME.rest)
+    RUNTIME.orders_cache.pop(symbol, None)
+
+    logger.success(f"[{symbol}] 🎯 成功下达 灾难STOP兜底单，触发价: {trigger_str}")
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Indicators & Market signals
+# ---------------------------------------------------------------------------
+
+def _closed_df(rows):
+    if not rows or len(rows) < 3:
+        raise RuntimeError("K线数据不足")
+    df = pd.DataFrame(rows, columns=["timestamp", "open", "high", "low", "close", "volume"])
+    return df.iloc[:-1].copy()
+
+
+def _atr_from_df(df, period):
+    if len(df) < period + 1:
+        return None
+    prev = df["close"].shift(1)
+    tr = pd.concat([
+        df["high"] - df["low"],
+        (df["high"] - prev).abs(),
+        (df["low"] - prev).abs(),
+    ], axis=1).max(axis=1)
+
+    value = _f(tr.rolling(period).mean().iloc[-1])
+    return value if value and value > 0 else None
+
+
+
+
+def _position_open_time_ms(position):
+    """尽可能从交易所仓位对象提取本次仓位/加仓的时间戳。
+
+    Binance 不同 CCXT 版本字段可能不同，因此按可信字段顺序读取；
+    如果交易所没有提供，调用方会退回到本地首次发现时间。
+    """
+    if not position:
+        return 0
+    info = position.get("info") or {}
+    candidates = (
+        position.get("openedAt"), position.get("openTime"),
+        info.get("openTime"), info.get("openedAt"), info.get("createTime"),
+    )
+    for value in candidates:
+        v = _f(value, 0) or 0
+        if v > 0:
+            # 秒级时间戳统一转毫秒
+            if v < 10_000_000_000:
+                v *= 1000
+            return int(v)
+    return 0
+
+
+
+
+def _atr_from_rows(rows, period):
+    atr = _atr_from_df(_closed_df(rows), period)
+    if not atr:
+        raise RuntimeError("ATR 无效")
+    return float(atr)
+
+
+def _ema_value(series, period):
+    if len(series) < period:
+        return None
+    value = series.ewm(span=period, adjust=False).mean().iloc[-1]
+    return _f(value, None)
+
+
+def _ema_structure_from_rows(rows, fast_period=26, slow_period=83, atr_period=14,
+                             lookback=12, buffer_atr=0.50):
+    """只使用已收盘K线计算 EMA + 结构位，避免当前未收盘K线造成假触发。"""
+    df = _closed_df(rows)
+    need = max(slow_period + 2, atr_period + 2, lookback + 2)
+    if len(df) < need:
+        raise RuntimeError(f"K线不足 {need} 根，无法计算 EMA/结构止损")
+
+    ema_fast = _ema_value(df["close"], fast_period)
+    ema_slow = _ema_value(df["close"], slow_period)
+    atr = _atr_from_df(df, atr_period)
+    if not ema_fast or not ema_slow or not atr:
+        raise RuntimeError("EMA/ATR 无效")
+
+    recent = df.iloc[-lookback:]
+    swing_low = float(recent["low"].min())
+    swing_high = float(recent["high"].max())
+    last_close = float(df.iloc[-1]["close"])
+    closed_ts = int(df.iloc[-1]["timestamp"])
+
+    # 趋势过滤：EMA26/EMA83 只负责判断趋势，不直接作为止损价。
+    trend = "bull" if ema_fast > ema_slow else "bear"
+    if abs(ema_fast - ema_slow) <= atr * 0.05:
+        trend = "neutral"
+
+    long_structure = swing_low - atr * buffer_atr
+    short_structure = swing_high + atr * buffer_atr
+    return {
+        "ema_fast": float(ema_fast), "ema_slow": float(ema_slow),
+        "atr": float(atr), "swing_low": swing_low, "swing_high": swing_high,
+        "long_structure": float(long_structure), "short_structure": float(short_structure),
+        "last_close": last_close, "closed_ts": closed_ts, "trend": trend, "df": df,
+    }
+
+
+def _strategy_levels_from_rows(rows, conf):
+    fast = int(conf.get("ema_fast_period", 26))
+    slow = int(conf.get("ema_slow_period", 83))
+    atr_period = int(conf.get("ma_atr_period", 14))
+    lookback = int(conf.get("structure_lookback", 12))
+    return _ema_structure_from_rows(
+        rows, fast_period=fast, slow_period=slow, atr_period=atr_period,
+        lookback=lookback, buffer_atr=float(conf.get("structure_buffer_atr", 0.50))
+    )
+
+
+async def _closed_atr(exchange, symbol, timeframe, period, conf, force=False):
+    rows = await _fetch_ohlcv(exchange, symbol, timeframe, max(period + 30, 60), conf, force=force)
+    return _atr_from_rows(rows, period)
+
+
+async def _market_snapshot(exchange, symbol, conf, priority="NORMAL", force=False):
+    ticker = await _fetch_ticker(exchange, symbol, conf, priority=priority, force=force)
+    mark = _f(ticker.get("mark"))
+    last = _f(ticker.get("last") or ticker.get("close"))
+    price = mark or last
+    if not price or price <= 0:
+        raise RuntimeError(f"[{symbol}] 无有效 ticker/mark price")
+    return {"price": price, "mark": mark or price, "last": last or price, "timestamp": time.time()}
+
+
+async def _position_fresh(exchange, symbol, side, conf, priority="HIGH"):
+    positions = await _fetch_positions(exchange, conf, symbols=[symbol], priority=priority, force=True)
+    for p in positions:
+        if _position_size(p) > 0 and _position_side(p) == side:
+            return p
+    return None
+
+
+async def _two_source_price_ok(exchange, symbol, ws_price, side, conf):
+    snap = await _market_snapshot(exchange, symbol, conf, priority="HIGH", force=True)
+    rest_price = snap["mark"] or snap["price"]
+    tolerance = max(0.003, float(conf.get("price_source_tolerance_pct", 0.01)))
+    diff = abs(rest_price - ws_price) / max(rest_price, 1e-12)
+    if diff > tolerance:
+        logger.warning(f"[{symbol}] 行情双源不一致 WS={ws_price} REST={rest_price} diff={diff:.3%}")
+        return False, snap
+    return True, snap
+
+
+async def _emergency_signal(exchange, symbol, side, conf, live_rows=None):
+    tf = str(conf.get("emergency_timeframe", "15m"))
+    enabled = conf.get("emergency_enabled", True)
+    if not enabled:
+        return False, None
+    period = int(conf.get("emergency_atr_period", 14))
+    mult = float(conf.get("emergency_atr_multiplier", 3.0))
+    volmult = float(conf.get("emergency_vol_multiplier", 1.0))
+    lookback = int(conf.get("emergency_structure_lookback", 4))
+    limit = max(period + lookback + 25, 60)
+
+    rows = live_rows or await _fetch_ohlcv(exchange, symbol, tf, limit, conf, priority="LOW", force=False)
+    if not rows or len(rows) < period + lookback + 2:
+        return False, None
+
+    df = pd.DataFrame(rows, columns=["timestamp", "open", "high", "low", "close", "volume"])
+    closed = df.iloc[:-1].copy()
+    atr = _atr_from_df(closed, period)
+    if not atr:
+        return False, None
+
+    vol_ma = closed["volume"].rolling(20).mean().iloc[-1]
+
+    live = df.iloc[-1]
+    ws_price = float(live["close"])
+    live_vol = float(live["volume"])
+    threshold = atr * mult
+
+    is_volume_spike = bool(vol_ma and vol_ma > 0 and live_vol > vol_ma * volmult)
+
+    if side == "long":
+        move = float(live["open"] - ws_price) if ws_price < live["open"] else 0.0
+        structure = ws_price < float(closed["low"].iloc[-lookback:].min())
+        volume_crash = is_volume_spike and move >= (atr * mult)
+    else:
+        move = float(ws_price - live["open"]) if ws_price > live["open"] else 0.0
+        structure = ws_price > float(closed["high"].iloc[-lookback:].max())
+        volume_crash = is_volume_spike and move >= (atr * mult)
+
+    is_emergency = bool((move >= threshold and structure) or volume_crash)
+    reason = "放量加速暴跌/拉升" if volume_crash else "结构性黑天鹅"
+
+    return is_emergency, {
+        "ws_price": ws_price, "move": move, "threshold": threshold,
+        "structure": structure, "volume_crash": volume_crash, "reason": reason
+    }
+
+
+def _calculate_dynamic_protection_stop(exchange, symbol, side, current_price, strategy, conf):
+    """交易所兜底单：结构位 + ATR，不把 EMA 当成直接止损线。
+    只允许止损随着盈利方向移动，调用方负责与已有订单比较。
+    """
+    atr = float(strategy.get("atr") or 0)
+    if atr <= 0:
+        return _calculate_disaster_stop(exchange, symbol, side, current_price, atr, conf)
+
+    buffer = max(0.0, float(conf.get("structure_buffer_atr", 0.50)))
+    fallback_mult = max(1.0, float(conf.get("hard_stop_atr_multiplier", 6.0)))
+    max_dist = max(0.01, float(conf.get("dynamic_stop_max_distance_pct", 0.12)))
+    min_dist = max(0.0, float(conf.get("hard_stop_min_distance_pct", 0.05)))
+
+    if side == "long":
+        candidate = float(strategy["swing_low"]) - atr * buffer
+        fallback = current_price * (1.0 - fallback_mult * atr / current_price)
+        # 结构止损过近/过远时退回 ATR 保护，避免刚好贴着价格或离得异常远。
+        dist = (current_price - candidate) / current_price
+        if dist < min_dist or dist > max_dist:
+            candidate = fallback
+        stop = min(candidate, current_price * (1.0 - min_dist))
+    else:
+        candidate = float(strategy["swing_high"]) + atr * buffer
+        fallback = current_price * (1.0 + fallback_mult * atr / current_price)
+        dist = (candidate - current_price) / current_price
+        if dist < min_dist or dist > max_dist:
+            candidate = fallback
+        stop = max(candidate, current_price * (1.0 + min_dist))
+
+    return float(exchange.price_to_precision(symbol, stop)), (abs(current_price - stop) / current_price)
+
+
+def _calculate_disaster_stop(exchange, symbol, side, current_price, atr_value, conf):
+    min_pct = max(0.0, float(conf.get("hard_stop_min_distance_pct", 0.05)))
+    atr_mult = max(0.0, float(conf.get("hard_stop_atr_multiplier", 6.0)))
+    distance = max(min_pct, (atr_value * atr_mult / current_price) if atr_value else 0.0)
+    stop = current_price * (1.0 - distance if side == "long" else 1.0 + distance)
+    return float(exchange.price_to_precision(symbol, stop)), distance
+
+
+# ---------------------------------------------------------------------------
+# Execution Strategy
+# ---------------------------------------------------------------------------
+
+async def _market_reduce_and_confirm(exchange, symbol, side, position, requested_qty, reason, conf, expected_version, pos_state):
+    """紧急止损：市价吃单 (Taker)"""
+    raw_ps = _raw_position_side(position)
+    before = _position_size(position)
+    if int(pos_state.get("position_version", 0)) != expected_version:
+        raise RuntimeError("仓位版本已变化，拒绝按旧快照下单")
+
+    qty = _f(exchange.amount_to_precision(symbol, min(before, requested_qty)), 0.0)
+    if not qty or qty <= 0:
+        raise RuntimeError(f"{reason}: 下单数量无效")
+
+    params = {"reduceOnly": True}
+    if raw_ps != "BOTH":
+        params["positionSide"] = raw_ps
+
+    order = await _rest(exchange, "create_market_order", symbol, "sell" if side == "long" else "buy", qty,
+                        priority="HIGH", conf=conf, params=params)
+    await asyncio.sleep(0.5)
+    fresh = await _position_fresh(exchange, symbol, side, conf, priority="HIGH")
+    after = _position_size(fresh)
+
+    logger.success(f"[{symbol}] 💰 {reason} (市价吃单) 执行成功！仓位从 {before} -> {after}")
+    return order, fresh, after
+
+
+async def _limit_reduce_with_maker_retry(
+    exchange, symbol, side, position, requested_qty, reason, conf, expected_version, pos_state,
+    max_retries=15, check_interval_sec=1.0, timeout_sec=10.0, allow_market_fallback=True, maker_only=False
+):
+    """非紧急减仓：限价挂单循环。maker_only=True 时禁止市价保底。max_retries<=0 表示持续循环。"""
+    raw_ps = _raw_position_side(position)
+    before = _position_size(position)
+    if int(pos_state.get("position_version", 0)) != expected_version:
+        raise RuntimeError("仓位版本已变化，拒绝按旧快照下单")
+
+    qty = _f(exchange.amount_to_precision(symbol, min(before, requested_qty)), 0.0)
+    if not qty or qty <= 0:
+        raise RuntimeError(f"{reason}: 下单数量无效")
+
+    order_side = "sell" if side == "long" else "buy"
+    params = {"reduceOnly": True}
+    if raw_ps != "BOTH":
+        params["positionSide"] = raw_ps
+    # 机器人减仓单统一打标，便于清理重启/异常后遗留的重复减仓单。
+    params["newClientOrderId"] = f"PM_WS_R_{uuid.uuid4().hex[:20]}"
+    if maker_only:
+        # Binance Futures GTX = Post Only；若会立即成交，交易所拒单，随后下一轮重新挂。
+        params["timeInForce"] = "GTX"
+
+    remaining_qty = qty
+
+    attempt = 0
+    while max_retries <= 0 or attempt < max_retries:
+        attempt += 1
+        ticker = await _fetch_ticker(exchange, symbol, conf, priority="HIGH", force=True)
+        if order_side == "sell":
+            limit_price = ticker.get("ask") or ticker.get("last") or ticker.get("close")
+        else:
+            limit_price = ticker.get("bid") or ticker.get("last") or ticker.get("close")
+
+        price_str = exchange.price_to_precision(symbol, limit_price)
+        q_str = exchange.amount_to_precision(symbol, remaining_qty)
+
+        logger.info(f"[{symbol}] ⏳ 非紧急止损【Maker挂单】第 {attempt + 1}/{max_retries} 次尝试 | 挂单价: {price_str} | 数量: {q_str}")
+
+        order_id = None
+        try:
+            order = await _rest(
+                exchange, "create_limit_order", symbol, order_side, q_str, price_str,
+                priority="HIGH", conf=conf, params=params
+            )
+            order_id = order.get("id")
+        except Exception as e:
+            logger.error(f"[{symbol}] 限价单下发失败: {e}")
+            await asyncio.sleep(1)
+            continue
+
+        start_wait = time.time()
+        order_filled = False
+        while time.time() - start_wait < timeout_sec:
+            await asyncio.sleep(check_interval_sec)
+            try:
+                fetched_order = await _rest(exchange, "fetch_order", order_id, symbol, priority="HIGH", conf=conf)
+                status = str(fetched_order.get("status")).upper()
+                filled = _f(fetched_order.get("filled"), 0.0)
+
+                if status in ("CLOSED", "FILLED") or filled >= remaining_qty:
+                    logger.success(f"[{symbol}] ✅ 限价止损单已完全成交！")
+                    order_filled = True
+                    break
+                elif status == "CANCELED":
+                    remaining_qty = max(0.0, remaining_qty - filled)
+                    break
+            except Exception as e:
+                logger.warning(f"[{symbol}] 查询限价单状态异常: {e}")
+
+        if order_filled:
+            remaining_qty = 0
+            break
+
+        try:
+            fetched_order = await _rest(exchange, "fetch_order", order_id, symbol, priority="HIGH", conf=conf)
+            filled = _f(fetched_order.get("filled"), 0.0)
+            remaining_qty = max(0.0, remaining_qty - filled)
+
+            await _rest(exchange, "cancel_order", order_id, symbol, priority="HIGH", conf=conf)
+            logger.info(f"[{symbol}] 限价单超时未成交，撤单重试。剩余: {remaining_qty}")
+        except Exception as e:
+            logger.warning(f"[{symbol}] 撤销限价单失败: {e}")
+
+        if remaining_qty <= 0:
+            break
+
+    if remaining_qty > 0 and allow_market_fallback:
+        logger.warning(f"[{symbol}] 限价单重试 {max_retries} 次后仍剩余 {remaining_qty}，启动市价单保底平仓")
+        await _market_reduce_and_confirm(
+            exchange, symbol, side, position, remaining_qty, f"{reason}(保底市价)", conf, expected_version, pos_state
+        )
+    elif remaining_qty > 0:
+        logger.info(f"[{symbol}] 🔁 {reason} Maker挂单仍有 {remaining_qty} 未成交，保持循环挂单，不吃单。")
+
+    fresh = await _position_fresh(exchange, symbol, side, conf, priority="HIGH")
+    after = _position_size(fresh)
+    logger.success(f"[{symbol}] 💰 {reason} 执行结束！仓位从 {before} -> {after}")
+    return fresh, after
+
+
+async def _cancel_bot_reduce_orders(exchange, symbol, side, conf, reason="重复减仓单清理"):
+    """只清理本机器人创建的未完成 reduceOnly 限价减仓单。"""
+    try:
+        orders = await _rest(exchange, "fetch_open_orders", symbol, priority="HIGH", conf=conf)
+        if not isinstance(orders, list):
+            return 0
+        canceled = 0
+        expected_side = "sell" if side == "long" else "buy"
+        for order in orders:
+            try:
+                info = order.get("info") if isinstance(order.get("info"), dict) else {}
+                client_id = str(order.get("clientOrderId") or order.get("clientAlgoId") or info.get("clientOrderId") or info.get("origClientOrderId") or "")
+                reduce_only = order.get("reduceOnly")
+                if reduce_only is None:
+                    reduce_only = info.get("reduceOnly")
+                if not client_id.startswith("PM_WS_R_") or str(reduce_only).lower() not in ("true", "1"):
+                    continue
+                if str(order.get("type") or "").lower() not in ("limit", "limit_maker"):
+                    continue
+                if str(order.get("status") or "open").lower() not in ("open", "new", "partially_filled"):
+                    continue
+                if str(order.get("side") or "").lower() not in ("", expected_side):
+                    continue
+                oid = str(order.get("id") or "")
+                if not oid:
+                    continue
+                await _rest(exchange, "cancel_order", oid, symbol, priority="HIGH", conf=conf)
+                canceled += 1
+            except Exception as exc:
+                logger.warning(f"[{symbol}] 清理机器人旧减仓单失败: {exc}")
+        if canceled:
+            logger.warning(f"[{symbol}] 🧹 {reason}：已取消 {canceled} 张机器人旧减仓单。")
+        return canceled
+    except Exception as exc:
+        logger.warning(f"[{symbol}] 查询机器人旧减仓单失败: {exc}")
+        return 0
+
+
+async def _full_exit_with_revalidation(exchange, symbol, side, position, reason, conf, pos_state):
+    expected_version = int(pos_state.get("position_version", 0))
+    fresh = await _position_fresh(exchange, symbol, side, conf, priority="HIGH")
+    if not fresh:
+        return True, None
+    if int(pos_state.get("position_version", 0)) != expected_version:
+        raise RuntimeError("全平前仓位版本已变化，重新评估")
+
+    before = _position_size(fresh)
+    _, after_pos, after = await _market_reduce_and_confirm(
+        exchange, symbol, side, fresh, before, reason, conf, expected_version, pos_state
+    )
+    return after <= 1e-10, after_pos
+
+
+# ---------------------------------------------------------------------------
+# Stop maintenance & state reconciliation
+# ---------------------------------------------------------------------------
+
+LAST_STOP_ORDER_TIME = {}
+LAST_STOP_MAINTAIN_TIME = {}
+LAST_RISK_LOG_TIME = {}
+LAST_RISK_STATE_LOG_TIME = {}
+
+
+
+def _tp3_remaining_ratio(conf):
+    """躺平 保留仓位比例：未设置/None => 0（全平）；设置 0~1 => 保留该比例。"""
+    raw = conf.get("tp3_ratio", None)
+    if raw is None or raw == "":
+        return 0.0
+    try:
+        value = float(raw)
+    except Exception:
+        return 0.0
+    # 兼容填写 20 表示 20%，但推荐配置写 0.20。
+    if value > 1.0:
+        value /= 100.0
+    return min(1.0, max(0.0, value))
+
+
+def _tp3_action_text(conf):
+    ratio = _tp3_remaining_ratio(conf)
+    return "全平" if ratio <= 0 else f"保留{ratio:.0%}"
+
+def _initialize_take_profit_levels(pos_state, side, entry_price, strategy_stop, conf):
+    """为当前风险周期固定初始 R，并计算 TP1/TP2/躺平。
+
+    TP 使用风险周期开始时的初始风险，不跟随动态止损移动，避免行情上涨后 TP
+    被不断推远/拉近。若当前策略止损不在仓位亏损侧，则暂不初始化。
+    """
+    if not bool(conf.get("take_profit_enabled", True)):
+        return False
+    if entry_price <= 0 or strategy_stop <= 0:
+        return False
+
+    if side == "long":
+        risk = entry_price - strategy_stop
+    else:
+        risk = strategy_stop - entry_price
+
+    # 策略保护线必须在开仓价的亏损方向；否则不能拿它制造有效 R。
+    if risk <= max(entry_price * 0.0001, 1e-12):
+        return False
+
+    old_cycle = pos_state.get("tp_risk_distance")
+    if old_cycle and float(old_cycle) > 0 and pos_state.get("tp1_price"):
+        return True
+
+    tp1_r = float(conf.get("tp1_r_multiple", 1.0))
+    tp2_r = float(conf.get("tp2_r_multiple", 2.0))
+    tp3_r = float(conf.get("tp3_r_multiple", 3.0))
+    if not (0 < tp1_r < tp2_r < tp3_r):
+        raise ValueError("TP 的 R 倍数必须满足 0 < TP1 < TP2 < 躺平")
+
+    if side == "long":
+        tp1 = entry_price + risk * tp1_r
+        tp2 = entry_price + risk * tp2_r
+        tp3 = entry_price + risk * tp3_r
+    else:
+        tp1 = entry_price - risk * tp1_r
+        tp2 = entry_price - risk * tp2_r
+        tp3 = entry_price - risk * tp3_r
+
+    pos_state.update({
+        "tp_entry_price": float(entry_price),
+        "tp_initial_stop": float(strategy_stop),
+        "tp_risk_distance": float(risk),
+        "tp1_price": float(tp1),
+        "tp2_price": float(tp2),
+        "tp3_price": float(tp3),
+        "tp_protected_stop": pos_state.get("tp_protected_stop"),
+        "tp_protection_stage": int(pos_state.get("tp_protection_stage", 0)),
+        "tp1_triggered": bool(pos_state.get("tp1_triggered", False)),
+        "tp2_triggered": bool(pos_state.get("tp2_triggered", False)),
+        "tp3_triggered": bool(pos_state.get("tp3_triggered", False)),
+    })
+    return True
+
+
+def _take_profit_protection_stop(pos_state, side, conf, current_price=None):
+    """计算当前风险周期的利润保护 STOP。
+
+    保护分三层：
+    1. 浮盈达到 profit_protection_trigger_r（默认 0.5R）：先把 STOP 推到
+       开仓价附近，优先目标是本金保护；
+    2. TP1 完成：STOP 继续保持在开仓价的盈利侧；
+    3. TP2 完成：STOP 推到 TP1 附近；TP3 若保留仓位：STOP 推到 TP2 附近。
+
+    返回 (保护止损价格, 保护阶段)。阶段 1 也用于“0.5R 浮盈保本”，
+    因为它和 TP1 后的保本保护最终落在同一个保护层级。
+    """
+    entry = _f(pos_state.get("tp_entry_price"), 0.0)
+    risk = _f(pos_state.get("tp_risk_distance"), 0.0)
+    tp1 = _f(pos_state.get("tp1_price"), 0.0)
+    if entry <= 0 or risk <= 0:
+        return None, 0
+
+    be_buf = max(0.0, float(conf.get("tp_breakeven_buffer_pct", 0.0020)))
+    lock_buf = max(0.0, float(conf.get("tp_profit_lock_buffer_pct", 0.0010)))
+
+    # 已完成 TP 的保护优先级最高。
+    if pos_state.get("tp3_triggered"):
+        tp2 = _f(pos_state.get("tp2_price"), 0.0)
+        tp3_cfg = conf.get("tp3_ratio", None)
+        if tp3_cfg is not None and 0.0 < float(tp3_cfg) < 1.0 and tp2 > 0:
+            stop = tp2 * (1.0 + lock_buf) if side == "long" else tp2 * (1.0 - lock_buf)
+            return stop, 3
+
+    if pos_state.get("tp2_triggered") and tp1 > 0:
+        stop = tp1 * (1.0 + lock_buf) if side == "long" else tp1 * (1.0 - lock_buf)
+        return stop, 2
+
+    # TP1 完成，或者尚未 TP1 但浮盈已经达到 0.5R，都进入保本保护。
+    profit_protection_enabled = bool(conf.get("profit_protection_enabled", True))
+    trigger_r = max(0.0, float(conf.get("profit_protection_trigger_r", 0.5)))
+    floating_r = None
+    if current_price is not None:
+        price = _f(current_price, 0.0)
+        if price > 0:
+            floating_r = ((price - entry) / risk) if side == "long" else ((entry - price) / risk)
+
+    if pos_state.get("tp1_triggered") or (
+        profit_protection_enabled and floating_r is not None and floating_r >= trigger_r
+    ):
+        stop = entry * (1.0 + be_buf) if side == "long" else entry * (1.0 - be_buf)
+        return stop, 1
+
+    return None, 0
+
+
+def _take_profit_hit(pos_state, side, current_price):
+    """返回当前应该执行的最高级别止盈：3/2/1/0。
+
+    关键安全校验：TP 价格必须与当前仓位方向、TP 入口价格形成正确的单调关系。
+    如果发现 躺平 跑到了开仓价的错误一侧（例如多单 entry=8.x，但 躺平=7.x），
+    说明状态是旧周期/脏状态，绝对不能触发平仓。
+    """
+    if not pos_state.get("tp_risk_distance"):
+        return 0
+    if pos_state.get("tp3_triggered"):
+        return 0
+
+    entry = _f(pos_state.get("tp_entry_price"), 0.0)
+    tp1 = _f(pos_state.get("tp1_price"), 0.0)
+    tp2 = _f(pos_state.get("tp2_price"), 0.0)
+    tp3 = _f(pos_state.get("tp3_price"), 0.0)
+    price = _f(current_price, 0.0)
+
+    # 严格验证 TP 阶梯，任何异常都只记录/跳过，不允许误平仓。
+    if min(entry, tp1, tp2, tp3, price) <= 0:
+        return 0
+    if side == "long":
+        valid = entry < tp1 < tp2 < tp3
+        if not valid:
+            logger.error(
+                f"[{pos_state.get('risk_cycle_id','?')}] 🚫 TP状态异常，拒绝执行止盈！ "
+                f"方向:多 | Entry:{entry:.8f} | TP1:{tp1:.8f} | TP2:{tp2:.8f} | 躺平:{tp3:.8f} | 当前:{price:.8f}"
+            )
+            return 0
+        if price >= tp3:
+            return 3
+        if price >= tp2 and not pos_state.get("tp2_triggered"):
+            return 2
+        if price >= tp1 and not pos_state.get("tp1_triggered"):
+            return 1
+    else:
+        valid = entry > tp1 > tp2 > tp3
+        if not valid:
+            logger.error(
+                f"[{pos_state.get('risk_cycle_id','?')}] 🚫 TP状态异常，拒绝执行止盈！ "
+                f"方向:空 | Entry:{entry:.8f} | TP1:{tp1:.8f} | TP2:{tp2:.8f} | 躺平:{tp3:.8f} | 当前:{price:.8f}"
+            )
+            return 0
+        if price <= tp3:
+            return 3
+        if price <= tp2 and not pos_state.get("tp2_triggered"):
+            return 2
+        if price <= tp1 and not pos_state.get("tp1_triggered"):
+            return 1
+    return 0
+
+
+async def _ensure_disaster_stop(exchange, symbol, side, pos, current_price, conf, ohlcv_rows=None, force_replace=False, pos_state=None):
+    if not bool(conf.get("exchange_hard_stop_enabled", True)):
+        return
+
+    global LAST_STOP_ORDER_TIME, LAST_STOP_MAINTAIN_TIME
+    now_ts = time.time()
+    interval = float(conf.get("stop_maintenance_interval_sec", 60.0))
+
+    if now_ts - LAST_STOP_MAINTAIN_TIME.get(symbol, 0) < interval and not force_replace:
+        return
+
+    LAST_STOP_MAINTAIN_TIME[symbol] = now_ts
+
+    try:
+        strategy = None
+        try:
+            if ohlcv_rows:
+                strategy = _strategy_levels_from_rows(ohlcv_rows, conf)
+        except Exception as strategy_exc:
+            logger.warning(f"[{symbol}] EMA/结构止损计算失败，退回 ATR 兜底: {strategy_exc}")
+
+        if strategy:
+            stop, distance = _calculate_dynamic_protection_stop(exchange, symbol, side, current_price, strategy, conf)
+        else:
+            if ohlcv_rows:
+                atr = _atr_from_rows(ohlcv_rows, int(conf.get("hard_stop_atr_period", 14)))
+            else:
+                tf = str(conf.get("hard_stop_timeframe", "1h"))
+                atr = await _closed_atr(exchange, symbol, tf, int(conf.get("hard_stop_atr_period", 14)), conf)
+            stop, distance = _calculate_disaster_stop(exchange, symbol, side, current_price, atr, conf)
+
+        # 分级止盈后，交易所 STOP 必须升级为利润保护线。
+        tp_protected_stop, tp_stage = (None, 0)
+        if pos_state and bool(conf.get("take_profit_enabled", True)):
+            try:
+                tp_protected_stop, tp_stage = _take_profit_protection_stop(pos_state, side, conf, current_price)
+                if tp_protected_stop and tp_protected_stop > 0:
+                    if side == "long" and tp_protected_stop < current_price:
+                        stop = max(stop, float(tp_protected_stop))
+                    elif side == "short" and tp_protected_stop > current_price:
+                        stop = min(stop, float(tp_protected_stop))
+                    stop = float(exchange.price_to_precision(symbol, stop))
+                    distance = abs(current_price - stop) / current_price
+                    previous_tp_stage = int(pos_state.get("tp_protection_stage", 0) or 0)
+                    pos_state["tp_protected_stop"] = stop
+                    pos_state["tp_protection_stage"] = tp_stage
+                    if tp_stage > previous_tp_stage or (previous_tp_stage == 0 and tp_stage == 1):
+                        logger.success(
+                            f"[{symbol}] 🛡️ 盈利保护已启动/升级 | 浮盈触发阈值:{float(conf.get('profit_protection_trigger_r', 0.5)):.2f}R | "
+                            f"保护阶段:TP{tp_stage} | STOP:{stop:.8f}"
+                        )
+                    logger.success(
+                        f"[{symbol}] 🔐 止盈后利润保护 | TP{tp_stage} | "
+                        f"保护止损:{stop:.8f} | 当前:{current_price:.8f} | 距离:{distance:.2%}"
+                    )
+            except Exception as tp_stop_exc:
+                logger.warning(f"[{symbol}] 止盈后保护止损计算失败，继续使用策略止损: {tp_stop_exc}")
+
+        # 一仓一 STOP：读取全部保护 STOP；重复时全部清理，只重建一个。
+        stops = await _find_stop_orders(exchange, symbol, side, pos, current_price, conf, force=True)
+        duplicate_stops = len(stops) > 1
+        existing_trigger = _algo_trigger(stops[0]) if stops else None
+        if strategy:
+            logger.info(
+                f"[{symbol}] 🛡️ 止盈/止损位 | 方向:{side} | 当前价:{current_price:.8f} | "
+                f"策略止损:{stop:.8f} | 距离:{distance:.2%} | "
+                f"EMA26:{strategy['ema_fast']:.8f} | EMA83:{strategy['ema_slow']:.8f} | "
+                f"ATR14:{strategy['atr']:.8f} | 结构止损:{strategy['long_structure'] if side == 'long' else strategy['short_structure']:.8f} | "
+                f"趋势:{strategy['trend']} | TP保护阶段:{tp_stage} | TP保护止损:{tp_protected_stop if tp_protected_stop else '未启用'} | 交易所STOP:{existing_trigger if existing_trigger is not None else '不存在'}"
+            )
+        else:
+            logger.info(
+                f"[{symbol}] 🛡️ 止损位 | 方向:{side} | 当前价:{current_price:.8f} | "
+                f"ATR兜底止损:{stop:.8f} | 距离:{distance:.2%} | "
+                f"交易所STOP:{existing_trigger if existing_trigger is not None else '不存在'}"
+            )
+
+        needs_update = False
+        material_move = False
+        if stops:
+            if existing_trigger is not None:
+                # 只允许STOP向盈利方向推进；反方向绝不放宽。
+                if side == "long":
+                    if stop < existing_trigger:
+                        stop = existing_trigger
+                else:
+                    if stop > existing_trigger:
+                        stop = existing_trigger
+
+                stop = float(exchange.price_to_precision(symbol, stop))
+                existing_trigger = float(exchange.price_to_precision(symbol, existing_trigger))
+
+                # 不再使用旧的1.5%固定阈值。
+                # 但也不能因为当前价/ATR轻微变化就每几个tick取消重挂。
+                # 有效推进距离 = max(价格百分比门槛, ATR比例门槛)。
+                try:
+                    atr_for_threshold = float(strategy.get("atr") or 0.0) if strategy else 0.0
+                except Exception:
+                    atr_for_threshold = 0.0
+                if atr_for_threshold <= 0 and ohlcv_rows:
+                    try:
+                        atr_for_threshold = float(_atr_from_rows(ohlcv_rows, int(conf.get("hard_stop_atr_period", 14))) or 0.0)
+                    except Exception:
+                        atr_for_threshold = 0.0
+
+                min_move_pct = max(0.0, float(conf.get("stop_min_update_pct", 0.0005)))
+                min_move_atr_ratio = max(0.0, float(conf.get("stop_min_update_atr_ratio", 0.05)))
+                min_move = max(existing_trigger * min_move_pct, atr_for_threshold * min_move_atr_ratio)
+                actual_move = (stop - existing_trigger) if side == "long" else (existing_trigger - stop)
+                material_move = actual_move >= min_move and actual_move > 0
+
+                if material_move:
+                    needs_update = True
+                else:
+                    # 细微变化直接沿用原STOP，不取消、不重挂。
+                    stop = existing_trigger
+                    logger.debug(
+                        f"[{symbol}] 🧊 STOP变化过小，保持原单 | "
+                        f"旧:{existing_trigger:.8f} 新:{stop:.8f} | "
+                        f"实际推进:{actual_move:.8f} | 最小有效推进:{min_move:.8f}"
+                    )
+
+            if duplicate_stops:
+                # 重复STOP与价格推进阈值无关，必须立即清理，只保留一个。
+                logger.warning(f"[{symbol}] ⚠️ 检测到 {len(stops)} 个重复保护STOP，全部清理后只保留1个。")
+                needs_update = True
+
+        # force_replace只用于新仓/加仓/仓位变化等风险周期变化。
+        # 如果STOP价格本身没有有效变化，则不因为force_replace而无意义地取消重挂。
+        if stops and not needs_update:
+            return
+
+        if stops:
+            await _cancel_stop_orders(exchange, symbol, stops, conf)
+
+        await _create_full_close_stop(exchange, symbol, pos, side, stop, conf)
+        if pos_state is not None:
+            pos_state["last_stop_price"] = float(stop)
+            pos_state["last_stop_update_ts"] = int(time.time() * 1000)
+            try:
+                state = _load_state()
+                skey = _state_key(symbol, side)
+                if isinstance(state.get(skey), dict):
+                    state[skey]["last_stop_price"] = float(stop)
+                    state[skey]["last_stop_update_ts"] = int(time.time() * 1000)
+                    if pos_state is not None:
+                        state[skey]["tp_protected_stop"] = pos_state.get("tp_protected_stop")
+                        state[skey]["tp_protection_stage"] = int(pos_state.get("tp_protection_stage", 0) or 0)
+                    _save_state(state)
+            except Exception:
+                pass
+        logger.success(
+            f"[{symbol}] 🔒 交易所STOP止损已设置 | 方向:{side} | "
+            f"触发价:{stop:.8f} | 当前价:{current_price:.8f} | 距离:{distance:.2%} | 类型:STOP_MARKET"
+        )
+        LAST_STOP_ORDER_TIME[symbol] = time.time()
+
+    except Exception as e:
+        logger.error(f"[{symbol}] 维护灾难止损出错: {e}")
+
+
+def _reconcile_position_state(state, key, symbol, side, contracts, timeframe, position=None):
+    ps = state.get(key)
+    if not isinstance(ps, dict):
+        ps = {
+            "base_contracts": contracts,
+            "contracts": contracts,
+            "t1_done": False,
+            "t2_done": False,
+            "t1_triggered": False,
+            "t2_triggered": False,
+            "t3_triggered": False,
+            "risk_cycle_id": uuid.uuid4().hex,
+            "last_position_entry_price": _f((position or {}).get("entryPrice"), 0.0),
+            "exchange_entry_time_ms": _position_open_time_ms(position),
+            "last_checked_time": 0,
+            "last_closed_candle_ts": 0,
+            "last_risk_check_time": 0,
+            "risk_state": {
+                "t1": "normal",
+                "t2": "normal",
+                "t3": "normal",
+                "black_swan": "normal",
+                "atr_protection": "normal"
+            },
+            "position_version": 1,
+            "risk_cycle_started_at": int(time.time()),
+            "add_immunity_until_ms": 0,
+            "entry_time_ms": _position_open_time_ms(position) or int(time.time() * 1000),
+            "entry_time_source": "exchange" if _position_open_time_ms(position) else "first_seen",
+            "entry_classification": None,
+            "risk_entry_price": _f((position or {}).get("entryPrice"), 0.0),
+            "risk_entry_price_source": "position_average",
+        }
+        state[key] = ps
+        return ps, True
+
+    # 兼容旧版本 position_protection_state.json，自动补充风控恢复字段
+    ps.setdefault("last_closed_candle_ts", int(ps.get("last_checked_time", 0)))
+    ps.setdefault("entry_time_ms", _position_open_time_ms(position) or int(time.time() * 1000))
+    ps.setdefault("entry_time_source", "exchange" if _position_open_time_ms(position) else "first_seen")
+    ps.setdefault("entry_classification", None)
+    ps.setdefault("t1_realtime_armed", False)
+    ps.setdefault("t1_realtime_armed_initialized", False)
+    ps.setdefault("risk_entry_price", _f((position or {}).get("entryPrice"), 0.0))
+    ps.setdefault("risk_entry_price_source", "position_average")
+    ps.setdefault("t1_triggered", bool(ps.get("t1_done")))
+    ps.setdefault("t2_triggered", bool(ps.get("t2_done")))
+    ps.setdefault("t3_triggered", False)
+    ps.setdefault("tp1_triggered", False)
+    ps.setdefault("tp2_triggered", False)
+    ps.setdefault("tp3_triggered", False)
+    ps.setdefault("tp_entry_price", None)
+    ps.setdefault("tp_initial_stop", None)
+    ps.setdefault("tp_risk_distance", None)
+    ps.setdefault("tp1_price", None)
+    ps.setdefault("tp2_price", None)
+    ps.setdefault("tp3_price", None)
+    ps.setdefault("tp_protected_stop", None)
+    ps.setdefault("tp_protection_stage", 0)
+    ps.setdefault("last_stop_price", None)
+    ps.setdefault("last_stop_update_ts", 0)
+    ps.setdefault("risk_cycle_id", uuid.uuid4().hex)
+    ps.setdefault("last_position_entry_price", _f((position or {}).get("entryPrice"), 0.0))
+    ps.setdefault("exchange_entry_time_ms", _position_open_time_ms(position))
+    ps.setdefault("last_risk_check_time", 0)
+    ps.setdefault("risk_state", {
+        "t1": "done" if ps.get("t1_done") else "normal",
+        "t2": "done" if ps.get("t2_done") else "normal",
+        "t3": "normal",
+        "black_swan": "normal",
+        "atr_protection": "normal"
+    })
+
+    current_entry_price = _f((position or {}).get("entryPrice"), 0.0)
+    current_open_time = _position_open_time_ms(position)
+    old_entry_price = _f(ps.get("last_position_entry_price"), 0.0)
+    old_open_time = int(ps.get("exchange_entry_time_ms") or 0)
+
+    # 防止“平仓后同数量重新开仓”继承旧风险周期。
+    # 优先使用交易所开仓时间；没有可靠时间时，用平均开仓价变化作为辅助身份识别。
+    identity_changed = False
+    if current_open_time > 0 and old_open_time > 0 and current_open_time != old_open_time:
+        identity_changed = True
+    elif current_entry_price > 0 and old_entry_price > 0:
+        identity_changed = abs(current_entry_price - old_entry_price) / max(old_entry_price, 1e-12) > 0.001
+
+    if identity_changed:
+        ps.update({
+            "base_contracts": contracts, "contracts": contracts,
+            "t1_done": False, "t2_done": False,
+            "t1_triggered": False, "t2_triggered": False, "t3_triggered": False,
+            "tp1_triggered": False, "tp2_triggered": False, "tp3_triggered": False,
+            "tp_entry_price": None, "tp_initial_stop": None, "tp_risk_distance": None,
+            "tp1_price": None, "tp2_price": None, "tp3_price": None, "tp_protected_stop": None, "tp_protection_stage": 0,
+            "t3_waived": False, "bottom_fish_sl": None,
+            "position_version": int(ps.get("position_version", 0)) + 1,
+            "risk_cycle_id": uuid.uuid4().hex,
+            "risk_cycle_started_at": int(time.time()),
+            "entry_time_ms": current_open_time or int(time.time() * 1000),
+            "entry_time_source": "exchange" if current_open_time else "reopen_detected",
+            "entry_classification": None,
+            "t1_realtime_armed": False,
+            "t1_realtime_armed_initialized": False,
+            "risk_entry_price": current_entry_price or None,
+            "risk_entry_price_source": "position_average",
+            "processed_entry_version": 0,
+            "exchange_entry_time_ms": current_open_time,
+            "last_position_entry_price": current_entry_price,
+        })
+        logger.warning(f"[{symbol}] 🔄 检测到仓位身份变化，开启全新风险周期: {ps['risk_cycle_id']}")
+        return ps, True
+
+    if current_entry_price > 0:
+        ps["last_position_entry_price"] = current_entry_price
+    if current_open_time > 0:
+        ps["exchange_entry_time_ms"] = current_open_time
+
+    old = _f(ps.get("contracts"), contracts) or contracts
+    changed = not math.isclose(old, contracts, rel_tol=1e-8, abs_tol=1e-10)
+
+    if changed:
+        ps["position_version"] = int(ps.get("position_version", 0)) + 1
+        if contracts > old + max(1e-10, old * 1e-8):
+            ps.update({
+                "base_contracts": contracts,
+                "contracts": contracts,
+                "t1_done": False,
+                "t2_done": False,
+                "t1_triggered": False,
+                "t2_triggered": False,
+                "t3_triggered": False,
+                "tp1_triggered": False, "tp2_triggered": False, "tp3_triggered": False,
+                "tp_entry_price": None, "tp_initial_stop": None, "tp_risk_distance": None,
+                "tp1_price": None, "tp2_price": None, "tp3_price": None, "tp_protected_stop": None, "tp_protection_stage": 0,
+                "risk_cycle_id": uuid.uuid4().hex,
+                "risk_cycle_started_at": int(time.time()),
+                "add_immunity_until_ms": _current_candle_close_ms(timeframe),
+                "entry_time_ms": int(time.time() * 1000),
+                "entry_time_source": "add_detected",
+                "entry_classification": None,
+                "risk_entry_price": None,
+                "risk_entry_price_source": "pending_market_snapshot",
+                "processed_entry_version": 0,
+            })
+            logger.info(f"[{symbol}] ➕ 检测到手动/外部加仓 {old}->{contracts}，建立新风险周期；将重新计算加权开仓价、R、TP1/TP2/躺平及保护STOP。")
+        else:
+            ps["contracts"] = contracts
+            logger.info(f"[{symbol}] 检测到外部减仓 {old}->{contracts}，保留已完成层级状态。")
+
+    return ps, changed
+
+
+async def cleanup_orphaned_state_and_orders(exchange, conf):
+    try:
+        positions = await _fetch_positions(exchange, conf, priority="NORMAL", force=True)
+        active = {(p.get("symbol"), _position_side(p)) for p in positions if _position_size(p) > 0}
+        state = _load_state()
+        modified = False
+
+        for key in list(state):
+            if "_" not in key:
+                state.pop(key, None); modified = True; continue
+            symbol, side = key.rsplit("_", 1)
+            if (symbol, side) not in active:
+                state.pop(key, None); modified = True
+
+        if modified:
+            _save_state(state)
+
+    except Exception as exc:
+        logger.error(f"清理孤儿状态/订单异常: {exc}")
+
+
+# ---------------------------------------------------------------------------
+# Per-position guardian
+# ---------------------------------------------------------------------------
+
+
+
+# MA structure validation
+
+async def watch_symbol_position(exchange, symbol, side):
+    last_heartbeat_time = 0
+    await asyncio.sleep(random.uniform(0.1, 2.0))
+    logger.info(f"[{symbol}/{side}] 👁️ 高级风控守护协程已就位")
+
+    while True:
+        try:
+            full_config = _load_config()
+            conf = full_config.get("position_protection", {})
+            if not conf.get("enabled", True):
+                await asyncio.sleep(5)
+                continue
+
+            timeframe = str(conf.get("timeframe", "2h"))
+
+            pos = RUNTIME.global_positions_map.get((symbol, side))
+            if not pos or _position_size(pos) <= 0:
+                key0 = _state_key(symbol, side)
+                state = _load_state()
+                state.pop(key0, None)
+                RUNTIME.runtime_position_states.pop(_state_key(symbol, side), None)
+                _save_state(state)
+                await _cancel_program_stops_for_flat(exchange, symbol, side, conf)
+                await asyncio.sleep(5)
+                continue
+
+            side = _position_side(pos)
+            contracts = _position_size(pos)
+            entry_price = _f(pos.get("entryPrice"), 0.0)
+            key = _state_key(symbol, side)
+
+            now_time = time.time()
+            if now_time - last_heartbeat_time > 60:
+                logger.info(f"[{symbol}] 🛡️ 巡检中... 当前{ '做多' if side=='long' else '做空' }仓位: {contracts} | 开仓均价: {entry_price}")
+                last_heartbeat_time = now_time
+
+            state = _load_state()
+
+            # 主控已经确认这是“平仓后重新出现”的仓位：直接删除旧风险周期。
+            # 这一步优先于 entryPrice/openTime 判断，解决“同价重开”无法识别的问题。
+            force_new_cycle = key in RUNTIME.force_new_cycle_keys
+            if force_new_cycle:
+                state.pop(key, None)
+                RUNTIME.runtime_position_states.pop(key, None)
+                logger.warning(f"[{symbol}/{side}] ♻️ 新开仓生命周期重置：清除旧 T1/T2/T3、TP、抄底及保护STOP状态。")
+                await _cancel_program_stops_for_flat(exchange, symbol, side, conf)
+                try:
+                    await _cancel_bot_reduce_orders(exchange, symbol, side, conf, reason="新风险周期启动")
+                except Exception as cleanup_exc:
+                    logger.warning(f"[{symbol}/{side}] 新周期旧减仓单清理异常: {cleanup_exc}")
+
+            # 如果状态文件暂时不可写，优先使用本进程的新周期状态，绝不读回旧周期；
+            # 但仍然调用 reconcile，以便正常处理真实加仓/减仓和仓位版本变化。
+            if key in RUNTIME.runtime_position_states and not force_new_cycle:
+                state[key] = RUNTIME.runtime_position_states[key]
+
+            pos_state, changed = _reconcile_position_state(state, key, symbol, side, contracts, timeframe, position=pos)
+            RUNTIME.runtime_position_states[key] = pos_state
+
+            if changed or force_new_cycle:
+                _save_state(state)
+                # 即使磁盘写入失败，也不再重复“初始化新周期”；内存状态由 runtime_position_states 接管。
+                RUNTIME.force_new_cycle_keys.discard(key)
+
+            fetch_t3_lookback = int(conf.get("t3_structure_lookback", 83))
+            entry_lookback = int(conf.get("entry_classification_lookback_bars", 500))
+            limit = max(fetch_t3_lookback + 25, 120, entry_lookback)
+            ohlcv_rows = await _fetch_ohlcv(exchange, symbol, timeframe, limit, conf, priority="LOW", force=False)
+
+            async with RUNTIME.action_lock(symbol, side):
+                snap = await _market_snapshot(exchange, symbol, conf, priority="NORMAL")
+                current_price = snap["mark"]
+
+                # TP 安全校验：如果持仓入口价格已变化，或旧状态中的 TP 阶梯与当前方向不一致，
+                # 必须先清空旧 TP，重新按当前风险周期初始化；绝不允许旧 TP 直接触发平仓。
+                tp_entry_state = _f(pos_state.get("tp_entry_price"), 0.0)
+                tp1_state = _f(pos_state.get("tp1_price"), 0.0)
+                tp2_state = _f(pos_state.get("tp2_price"), 0.0)
+                tp3_state = _f(pos_state.get("tp3_price"), 0.0)
+                tp_state_valid = False
+                if tp_entry_state > 0 and tp1_state > 0 and tp2_state > 0 and tp3_state > 0 and entry_price > 0:
+                    same_entry = abs(tp_entry_state - entry_price) / max(entry_price, 1e-12) <= 0.001
+                    if side == "long":
+                        tp_state_valid = same_entry and (entry_price < tp1_state < tp2_state < tp3_state)
+                    else:
+                        tp_state_valid = same_entry and (entry_price > tp1_state > tp2_state > tp3_state)
+                if pos_state.get("tp_entry_price") and not tp_state_valid:
+                    logger.warning(
+                        f"[{symbol}] 🧹 检测到旧/异常TP状态，已清除并禁止本轮误触发 | "
+                        f"方向:{side} | 当前开仓价:{entry_price:.8f} | "
+                        f"旧TP1:{tp1_state:.8f} TP2:{tp2_state:.8f} 躺平:{tp3_state:.8f}"
+                    )
+                    pos_state.update({
+                        "tp_entry_price": None, "tp_initial_stop": None, "tp_risk_distance": None,
+                        "tp1_price": None, "tp2_price": None, "tp3_price": None,
+                        "tp1_triggered": False, "tp2_triggered": False, "tp3_triggered": False,
+                        "tp_protected_stop": None, "tp_protection_stage": 0,
+                    })
+                    state[key] = pos_state
+                    _save_state(state)
+
+                # 先计算/初始化本风险周期的固定 TP，再维护交易所 STOP，
+                # 这样 TP1/TP2 完成后的利润保护 STOP 能在同一轮进入交易所。
+                if bool(conf.get("take_profit_enabled", True)):
+                    try:
+                        strategy_for_tp = _strategy_levels_from_rows(ohlcv_rows, conf)
+                        tp_stop, _ = _calculate_dynamic_protection_stop(
+                            exchange, symbol, side, current_price, strategy_for_tp, conf
+                        )
+                        if _initialize_take_profit_levels(pos_state, side, entry_price, tp_stop, conf):
+                            state[key] = pos_state
+                            _save_state(state)
+                    except Exception as tp_init_exc:
+                        logger.warning(f"[{symbol}] 止盈位初始化失败，本轮继续使用止损保护: {tp_init_exc}")
+
+                try:
+                    await _ensure_disaster_stop(exchange, symbol, side, pos, current_price, conf, ohlcv_rows=ohlcv_rows, force_replace=changed, pos_state=pos_state)
+                except Exception as e:
+                    logger.error(f"[{symbol}] 交易所兜底止损异常，不影响内部风控继续运行: {e}")
+
+                # 每一次巡检都重新读取交易所当前 STOP，确保日志展示的是“实际挂单价格”，
+                # 而不是仅依赖 last_stop_price。TP1/TP2/躺平 也在同一条日志完整输出。
+                actual_stop = None
+                strategy_stop_display = None
+                try:
+                    strategy_for_log = _strategy_levels_from_rows(ohlcv_rows, conf)
+                    strategy_stop_display, _ = _calculate_dynamic_protection_stop(
+                        exchange, symbol, side, current_price, strategy_for_log, conf
+                    )
+                    strategy_stop_display = float(strategy_stop_display)
+                except Exception:
+                    strategy_stop_display = None
+                try:
+                    current_stops = await _find_stop_orders(exchange, symbol, side, pos, current_price, conf, force=True)
+                    if current_stops:
+                        actual_stop = _algo_trigger(current_stops[0])
+                except Exception as stop_read_exc:
+                    logger.warning(f"[{symbol}] 读取交易所实际STOP失败: {stop_read_exc}")
+
+                if actual_stop is not None:
+                    pos_state["last_stop_price"] = float(actual_stop)
+                    state[key] = pos_state
+                    _save_state(state)
+
+                tp_stage = int(pos_state.get("tp_protection_stage", 0) or 0)
+                tp_keep = _tp3_remaining_ratio(conf)
+                tp3_action = "全平" if tp_keep <= 0 else f"保留{tp_keep:.0%}"
+                logger.info(
+                    f"[{symbol}] 🛡️🎯 止盈止损状态 | 方向:{'多' if side=='long' else '空'} | "
+                    f"当前价:{current_price:.8f} | 开仓价:{entry_price:.8f} | 仓位:{contracts:.8f} | "
+                    f"STOP(交易所实际):{_f(actual_stop, pos_state.get('last_stop_price') or 0):.8f} | "
+                    f"策略止损:{_f(strategy_stop_display, pos_state.get('last_stop_price') or 0):.8f} | "
+                    f"TP1:{_f(pos_state.get('tp1_price'), 0):.8f} → {float(conf.get('tp1_ratio', 0.20)):.0%} [{'已完成' if pos_state.get('tp1_triggered') else '待触发'}] | "
+                    f"TP2:{_f(pos_state.get('tp2_price'), 0):.8f} → {float(conf.get('tp2_ratio', 0.30)):.0%} [{'已完成' if pos_state.get('tp2_triggered') else '待触发'}] | "
+                    f"躺平:{_f(pos_state.get('tp3_price'), 0):.8f} → {tp3_action} [{'已完成' if pos_state.get('tp3_triggered') else '待触发'}] | "
+                    f"保护阶段:TP{tp_stage} | TP保护STOP:{_f(pos_state.get('tp_protected_stop'), 0):.8f} | "
+                    f"R:{_f(pos_state.get('tp_risk_distance'), 0):.8f} | 周期:{pos_state.get('risk_cycle_id')}"
+                )
+
+            # ---------------- 分批止盈：1R/2R/3R ----------------
+            try:
+                if bool(conf.get("take_profit_enabled", True)) and pos_state.get("tp_risk_distance"):
+                    tp_level = _take_profit_hit(pos_state, side, current_price)
+                    if tp_level:
+                        async with RUNTIME.action_lock(symbol, side):
+                            state = _load_state()
+                            pos_state = state.get(key, pos_state)
+                            fresh = await _position_fresh(exchange, symbol, side, conf, priority="HIGH")
+                            if not fresh:
+                                continue
+                            current_contracts = _position_size(fresh)
+                            try:
+                                tp_snap = await _market_snapshot(exchange, symbol, conf, priority="HIGH")
+                                current_price = float(tp_snap["mark"])
+                            except Exception:
+                                pass
+                            if current_contracts <= 0:
+                                state.pop(key, None); _save_state(state); return
+
+                            # 防止程序重启/网络抖动后遗留多张机器人减仓单。
+                            await _cancel_bot_reduce_orders(exchange, symbol, side, conf, reason=f"TP{tp_level}前")
+
+                            # 重新按最新价格确认，防止等待锁期间价格已经回落。
+                            tp_level = _take_profit_hit(pos_state, side, current_price)
+                            if tp_level == 3:
+                                if not _try_lock_risk_action(symbol, side, pos_state, "TP3"):
+                                    return
+                                tp3_keep = _tp3_remaining_ratio(conf)
+                                pos_state["tp3_triggered"] = True
+                                state[key] = pos_state; _save_state(state)
+                                if tp3_keep <= 0:
+                                    msg = (
+                                        f"[{symbol}] 🎯 躺平达到{conf.get('tp3_r_multiple',3.0):g}R，执行全部止盈！ "
+                                        f"周期:{pos_state.get('risk_cycle_id')} | 当前:{current_price:.8f} | "
+                                        f"躺平:{_f(pos_state.get('tp3_price')):.8f} | 模式:Maker挂单循环全平"
+                                    )
+                                    logger.success(msg)
+                                    send_alert(full_config, "止盈提示: 躺平 全平", msg, symbol=symbol)
+                                    qty = current_contracts
+                                else:
+                                    reduce_ratio = max(0.0, 1.0 - tp3_keep)
+                                    qty = min(current_contracts, _f(pos_state.get("base_contracts"), current_contracts) * reduce_ratio)
+                                    msg = (
+                                        f"[{symbol}] 🎯 躺平达到{conf.get('tp3_r_multiple',3.0):g}R，执行躺平止盈，保留{tp3_keep:.0%}仓位继续吃利润！ "
+                                        f"周期:{pos_state.get('risk_cycle_id')} | 当前:{current_price:.8f} | 躺平:{_f(pos_state.get('tp3_price')):.8f} | "
+                                        f"本次减仓:{qty:.8f} | 模式:Maker挂单循环"
+                                    )
+                                    logger.success(msg)
+                                    send_alert(full_config, "止盈提示: 躺平 分批止盈", msg, symbol=symbol)
+                                if qty > 0:
+                                    _, after = await _limit_reduce_with_maker_retry(
+                                        exchange, symbol, side, fresh, qty,
+                                        "躺平止盈", conf, int(pos_state.get("position_version", 0)), pos_state,
+                                        max_retries=int(conf.get("tp_limit_max_retries", 0)),
+                                        check_interval_sec=float(conf.get("tp_limit_check_interval_sec", 1.0)),
+                                        timeout_sec=float(conf.get("tp_limit_timeout_sec", 10.0)),
+                                        allow_market_fallback=False,
+                                        maker_only=bool(conf.get("tp_maker_only", True)),
+                                    )
+                                    pos_state["contracts"] = after
+                                    pos_state["tp_protection_stage"] = 3 if tp3_keep > 0 else 0
+                                    state[key] = pos_state; _save_state(state)
+                                    if after <= 1e-10:
+                                        state.pop(key, None); _save_state(state); return
+                                    logger.success(f"[{symbol}] 🔐 躺平完成：剩余{after}仓位继续由移动STOP保护利润")
+                            elif tp_level == 2 and not pos_state.get("tp2_triggered") and _try_lock_risk_action(symbol, side, pos_state, "TP2"):
+                                pos_state["tp2_triggered"] = True
+                                state[key] = pos_state; _save_state(state)
+                                ratio = float(conf.get("tp2_ratio", 0.30))
+                                qty = min(current_contracts, _f(pos_state.get("base_contracts"), current_contracts) * ratio)
+                                msg = (
+                                    f"[{symbol}] 🎯 TP2达到{conf.get('tp2_r_multiple',2.0):g}R，执行30%止盈并锁定利润！ "
+                                    f"周期:{pos_state.get('risk_cycle_id')} | 当前:{current_price:.8f} | TP2:{_f(pos_state.get('tp2_price')):.8f}"
+                                )
+                                logger.success(msg)
+                                send_alert(full_config, "止盈提示: TP2 减仓", msg, symbol=symbol)
+                                _, after = await _limit_reduce_with_maker_retry(exchange, symbol, side, fresh, qty, "TP2止盈", conf, int(pos_state.get("position_version", 0)), pos_state, max_retries=int(conf.get("tp_limit_max_retries", 0)), check_interval_sec=float(conf.get("tp_limit_check_interval_sec", 1.0)), timeout_sec=float(conf.get("tp_limit_timeout_sec", 10.0)), allow_market_fallback=False, maker_only=bool(conf.get("tp_maker_only", True)))
+                                pos_state["contracts"] = after
+                                pos_state["tp_protection_stage"] = 2
+                                state[key] = pos_state; _save_state(state)
+                                logger.success(f"[{symbol}] 🔐 TP2完成：下一轮交易所STOP抬到 TP1 上方锁定利润")
+                            elif tp_level == 1 and not pos_state.get("tp1_triggered") and _try_lock_risk_action(symbol, side, pos_state, "TP1"):
+                                pos_state["tp1_triggered"] = True
+                                state[key] = pos_state; _save_state(state)
+                                ratio = float(conf.get("tp1_ratio", 0.20))
+                                qty = min(current_contracts, _f(pos_state.get("base_contracts"), current_contracts) * ratio)
+                                msg = (
+                                    f"[{symbol}] 🎯 TP1达到{conf.get('tp1_r_multiple',1.0):g}R，执行20%止盈并启动保本保护！ "
+                                    f"周期:{pos_state.get('risk_cycle_id')} | 当前:{current_price:.8f} | TP1:{_f(pos_state.get('tp1_price')):.8f}"
+                                )
+                                logger.success(msg)
+                                send_alert(full_config, "止盈提示: TP1 减仓", msg, symbol=symbol)
+                                _, after = await _limit_reduce_with_maker_retry(exchange, symbol, side, fresh, qty, "TP1止盈", conf, int(pos_state.get("position_version", 0)), pos_state, max_retries=int(conf.get("tp_limit_max_retries", 0)), check_interval_sec=float(conf.get("tp_limit_check_interval_sec", 1.0)), timeout_sec=float(conf.get("tp_limit_timeout_sec", 10.0)), allow_market_fallback=False, maker_only=bool(conf.get("tp_maker_only", True)))
+                                pos_state["contracts"] = after
+                                pos_state["tp_protection_stage"] = 1
+                                state[key] = pos_state; _save_state(state)
+                                logger.success(f"[{symbol}] 🔐 TP1完成：下一轮交易所STOP抬到保本上方保护本金")
+            except Exception as tp_exc:
+                logger.error(f"[{symbol}] 分批止盈逻辑异常: {tp_exc}")
+
+            # ---------------- 紧急止损 1：放量加速 / 黑天鹅 (市价 Taker) ----------------
+            try:
+                emergency, details = await _emergency_signal(exchange, symbol, side, conf)
+
+                if details:
+                    logger.info(
+                        f"[{symbol}] 🚨 黑天鹅监控 | 方向:{side} | "
+                        f"当前波动:{details.get('move',0):.4f} | "
+                        f"触发阈值:{details.get('threshold',0):.4f} | "
+                        f"成交量异常:{details.get('volume_crash',False)} | "
+                        f"结构确认:{details.get('structure',False)} | "
+                        f"状态:{'触发' if emergency else '正常'}"
+                    )
+
+                if details and details.get("volume_crash"):
+                    logger.warning(f"[{symbol}] ⚠️ 侦测到局部异常放量！伴随极速反向位移！")
+                elif details and details["move"] >= details["threshold"] * 0.8:
+                    logger.warning(f"[{symbol}] 🚨 行情波动逼近熔断阈值！当前波动: {details['move']:.2f}")
+
+                if emergency:
+                    ok, _ = await _two_source_price_ok(exchange, symbol, details["ws_price"], side, conf)
+                    if ok:
+                        async with RUNTIME.action_lock(symbol, side):
+                            state = _load_state(); pos_state = state.get(key, pos_state)
+                            fresh = await _position_fresh(exchange, symbol, side, conf, priority="HIGH")
+                            if fresh:
+                                msg = f"[{symbol}] 🚨 触发 {details['reason']}！执行紧急市价全平！"
+                                logger.error(msg); send_alert(full_config, f"风控警告: {details['reason']}", msg, symbol=symbol)
+                                success, _ = await _full_exit_with_revalidation(exchange, symbol, side, fresh, f"{details['reason']} 紧急市价全平", conf, pos_state)
+                                if success:
+                                    state.pop(key, None); _save_state(state)
+                                    return
+            except Exception as e:
+                logger.error(f"[{symbol}] 紧急信号检查异常: {e}")
+
+            # ---------------- 紧急止损 2：抄底 3ATR 专属保护线跌破 (市价 Taker) ----------------
+            try:
+                if pos_state.get("t3_waived") and pos_state.get("bottom_fish_sl"):
+                    realtime_bf_sl = float(pos_state["bottom_fish_sl"])
+                    if (side == "long" and current_price <= realtime_bf_sl) or \
+                       (side == "short" and current_price >= realtime_bf_sl):
+                        async with RUNTIME.action_lock(symbol, side):
+                            fresh = await _position_fresh(exchange, symbol, side, conf, priority="HIGH")
+                            if fresh:
+                                msg = f"[{symbol}] 💔 跌破 3ATR 专属抄底保护线，无条件市价全平！"
+                                logger.error(msg); send_alert(full_config, "风控警告: 实时抄底止损", msg, symbol=symbol)
+                                success, _ = await _full_exit_with_revalidation(exchange, symbol, side, fresh, "抄底实时市价全平", conf, pos_state)
+                                if success:
+                                    state = _load_state()
+                                    state.pop(key, None)
+                                    _save_state(state)
+                                    return
+            except Exception as e:
+                logger.error(f"[{symbol}] 实时抄底止损检查异常: {e}")
+
+            # ---------------- V3：EMA趋势过滤 + ATR + 结构破位分级风控 ----------------
+            try:
+                strategy = _strategy_levels_from_rows(ohlcv_rows, conf)
+                ema_fast = strategy["ema_fast"]
+                ema_slow = strategy["ema_slow"]
+                atr = strategy["atr"]
+                closed_ts = strategy["closed_ts"]
+                closed_price = strategy["last_close"]
+                trend = strategy["trend"]
+
+                t1_lookback = int(conf.get("t1_structure_lookback", 7))
+                t2_lookback = int(conf.get("t2_structure_lookback", 26))
+                t3_lookback = int(conf.get("t3_structure_lookback", 83))
+                closed_df = strategy["df"]
+                if len(closed_df) < max(t3_lookback + 1, 3):
+                    raise RuntimeError("结构K线不足")
+
+                # 结构位只看“触发K线之前”的已收盘K线，避免结构位包含当前收盘K线自身，
+                # 否则 long 的 close <= low-buffer、short 的 close >= high+buffer 在数学上几乎不可能成立。
+                prior_df = closed_df.iloc[:-1]
+                t1_low = float(prior_df.iloc[-t1_lookback:]["low"].min())
+                t1_high = float(prior_df.iloc[-t1_lookback:]["high"].max())
+                t2_low = float(prior_df.iloc[-t2_lookback:]["low"].min())
+                t2_high = float(prior_df.iloc[-t2_lookback:]["high"].max())
+                t3_low = float(prior_df.iloc[-t3_lookback:]["low"].min())
+                t3_high = float(prior_df.iloc[-t3_lookback:]["high"].max())
+                buffer = atr * float(conf.get("structure_buffer_atr", 0.50))
+                t1_atr_buffer = atr * float(conf.get("t1_atr_confirmation", 0.50))
+                atr_confirm = atr * float(conf.get("t2_atr_confirmation", 0.50))
+
+                # T1：实时价格触发“小结构 + 独立 ATR 缓冲”，不再等待K线收盘。
+                # T2/T3 继续保持原来的“收盘价确认”逻辑。
+                if side == "long":
+                    t1_level = t1_low - t1_atr_buffer
+                    t1_hit = (current_price <= t1_level
+                              and not pos_state.get("t1_done")
+                              and not pos_state.get("t1_triggered"))
+                    t2_hit = (closed_price <= t2_low - max(buffer, atr_confirm) and trend in ("bear", "neutral")
+                              and not pos_state.get("t2_done") and not pos_state.get("t2_triggered"))
+                    t3_hit = (closed_price <= t3_low - buffer and ema_fast < ema_slow
+                              and not pos_state.get("t3_triggered") and not pos_state.get("t3_waived"))
+                    strategy_stop = float(strategy["long_structure"])
+                else:
+                    t1_level = t1_high + t1_atr_buffer
+                    t1_hit = (current_price >= t1_level
+                              and not pos_state.get("t1_done")
+                              and not pos_state.get("t1_triggered"))
+                    t2_hit = (closed_price >= t2_high + max(buffer, atr_confirm) and trend in ("bull", "neutral")
+                              and not pos_state.get("t2_done") and not pos_state.get("t2_triggered"))
+                    t3_hit = (closed_price >= t3_high + buffer and ema_fast > ema_slow
+                              and not pos_state.get("t3_triggered") and not pos_state.get("t3_waived"))
+                    strategy_stop = float(strategy["short_structure"])
+
+                # 新仓保护：T1/T2/T3 只允许检查“开仓之后才形成/收盘”的K线。
+                # 例如上一仓已在上一根K线跌破T1，用户数小时后重新开多，不能因为历史K线仍是破位状态
+                # 就在新仓刚开完时立即再减20%。entry_time_ms 不可靠时已由 reconcile 回退到首次发现时间。
+                entry_time_ms = int(pos_state.get("entry_time_ms") or 0)
+                candle_is_after_entry = (entry_time_ms <= 0) or (int(closed_ts) >= entry_time_ms)
+
+                # T1 使用实时价格，但防止“旧仓已破位 -> 几小时后重新开仓”立即继承旧破位。
+                # 如果新仓开仓价本身已经在 T1 线外，先不触发；只有价格重新回到线内后再次突破才触发。
+                t1_armed = bool(pos_state.get("t1_realtime_armed", False))
+                entry_price_for_t1 = _f(pos_state.get("risk_entry_price"), 0.0)
+                if entry_price_for_t1 <= 0:
+                    entry_price_for_t1 = _f(pos_state.get("last_position_entry_price"), 0.0)
+                if entry_price_for_t1 > 0 and not pos_state.get("t1_realtime_armed_initialized", False):
+                    if side == "long":
+                        t1_armed = entry_price_for_t1 > t1_level
+                    else:
+                        t1_armed = entry_price_for_t1 < t1_level
+                    pos_state["t1_realtime_armed"] = t1_armed
+                    pos_state["t1_realtime_armed_initialized"] = True
+
+                # 已经重新回到结构线内，重新武装 T1；随后实时再次突破即可触发。
+                if side == "long" and current_price > t1_level:
+                    t1_armed = True
+                elif side == "short" and current_price < t1_level:
+                    t1_armed = True
+                pos_state["t1_realtime_armed"] = t1_armed
+
+                t1_hit = t1_hit and t1_armed
+                # T2/T3 仍必须等待开仓后的已收盘K线。
+                if not candle_is_after_entry:
+                    t2_hit = t3_hit = False
+
+                # T1 为实时触发；T2/T3 只能在新收盘K线出现时触发。
+                # 触发锁先落盘，再发通知/下单，彻底杜绝同一风险周期重复20%推送。
+                new_closed_candle = closed_ts > int(pos_state.get("last_checked_time", 0))
+                t2_hit = t2_hit and new_closed_candle
+                t3_hit = t3_hit and new_closed_candle
+                if new_closed_candle or t1_hit:
+                    logger.info(
+                        f"[{symbol}] 📊 V3止盈/止损监控 | 方向:{side} | 收盘:{closed_price:.4f} | 当前:{current_price:.4f} | "
+                        f"EMA26:{ema_fast:.4f} EMA83:{ema_slow:.4f} 趋势:{trend} ATR14:{atr:.4f} | "
+                        f"T1结构位:{t1_low if side=='long' else t1_high:.4f} | T1触发线:{t1_level:.4f} | T1实时状态:{'已破' if t1_hit else ('待触发' if t1_armed else '未武装')} | "
+                        f"T2减仓位:{t2_low if side=='long' else t2_high:.4f} (30%) | "
+                        f"T3全平结构位:{t3_low if side=='long' else t3_high:.4f} | "
+                        f"当前策略保护止损:{strategy_stop:.4f} | 新仓K线保护:{'已生效' if candle_is_after_entry else '等待开仓后新K线'} | "
+                        f"TP保护阶段:{int(pos_state.get('tp_protection_stage',0))} | TP保护止损:{_f(pos_state.get('tp_protected_stop'),0):.4f} | "
+                        f"TP1:{_f(pos_state.get('tp1_price'),0):.4f} TP2:{_f(pos_state.get('tp2_price'),0):.4f} 躺平:{_f(pos_state.get('tp3_price'),0):.4f}({_tp3_action_text(conf)}) | "
+                        f"周期:{pos_state.get('risk_cycle_id')}"
+                    )
+
+                    if new_closed_candle:
+                        pos_state["last_checked_time"] = closed_ts
+                        pos_state["last_closed_candle_ts"] = closed_ts
+                    pos_state["last_risk_check_time"] = int(time.time())
+                    pos_state["risk_state"] = {
+                        "t1": "triggered" if t1_hit else ("done" if pos_state.get("t1_done") else "normal"),
+                        "t2": "triggered" if t2_hit else ("done" if pos_state.get("t2_done") else "normal"),
+                        "t3": "triggered" if t3_hit else "normal",
+                        "black_swan": "normal",
+                        "atr_protection": "active",
+                        "ema_fast": ema_fast, "ema_slow": ema_slow, "trend": trend,
+                        "atr": atr, "strategy_stop": strategy_stop, "last_close": closed_price,
+                    }
+                    state[key] = pos_state
+                    _save_state(state)
+
+                    async with RUNTIME.action_lock(symbol, side):
+                        fresh = await _position_fresh(exchange, symbol, side, conf, priority="HIGH")
+                        if not fresh:
+                            continue
+                        current_contracts = _position_size(fresh)
+
+                        # T3：EMA趋势反转 + 大结构失守 -> 全平
+                        if t3_hit:
+                            action_key = (symbol, side, str(pos_state.get("risk_cycle_id")), "T3")
+                            if action_key in RUNTIME.risk_action_latches:
+                                logger.warning(f"[{symbol}/{side}] 🛑 T3本风险周期已执行/已锁定，跳过重复动作。")
+                                continue
+                            RUNTIME.risk_action_latches.add(action_key)
+                            await _cancel_bot_reduce_orders(exchange, symbol, side, conf, reason="T3全平前")
+                            pos_state["t3_triggered"] = True
+                            state[key] = pos_state
+                            _save_state(state)
+                            msg = (f"[{symbol}] 🚨 T3结构趋势失效，全平！周期:{pos_state.get('risk_cycle_id')} | "
+                                   f"收盘:{closed_price:.4f} EMA26:{ema_fast:.4f} EMA83:{ema_slow:.4f} ATR:{atr:.4f}")
+                            logger.error(msg)
+                            send_alert(full_config, "风控警告: T3 趋势失效", msg, symbol=symbol)
+                            success, _ = await _full_exit_with_revalidation(exchange, symbol, side, fresh, "T3 EMA+结构全平", conf, pos_state)
+                            if success:
+                                state.pop(key, None); _save_state(state); return
+
+                        # T2：中结构失守 + ATR确认 + 趋势过滤 -> 30%
+                        elif t2_hit:
+                            action_key = (symbol, side, str(pos_state.get("risk_cycle_id")), "T2")
+                            if action_key in RUNTIME.risk_action_latches:
+                                logger.warning(f"[{symbol}/{side}] 🛑 T2本风险周期已执行/已锁定，跳过重复动作。")
+                                continue
+                            RUNTIME.risk_action_latches.add(action_key)
+                            pos_state["t2_triggered"] = True
+                            state[key] = pos_state
+                            _save_state(state)
+                            qty = min(current_contracts, (_f(pos_state.get("base_contracts"), current_contracts)) * float(conf.get("tier2_ratio", 0.30)))
+                            msg = (f"[{symbol}] 📉 T2结构破位，执行30%减仓！周期:{pos_state.get('risk_cycle_id')} | "
+                                   f"收盘:{closed_price:.4f} 结构:{t2_low if side=='long' else t2_high:.4f} "
+                                   f"ATR:{atr:.4f} EMA26/83:{ema_fast:.4f}/{ema_slow:.4f} 当前:{current_price:.4f}")
+                            logger.warning(msg)
+                            send_alert(full_config, "风控提示: T2 减仓", msg, symbol=symbol)
+                            _, after = await _limit_reduce_with_maker_retry(exchange, symbol, side, fresh, qty, "T2结构减仓", conf, int(pos_state.get("position_version", 0)), pos_state)
+                            pos_state["contracts"] = after; pos_state["t2_done"] = True
+                            state[key] = pos_state; _save_state(state)
+
+                        # T1：小结构破位 -> 20%，不再用MA直接触发
+                        elif t1_hit:
+                            # T1 是“一次性事件”，不能只依赖 JSON 状态文件。
+                            # 文件保存失败/容器文件系统异常时，内存闩锁仍能阻止重复20%减仓。
+                            action_key = (symbol, side, str(pos_state.get("risk_cycle_id")), "T1")
+                            if action_key in RUNTIME.risk_action_latches:
+                                logger.warning(f"[{symbol}/{side}] 🛑 T1本风险周期已执行/已锁定，跳过重复减仓。")
+                                continue
+                            RUNTIME.risk_action_latches.add(action_key)
+                            pos_state["t1_triggered"] = True
+                            state[key] = pos_state
+                            _save_state(state)
+                            qty = min(current_contracts, (_f(pos_state.get("base_contracts"), current_contracts)) * float(conf.get("tier1_ratio", 0.20)))
+                            msg = (f"[{symbol}] 📉 T1结构破位，执行20%减仓！周期:{pos_state.get('risk_cycle_id')} | "
+                                   f"当前:{current_price:.4f} 结构:{t1_low if side=='long' else t1_high:.4f} 触发线:{t1_level:.4f} "
+                                   f"ATR:{atr:.4f} EMA26/83:{ema_fast:.4f}/{ema_slow:.4f}")
+                            logger.warning(msg)
+                            send_alert(full_config, "风控提示: T1 减仓", msg, symbol=symbol)
+                            _, after = await _limit_reduce_with_maker_retry(exchange, symbol, side, fresh, qty, "T1结构减仓", conf, int(pos_state.get("position_version", 0)), pos_state)
+                            pos_state["contracts"] = after; pos_state["t1_done"] = True
+                            state[key] = pos_state; _save_state(state)
+
+            except Exception as exc:
+                logger.error(f"[{symbol}] EMA/ATR/结构破位逻辑异常: {exc}")
+
+            await asyncio.sleep(5.0 + random.uniform(0.0, 1.0))
+
+        except asyncio.CancelledError:
+            raise
+        except CircuitBreakerException as c_exc:
+            # 明确感知限流状态并进行单行提示，不吞日志也不刷屏 Traceback
+            if time.time() - RUNTIME.last_circuit_notice > 10.0:
+                logger.warning(f"⏳ [限流冷却中] {c_exc}")
+                RUNTIME.last_circuit_notice = time.time()
+            await asyncio.sleep(5.0)
+        except Exception as exc:
+            logger.error(f"[{symbol}] 风控守护未知异常: {exc}")
+            await asyncio.sleep(5.0)
+
+
+# ---------------------------------------------------------------------------
+# Main coordinator
+# ---------------------------------------------------------------------------
+
+async def protect_positions_main(exchange, config=None):
+    full_config = _load_config()
+    conf = full_config.get("position_protection", {})
+    if not conf.get("enabled", True):
+        logger.info("仓位保护已禁用")
+        return
+
+    _algo_methods(exchange)
+    logger.info("🛡️ 风控中枢启动：集中式批量巡检 + 限流显式警报机制已就位")
+    await cleanup_orphaned_state_and_orders(exchange, conf)
+
+    tasks = {}
+    last_cleanup = 0.0
+    last_heartbeat_time = 0
+
+    while True:
+        try:
+            full_config = _load_config()
+            conf = full_config.get("position_protection", {})
+
+            # 支持运行中热关闭：WebApp 的 supervisor 会在下一轮把任务取消
+            if not conf.get("enabled", True):
+                logger.info("🛡️ 仓位保护配置已关闭，引擎退出")
+                return
+
+            # 1. 集中批量拉取一次所有仓位
+            positions = await _fetch_positions(exchange, conf, symbols=None, priority="NORMAL", force=True)
+
+            # 2. 全局批量更新全市场 Tickers（一次请求解决所有币种 Ticker 需求）
+            try:
+                tickers = await _rest(exchange, "fetch_tickers", priority="LOW", conf=conf)
+                now_ts = time.monotonic()
+                for sym, tick_data in tickers.items():
+                    RUNTIME.ticker_cache[sym] = (now_ts, tick_data)
+            except Exception as e:
+                logger.warning(f"批量获取 Tickers 异常 (降级为单币拉取): {e}")
+
+            # 3. 更新全局仓位映射
+            pos_map = {}
+            active = set()
+            for pos in positions:
+                side = _position_side(pos)
+                if _position_size(pos) <= 0 or side not in ("long", "short"):
+                    continue
+                symbol = pos.get("symbol")
+                if not symbol:
+                    continue
+                key = (symbol, side)
+                pos_map[key] = pos
+                active.add(key)
+
+            RUNTIME.global_positions_map = pos_map
+
+            # 3.5 仓位生命周期：只要主控观察到某方向从“有仓”变成“无仓”，
+            # 就立即标记下一次重新出现为全新风险周期。这样手动平仓后再开仓，
+            # 即使旧 state 文件还没来得及清理，也绝不会继承 T1/T2/TP/抄底状态。
+            disappeared = RUNTIME.previous_active_keys - active
+            for old_key in disappeared:
+                RUNTIME.force_new_cycle_keys.add(old_key)
+                # 旧周期的一次性动作闩锁也必须失效。
+                RUNTIME.risk_action_latches = {
+                    x for x in RUNTIME.risk_action_latches
+                    if not (isinstance(x, tuple) and len(x) >= 2 and x[:2] == old_key)
+                }
+                old_symbol, old_side = old_key
+                try:
+                    await _cancel_bot_reduce_orders(
+                        exchange, old_symbol, old_side, conf, reason="仓位已手动平仓，清理旧减仓单"
+                    )
+                    await _cancel_program_stops_for_flat(exchange, old_symbol, old_side, conf)
+                    RUNTIME.runtime_position_states.pop(_state_key(old_symbol, old_side), None)
+                    old_state = _load_state()
+                    old_state.pop(_state_key(old_symbol, old_side), None)
+                    _save_state(old_state)
+                except Exception as lifecycle_exc:
+                    logger.warning(f"[{old_symbol}/{old_side}] 平仓后生命周期清理异常: {lifecycle_exc}")
+                logger.info(f"[{old_symbol}/{old_side}] 🧹 检测到仓位已消失：下一次重新开仓强制建立全新风险周期。")
+
+            RUNTIME.previous_active_keys = set(active)
+
+            # 4. 按 symbol + side 调度，完整支持 Binance Hedge Mode 同币双向持仓
+            for symbol, side in active:
+                task_key = (symbol, side)
+                task = tasks.get(task_key)
+                if task is None or task.done():
+                    tasks[task_key] = asyncio.create_task(
+                        watch_symbol_position(exchange, symbol, side),
+                        name=f"position-protect:{symbol}:{side}"
+                    )
+
+            if time.time() - last_heartbeat_time >= 60:
+                if active:
+                    logger.info(f"💓 [风控中枢心跳] 正在守护 {len(active)} 个活跃仓位方向: {list(active)}")
+                else:
+                    logger.debug("💓 [风控中枢心跳] 当前账户 0 持仓，等待入场信号...")
+                last_heartbeat_time = time.time()
+
+            # 5. 清理无效任务：仓位消失立即取消守护，避免长期空转
+            for task_key, task in list(tasks.items()):
+                if task_key not in active:
+                    if not task.done():
+                        task.cancel()
+                    tasks.pop(task_key, None)
+
+            if time.time() - last_cleanup >= 3600:
+                await cleanup_orphaned_state_and_orders(exchange, conf)
+                last_cleanup = time.time()
+
+            # 6. 自适应休眠（持仓多时自动平滑平摊请求）
+            dynamic_sync_sec = max(5.0, len(active) * 0.15)
+            await asyncio.sleep(dynamic_sync_sec)
+
+        except asyncio.CancelledError:
+            raise
+        except CircuitBreakerException as c_exc:
+            logger.warning(f"⏳ [风控主控] 系统处于 API 限流冷却状态，休眠 10 秒后重试: {c_exc}")
+            await asyncio.sleep(10.0)
+        except Exception as exc:
+            logger.error(f"风控主控循环异常: {exc}", exc_info=True)
+            await asyncio.sleep(10.0)
+
+# v2 MA structure protection added

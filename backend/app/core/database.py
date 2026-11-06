@@ -5,10 +5,11 @@
 - DB 路径：PROJECT_ROOT/data/app.db（Docker 下 /app/data/app.db，目录自动创建）；
 - 每次操作开短连接 + WAL 模式，避免跨线程复用连接的问题；
 - 模块级 RLock 串行化写操作，保证多线程写安全；
-- 三张表：
+- 四张表：
   - settings(key TEXT PRIMARY KEY, value TEXT)   value 存 JSON 编码值（任意类型）
   - coin_pools(pool TEXT PRIMARY KEY, coins TEXT) coins 为 JSON 数组
   - signal_state(key TEXT PRIMARY KEY, value TEXT) 信号冷却等运行状态
+  - protection_state(key TEXT PRIMARY KEY, value TEXT) 仓位保护风险周期状态（Phase 3）
 - init_db() 幂等：建表 + 一次性迁移旧 JSON 文件（迁移后保留旧文件不动）。
 
 所有函数在调用时读取模块级 DB_PATH，测试可 monkeypatch 该路径指向 tmp_path。
@@ -29,7 +30,7 @@ else:
 DB_PATH: Path = _PROJECT_ROOT / 'data' / 'app.db'
 
 # 允许使用的表名白名单，防止调用方拼接任意表名
-ALLOWED_TABLES = ('settings', 'coin_pools', 'signal_state')
+ALLOWED_TABLES = ('settings', 'coin_pools', 'signal_state', 'protection_state')
 
 # 迁移用的旧 JSON 文件路径（由 config.py 注入，避免循环导入时仅作默认值）
 USER_SETTINGS_FILE = _PROJECT_ROOT / 'user_settings.json'
@@ -43,6 +44,7 @@ _CREATE_SQL = (
     "CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)",
     "CREATE TABLE IF NOT EXISTS coin_pools (pool TEXT PRIMARY KEY, coins TEXT)",
     "CREATE TABLE IF NOT EXISTS signal_state (key TEXT PRIMARY KEY, value TEXT)",
+    "CREATE TABLE IF NOT EXISTS protection_state (key TEXT PRIMARY KEY, value TEXT)",
 )
 
 

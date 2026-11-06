@@ -81,6 +81,15 @@
       </template>
       <template v-slot:item.actions="{ item }">
         <v-btn
+          color="warning"
+          variant="text"
+          size="x-small"
+          :disabled="uiStore.isRunning"
+          @click="openReverseDialog(item)"
+        >
+          反手
+        </v-btn>
+        <v-btn
           color="error"
           variant="text"
           size="x-small"
@@ -90,11 +99,63 @@
         </v-btn>
       </template>
     </v-data-table-virtual>
+
+    <!-- 反手确认弹窗：先全平当前仓位，再按价值反向开仓（限价 post-only） -->
+    <v-dialog v-model="reverseDialog" max-width="460" persistent>
+      <v-card>
+        <v-card-title class="text-h6">
+          <v-icon color="warning" class="mr-2">mdi-swap-horizontal</v-icon>
+          确认反手
+        </v-card-title>
+        <v-card-text v-if="reverseTarget">
+          <div class="mb-3">
+            <span class="font-weight-bold">{{ reverseTarget.full_symbol }}</span>
+            <v-icon size="small" class="mx-2">mdi-arrow-right-bold</v-icon>
+            <v-chip
+              :color="reverseTarget.side === 'long' ? 'error' : 'success'"
+              size="small"
+              label
+            >
+              反手后{{ reverseTarget.side === 'long' ? '做空' : '做多' }}
+            </v-chip>
+          </div>
+          <v-alert type="warning" variant="tonal" density="compact" class="mb-4">
+            将先<strong>全平</strong>该币种当前仓位，再以限价 post-only 单反向开仓（有 USDC 合约自动走 USDC）。执行中不可撤销。
+          </v-alert>
+          <v-text-field
+            v-model.number="reverseValue"
+            label="反手后目标价值 (USD)"
+            type="number"
+            min="1"
+            step="1"
+            variant="outlined"
+            density="compact"
+            :rules="[(v: number) => v > 0 || '价值必须大于 0']"
+            hide-details="auto"
+          ></v-text-field>
+          <div class="text-caption text-grey mt-1">
+            当前仓位名义价值 ${{ reverseTarget.notional.toFixed(2) }}（已预填）
+          </div>
+        </v-card-text>
+        <v-card-actions>
+          <v-spacer></v-spacer>
+          <v-btn variant="text" @click="reverseDialog = false">取消</v-btn>
+          <v-btn
+            color="warning"
+            variant="tonal"
+            :disabled="!(reverseValue > 0) || uiStore.isRunning"
+            @click="confirmReverse"
+          >
+            确认反手
+          </v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
   </v-card>
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import type { Position } from '@/models/types'
 import { useUiStore } from '@/stores/uiStore'
 import { usePositionStore } from '@/stores/positionStore'
@@ -140,13 +201,37 @@ const handleCloseSelected = () => {
   }
 }
 
+// --- 反手（单仓位）---
+const reverseDialog = ref(false)
+const reverseTarget = ref<Position | null>(null)
+const reverseValue = ref(0)
+
+const openReverseDialog = (position: Position) => {
+  reverseTarget.value = position
+  reverseValue.value = Math.max(1, Math.round(position.notional * 100) / 100)
+  reverseDialog.value = true
+}
+
+const confirmReverse = () => {
+  const target = reverseTarget.value
+  if (!target || !(reverseValue.value > 0)) return
+  // 传 full_symbol 即可，后端会自动截取基础币种（XAUT/USDT:USDT → XAUT）
+  uiStore.launchTask(
+    '/api/trading/manual',
+    { items: [{ symbol: target.full_symbol, action: 'reverse', value: Number(reverseValue.value) }] },
+    `反手交易 ${target.full_symbol}`,
+    1,
+  )
+  reverseDialog.value = false
+}
+
 const headers: TDataTableHeader[] = [
   { title: '合约', key: 'full_symbol', sortable: true, width: '20%' },
   { title: '名义价值', key: 'notional', sortable: true, width: '15%' },
   { title: '浮动盈亏', key: 'pnl', sortable: true, width: '15%' },
   { title: '回报率', key: 'pnl_percentage', sortable: true, width: '15%' },
   { title: '开仓均价', key: 'entry_price', width: '15%' },
-  { title: '操作', key: 'actions', sortable: false, align: 'end', width: '5%' },
+  { title: '操作', key: 'actions', sortable: false, align: 'end', width: '12%' },
 ]
 </script>
 

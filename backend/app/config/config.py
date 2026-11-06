@@ -99,6 +99,11 @@ DEFAULT_CONFIG: Dict[str, Any] = {
 
     # 手动交易页持久化预设（选中币种/每行动作与价值/默认价值），随 settings 存入 SQLite
     'manual_trade_preset': {},
+
+    # 仓位保护（Phase 3，自 monitor 并入）：完整的默认值见 app/protection/engine.py 的
+    # DEFAULT_CONFIG；这里只保留空字典以允许该配置项写入 settings 表。
+    # 默认 enabled=False，前端「仓位保护」页打开开关后才会启动引擎。
+    'position_protection': {},
 }
 
 # 内存中全局变量

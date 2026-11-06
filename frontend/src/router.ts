@@ -1,11 +1,12 @@
 // frontend/src/router.ts (完整修复版)
 import { createRouter, createWebHistory, type RouteRecordRaw } from 'vue-router'
 
-// 路由级懒加载：5 个页面不再打进首屏 chunk（原首屏 JS 约 690KB）
+// 路由级懒加载：6 个页面不再打进首屏 chunk（原首屏 JS 约 690KB）
 const DashboardView = () => import('@/views/DashboardView.vue')
 const TradingView = () => import('@/views/TradingView.vue')
 const ManualTradeView = () => import('@/views/ManualTradeView.vue')
 const SignalsView = () => import('@/views/SignalsView.vue')
+const ProtectionView = () => import('@/views/ProtectionView.vue')
 const SettingsView = () => import('@/views/SettingsView.vue')
 
 // --- 核心修复：定义路由元信息的类型 ---
@@ -42,6 +43,12 @@ const routes: Array<RouteRecordRaw> = [
     name: 'signals',
     component: SignalsView,
     meta: { title: '信号监控', icon: 'mdi-radar' },
+  },
+  {
+    path: '/protection',
+    name: 'protection',
+    component: ProtectionView,
+    meta: { title: '仓位保护', icon: 'mdi-shield-check-outline' },
   },
   {
     path: '/settings',
