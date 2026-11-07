@@ -89,6 +89,7 @@ def update_settings(
         if isinstance(value, str) and MASK_MARK in value:
             updated_settings.pop(field, None)
 
+    # 非法值直接 400：避免 "" / 0 杠杆等直接进入下单与风控计算
     _validate_numeric_settings(updated_settings)
 
     current_settings.update(updated_settings)
@@ -99,10 +100,10 @@ def update_settings(
 
 @router.post("/update-coin-pools", status_code=204)
 def update_coin_pools(pools: CoinPoolsUpdate):
-    """更新 coin_lists.json 文件中的做多/做空币种池。
+    """更新做多/做空币种池（SQLite coin_pools 表）。
 
-    统一走 config.save_coin_pools()：加锁写文件 + 同步刷新内存全局变量，
-    避免绕过锁直接写文件导致内存与文件不一致。
+    统一走 config.save_coin_pools()：加锁写入 + 同步刷新内存全局变量，
+    避免绕过锁直接写存储导致内存与存储不一致。
     """
     app_config.save_coin_pools(pools.long_coins_pool, pools.short_coins_pool)
 

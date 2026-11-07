@@ -23,7 +23,7 @@ def find_market_structure_swings(df, left_bars=7, right_bars=7):
 
     # 提取最近的几个波段高点
     swing_highs = df_copy[df_copy['is_swing_high']].tail(5)
-    for idx, row in swing_highs.iterrows():
+    for _, row in swing_highs.iterrows():
         swing_levels.append({
             'level': row['high'],
             'type': '近期前高(Swing High)',
@@ -32,7 +32,7 @@ def find_market_structure_swings(df, left_bars=7, right_bars=7):
 
     # 提取最近的几个波段低点
     swing_lows = df_copy[df_copy['is_swing_low']].tail(5)
-    for idx, row in swing_lows.iterrows():
+    for _, row in swing_lows.iterrows():
         swing_levels.append({
             'level': row['low'],
             'type': '近期前低(Swing Low)',

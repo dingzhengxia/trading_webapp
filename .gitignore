@@ -32,3 +32,4 @@ data/
 .env
 .env.*
 !.env.example
+.tools-venv/
