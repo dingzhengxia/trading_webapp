@@ -26,8 +26,9 @@
       <v-card-text>
         <v-alert type="info" variant="tonal" density="compact" class="mb-3">
           报告按周期统计热门合约的涨幅榜、放量榜、连涨榜与 RSI 超买超卖，结果同时写入网页日志。
-          钉钉推送需要在服务器环境变量中配置 <code>DINGTALK_WEBHOOK_URL</code> 与（可选）
-          <code>DINGTALK_SECRET</code>，密钥不会写入数据库或日志。
+          钉钉推送需要在服务器上 <strong>项目根目录的 <code>.env</code></strong>（与 <code>deploy.sh</code> 同级）中配置
+          <code>DINGTALK_WEBHOOK_URL</code> 与（可选）<code>DINGTALK_SECRET</code>，
+          改完需重建容器或重启后端；密钥不会写入数据库或日志。
         </v-alert>
         <div class="d-flex flex-wrap align-center ga-4">
           <v-switch
