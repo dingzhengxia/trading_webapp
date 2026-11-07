@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Optional
 from loguru import logger
 
 from ..core.exchange_manager import get_shared_exchange
+from ..core.tasks import cancel_task, cancel_tasks
 from . import engine
 
 _supervisor_task: Optional[asyncio.Task] = None
@@ -74,31 +75,15 @@ async def startup_protection() -> None:
 async def shutdown_protection() -> None:
     """lifespan 关闭时调用：停止 supervisor 与引擎。"""
     global _supervisor_task, _engine_task
-    if _engine_task is not None and not _engine_task.done():
-        _engine_task.cancel()
-        try:
-            await _engine_task
-        except (asyncio.CancelledError, Exception):
-            pass
+    await cancel_tasks((_engine_task, _supervisor_task))
     _engine_task = None
-    if _supervisor_task is not None and not _supervisor_task.done():
-        _supervisor_task.cancel()
-        try:
-            await _supervisor_task
-        except (asyncio.CancelledError, Exception):
-            pass
     _supervisor_task = None
 
 
 async def restart_protection() -> None:
     """配置变更后立即生效：重启引擎任务（下一轮 supervisor 会按新配置拉起）。"""
     global _engine_task
-    if _engine_task is not None and not _engine_task.done():
-        _engine_task.cancel()
-        try:
-            await _engine_task
-        except (asyncio.CancelledError, Exception):
-            pass
+    await cancel_task(_engine_task)
     _engine_task = None
 
 

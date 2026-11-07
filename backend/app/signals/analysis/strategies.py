@@ -21,22 +21,6 @@ from .indicators import (
 )
 
 
-def fetch_funding_rate(exchange, symbol):
-    """资金费率只读查询（原 monitor data_fetcher.fetch_funding_rate 的本地化版本）。
-
-    scanner 会传入只读 funding facade（只实现 fetch_funding_rate(symbol)），
-    数据来自每轮提前批量获取的资金费率快照。
-    """
-    try:
-        return exchange.fetch_funding_rate(symbol)
-    except AttributeError:
-        logger.debug(f"行情门面不支持 fetch_funding_rate: {symbol}")
-        return None
-    except Exception as e:
-        logger.debug(f"获取资金费率失败 {symbol}: {e}")
-        return None
-
-
 def _get_params_for_timeframe(base_params: dict, timeframe: str) -> dict:
     final_params = base_params.copy()
     overrides = base_params.get("overrides_by_timeframe", {})
@@ -136,7 +120,7 @@ def _prepare_and_send_notification(config, symbol, timeframe, df, signal_info):
     save_alert_states()
 
 
-def check_level_breakout(exchange, symbol, timeframe, config, df, breakout_params, config_index=0):
+def check_level_breakout(symbol, timeframe, config, df, breakout_params, config_index=0):
     """
     实战波段前高/前低 (Swing Pivots) 结构破坏判断
     """
@@ -284,7 +268,7 @@ def check_level_breakout(exchange, symbol, timeframe, config, df, breakout_param
         logger.error(f"❌ 在 {symbol} {timeframe} (关键位突破) 中出错: {e}", exc_info=True)
 
 
-def _check_ob_base(exchange, symbol, timeframe, config, df, ob_params, config_index, algo_name, bull_ob, bear_ob,
+def _check_ob_base(symbol, timeframe, config, df, ob_params, config_index, algo_name, bull_ob, bear_ob,
                    algo_prefix, strategy_key):
     """
     OB 核心判断逻辑 (双引擎共用此大脑，带阻力支撑互换逻辑)
@@ -374,21 +358,21 @@ def _check_ob_base(exchange, symbol, timeframe, config, df, ob_params, config_in
         logger.error(f"❌ OB判断出错: {e}", exc_info=True)
 
 
-def check_ob_luxalgo(exchange, symbol, timeframe, config, df, ob_params, config_index=0):
+def check_ob_luxalgo(symbol, timeframe, config, df, ob_params, config_index=0):
     bull_ob, bear_ob = find_lux_order_blocks(df.copy(), ob_params.get('swing_length', 5))
-    _check_ob_base(exchange, symbol, timeframe, config, df, ob_params, config_index, "爆量OB(Lux)", bull_ob, bear_ob,
+    _check_ob_base(symbol, timeframe, config, df, ob_params, config_index, "爆量OB(Lux)", bull_ob, bear_ob,
                    "LUX", 'ob_luxalgo')
 
 
-def check_ob_fluxcharts(exchange, symbol, timeframe, config, df, ob_params, config_index=0):
+def check_ob_fluxcharts(symbol, timeframe, config, df, ob_params, config_index=0):
     bull_ob, bear_ob = find_flux_order_blocks(df.copy(), ob_params.get('swing_length', 10),
                                               ob_params.get('atr_multiplier', 3.5))
-    _check_ob_base(exchange, symbol, timeframe, config, df, ob_params, config_index, "结构OB(Flux)", bull_ob, bear_ob,
+    _check_ob_base(symbol, timeframe, config, df, ob_params, config_index, "结构OB(Flux)", bull_ob, bear_ob,
                    "FLUX", 'ob_fluxcharts')
 
 
 # --- 保留策略区 ---
-def check_ma_breakout(exchange, symbol, timeframe, config, df, ma_params, config_index=0):
+def check_ma_breakout(symbol, timeframe, config, df, ma_params, config_index=0):
     try:
         ma_periods = ma_params.get('ma_periods', [7, 25, 99])
         ma_type = ma_params.get('ma_type', 'sma').lower()
@@ -442,7 +426,7 @@ def check_ma_breakout(exchange, symbol, timeframe, config, df, ma_params, config
         logger.error(f"❌ MA突破出错: {e}")
 
 
-def check_ema_signals(exchange, symbol, timeframe, config, df, ema_params, config_index=0):
+def check_ema_signals(symbol, timeframe, config, df, ema_params, config_index=0):
     try:
         atr_period = ema_params.get('atr_period', 14)
         atr_multiplier = ema_params.get('atr_multiplier', 0.3)
@@ -483,7 +467,7 @@ def check_ema_signals(exchange, symbol, timeframe, config, df, ema_params, confi
         logger.error(f"❌ EMA信号错: {e}")
 
 
-def check_kdj_cross(exchange, symbol, timeframe, config, df, kdj_params, config_index=0):
+def check_kdj_cross(symbol, timeframe, config, df, kdj_params, config_index=0):
     try:
         indicator_result = df.ta.kdj(fast=kdj_params.get('fast_k', 9), slow=kdj_params.get('slow_k', 3),
                                      signal=kdj_params.get('slow_d', 3), append=True)
@@ -526,7 +510,7 @@ def check_kdj_cross(exchange, symbol, timeframe, config, df, kdj_params, config_
         logger.error(f"❌ KDJ信号错: {e}")
 
 
-def check_volatility_breakout(exchange, symbol, timeframe, config, df, vol_params, config_index=0):
+def check_volatility_breakout(symbol, timeframe, config, df, vol_params, config_index=0):
     try:
         atr_period = vol_params.get('atr_period', 14)
         dynamic_atr_multiplier = get_dynamic_atr_multiplier(symbol, config, vol_params.get('atr_multiplier', 2.5))
@@ -560,7 +544,7 @@ def check_volatility_breakout(exchange, symbol, timeframe, config, df, vol_param
         logger.error(f"❌ 波动率信号错: {e}")
 
 
-def check_rsi_divergence(exchange, symbol, timeframe, config, df, rsi_params, config_index=0):
+def check_rsi_divergence(symbol, timeframe, config, df, rsi_params, config_index=0):
     try:
         indicator_result = pta.rsi(df['close'], length=rsi_params.get('rsi_period', 14))
         if indicator_result is None or indicator_result.empty: return
@@ -591,7 +575,7 @@ def check_rsi_divergence(exchange, symbol, timeframe, config, df, rsi_params, co
         logger.error(f"❌ RSI背离错: {e}")
 
 
-def check_trend_channel_breakout(exchange, symbol, timeframe, config, df, channel_params, config_index=0):
+def check_trend_channel_breakout(symbol, timeframe, config, df, channel_params, config_index=0):
     try:
         if 'lookback_period' not in channel_params: return
         df.ta.atr(length=14, append=True)
@@ -619,7 +603,7 @@ def check_trend_channel_breakout(exchange, symbol, timeframe, config, df, channe
 
         if channel_info['slope'] < 0:
             if prev['close'] < prev_upper_band and current['close'] > current_upper_band + confirmation_buffer:
-                signal_info = {'log_name': f"Channel Up",
+                signal_info = {'log_name': "Channel Up",
                                'strategy_name': 'trend_channel_breakout', 'strategy_index': config_index,
                                'direction': 'long',  # 突破下降通道 -> long
                                'alert_key': f"{symbol}_{timeframe}_CHAN_UP_{config_index}",
@@ -632,7 +616,7 @@ def check_trend_channel_breakout(exchange, symbol, timeframe, config, df, channe
                 _prepare_and_send_notification(config, symbol, timeframe, df, signal_info)
         elif channel_info['slope'] > 0:
             if prev['close'] > prev_lower_band and current['close'] < current_lower_band - confirmation_buffer:
-                signal_info = {'log_name': f"Channel Down",
+                signal_info = {'log_name': "Channel Down",
                                'strategy_name': 'trend_channel_breakout', 'strategy_index': config_index,
                                'direction': 'short',  # 跌破上升通道 -> short
                                'alert_key': f"{symbol}_{timeframe}_CHAN_DOWN_{config_index}",
@@ -647,7 +631,7 @@ def check_trend_channel_breakout(exchange, symbol, timeframe, config, df, channe
         logger.error(f"❌ 通道突破错: {e}")
 
 
-def check_consecutive_candles(exchange, symbol, timeframe, config, df, consecutive_params, config_index=0):
+def check_consecutive_candles(symbol, timeframe, config, df, consecutive_params, config_index=0):
     try:
         min_n_to_alert = get_dynamic_consecutive_candles(symbol, config,
                                                          consecutive_params.get('min_consecutive_candles', 4))
@@ -708,33 +692,4 @@ def check_consecutive_candles(exchange, symbol, timeframe, config, df, consecuti
             _prepare_and_send_notification(config, symbol, timeframe, df, signal_info)
     except Exception as e:
         logger.error(f"❌ 连K错: {e}")
-
-
-def check_high_funding_rate(exchange, symbol, timeframe, config, df, fund_params, config_index=0):
-    try:
-        funding_data = fetch_funding_rate(exchange, symbol)
-        if not funding_data or funding_data.get('fundingRate') is None: return
-        current_rate = funding_data['fundingRate']
-        interval_hours = int(funding_data.get('info', {}).get('fundingIntervalHours', 8))
-        dynamic_threshold = fund_params.get('threshold', 0.01) * (interval_hours / 4)
-        if abs(current_rate) >= dynamic_threshold:
-            direction_str = "多头支付空头" if current_rate > 0 else "空头支付多头"
-            sentiment = "🔥 过热" if current_rate > 0 else "🥶 逼空"
-            color_emoji = "🔴" if current_rate > 0 else "🟢"
-            signal_info = {
-                'log_name': 'High Funding',
-                'strategy_name': 'high_funding_rate', 'strategy_index': config_index,
-                'direction': 'neutral',  # 资金费率告警 -> neutral（不自动开仓）
-                'alert_key': f"{symbol}_FUNDING_{config_index}",
-                'volume_must_confirm': False,
-                'title_template': f"{color_emoji} 资金费率告警: {symbol} 达 {current_rate * 100:.3f}%",
-                'message_template': (
-                    "{trend_message}**资金费率异常**\n> **费率**: `{rate:.4f}%`\n> **周期**: {hours}h\n> **状态**: {sentiment} ({direction})\n\n"),
-                'template_data': {"rate": current_rate * 100, "hours": interval_hours, "sentiment": sentiment,
-                                  "direction": direction_str},
-                'cooldown_mult': fund_params.get('cooldown_mult', 4), 'always_show_volume': False
-            }
-            _prepare_and_send_notification(config, symbol, timeframe, df, signal_info)
-    except Exception as e:
-        logger.error(f"❌ 费率错: {e}")
 # --- END OF FILE analysis/strategies.py ---

@@ -10,6 +10,8 @@ import { createVuetify } from 'vuetify'
 import * as components from 'vuetify/components'
 import * as directives from 'vuetify/directives'
 import '@mdi/font/css/materialdesignicons.css'
+// 移动端可用性补丁（放在 vuetify 样式之后，便于覆盖）
+import './styles/mobile.css'
 
 // --- 核心修改：调整初始化顺序 ---
 import { useUiStore } from './stores/uiStore' // 提前导入 store

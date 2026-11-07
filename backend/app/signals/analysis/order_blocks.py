@@ -1,5 +1,4 @@
 # --- START OF FILE app/analysis/order_blocks.py ---
-import pandas as pd
 
 
 def find_lux_order_blocks(df, swing_length=5):

@@ -75,15 +75,12 @@
           <v-card-text>
             <v-row dense>
               <v-col cols="12" sm="6">
-                <v-select
+                <SmartSelect
                   v-model="report.run_interval"
                   :items="intervalOptions"
                   label="统计周期"
-                  density="compact"
-                  variant="outlined"
-                  hide-details
                   :disabled="saving"
-                ></v-select>
+                ></SmartSelect>
               </v-col>
               <v-col cols="12" sm="6">
                 <v-text-field
@@ -175,14 +172,11 @@
         <v-icon start>mdi-text-box-outline</v-icon>
         <span>最近报告</span>
         <v-spacer></v-spacer>
-        <v-select
+        <SmartSelect
           v-model="selectedReport"
           :items="latestNames"
-          density="compact"
-          variant="outlined"
-          hide-details
-          style="max-width: 260px"
-        ></v-select>
+          class="reports-picker"
+        ></SmartSelect>
       </v-card-title>
       <v-divider></v-divider>
       <v-card-text>
@@ -205,6 +199,8 @@ import { computed, onMounted, onUnmounted, ref } from 'vue'
 import api from '@/services/api'
 import { useSnackbarStore } from '@/stores/snackbar'
 import { getErrorMessage } from '@/utils/errors'
+import { formatUnixSeconds as formatTime } from '@/utils/format'
+import SmartSelect from '@/components/SmartSelect.vue'
 import type { PeriodicReportConfig, ReportResult, ReportRow, ReportsStatus } from '@/models/types'
 
 const snackbarStore = useSnackbarStore()
@@ -238,11 +234,6 @@ const currentLatest = computed<ReportResult | undefined>(() => {
   if (!selectedReport.value) return undefined
   return status.value.latest[selectedReport.value]
 })
-
-const formatTime = (value: number | null | undefined): string => {
-  if (!value) return '—'
-  return new Date(value * 1000).toLocaleString('zh-CN', { hour12: false })
-}
 
 const toConfig = (row: ReportRow): PeriodicReportConfig => ({
   report_name: row.report_name,
@@ -334,6 +325,16 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
+/* 手机上让报告切换占满一行，桌面恢复成标题右侧的窄下拉 */
+.reports-picker {
+  width: 100%;
+}
+@media (min-width: 960px) {
+  .reports-picker {
+    width: 260px;
+    margin-left: auto;
+  }
+}
 .report-body {
   white-space: pre-wrap;
   word-break: break-word;

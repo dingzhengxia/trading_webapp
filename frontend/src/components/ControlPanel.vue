@@ -340,15 +340,13 @@
           <p class="mb-4">根据市场指标动态筛选弱势币种，并生成调整空头仓位的交易计划。</p>
           <v-row>
             <v-col cols="12" md="6">
-              <v-select
+              <SmartSelect
                 v-model="settingsStore.settings.rebalance_method"
                 :items="rebalanceMethods"
                 item-title="text"
                 item-value="value"
                 label="筛选策略"
-                variant="outlined"
-                density="compact"
-              ></v-select>
+              ></SmartSelect>
               <v-text-field
                 v-model.number="settingsStore.settings.rebalance_top_n"
                 label="目标币种数量 (Top N)"
@@ -500,6 +498,7 @@ import { ref, watch, computed } from 'vue'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { useUiStore } from '@/stores/uiStore'
 import { debounce } from '@/utils/debounce'
+import SmartSelect from '@/components/SmartSelect.vue'
 
 const modelValue = defineModel<string>()
 

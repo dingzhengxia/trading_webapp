@@ -13,7 +13,7 @@
 """
 import time
 from collections import deque
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict
 
 from loguru import logger
 

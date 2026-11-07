@@ -16,7 +16,7 @@ import asyncio
 import inspect
 import random
 import time
-from typing import Any, Awaitable, Callable, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
 from loguru import logger
 
@@ -89,14 +89,6 @@ class RestGuardian:
             semaphore = asyncio.Semaphore(limit)
             state["semaphores"][limit] = semaphore
         return semaphore
-
-    def reset(self) -> None:
-        """重置熔断/冷却状态（测试或手动恢复用）。"""
-        self.failures = 0
-        self.circuit_open_until = 0.0
-        self.cooldown_until = 0.0
-        self.last_circuit_log_time = 0.0
-        self._loop_states.clear()
 
     def is_circuit_open(self) -> bool:
         return time.monotonic() < self.circuit_open_until

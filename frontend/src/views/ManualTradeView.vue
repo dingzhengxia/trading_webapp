@@ -134,16 +134,14 @@
                     </template>
                   </td>
                   <td>
-                    <v-select
+                    <SmartSelect
                       v-model="row.action"
                       :items="actionOptions"
                       item-title="title"
                       item-value="value"
-                      density="compact"
-                      variant="outlined"
-                      hide-details
+                      dense
                       :disabled="uiStore.isRunning"
-                    ></v-select>
+                    ></SmartSelect>
                   </td>
                   <td>
                     <v-text-field
@@ -295,9 +293,11 @@ import type {
   ResolvedSymbol,
 } from '@/models/types'
 import { getErrorMessage } from '@/utils/errors'
+import { formatAmount as formatNumber } from '@/utils/format'
 import { debounce } from '@/utils/debounce'
 import PnlSummary from '@/components/PnlSummary.vue'
 import PositionsTable from '@/components/PositionsTable.vue'
+import SmartSelect from '@/components/SmartSelect.vue'
 
 interface ManualRow {
   symbol: string
@@ -454,12 +454,6 @@ const requestExecute = (): void => {
 const totalValue = computed(() =>
   rows.value.reduce((sum, row) => (isRowValueValid(row) ? sum + Number(row.value) : sum), 0),
 )
-
-const formatNumber = (value: number): string => {
-  const num = Number(value)
-  if (!Number.isFinite(num)) return '0.00'
-  return num.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
-}
 
 const positionsOf = (symbol: string): Position[] =>
   positionStore.positions.filter(

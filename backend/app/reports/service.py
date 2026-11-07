@@ -16,6 +16,7 @@ from loguru import logger
 
 from ..config.config import load_settings
 from ..core.database import get_value, set_value
+from ..core.tasks import cancel_tasks
 from ..core.websocket_manager import log_message
 from . import dingtalk
 from .engine import generate_report, interval_minutes
@@ -150,13 +151,7 @@ async def startup_reports() -> None:
 async def shutdown_reports() -> None:
     """lifespan 关闭：停止 supervisor 与正在跑的报告任务。"""
     global _supervisor_task, _trigger_task
-    for task in (_trigger_task, _supervisor_task):
-        if task is not None and not task.done():
-            task.cancel()
-            try:
-                await task
-            except (asyncio.CancelledError, Exception):
-                pass
+    await cancel_tasks((_trigger_task, _supervisor_task))
     _trigger_task = None
     _supervisor_task = None
 

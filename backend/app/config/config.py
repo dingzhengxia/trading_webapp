@@ -1,19 +1,15 @@
 # backend/app/config/config.py (完整代码)
 import copy
 import os
-from pathlib import Path
 from typing import List, Dict, Any
 from threading import RLock
 
-# --- 路径定义 ---
-if os.environ.get("IS_DOCKER"):
-    _PROJECT_ROOT = Path('/app')
-else:
-    _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
+from ..core.paths import PROJECT_ROOT
 
+# --- 路径定义 ---
 # 旧 JSON 文件路径：仅作为一次性迁移到 SQLite 的来源保留（迁移后文件不动）
-USER_SETTINGS_FILE = _PROJECT_ROOT / 'user_settings.json'
-COIN_LISTS_FILE = _PROJECT_ROOT / 'coin_lists.json'
+USER_SETTINGS_FILE = PROJECT_ROOT / 'user_settings.json'
+COIN_LISTS_FILE = PROJECT_ROOT / 'coin_lists.json'
 # --- 路径定义结束 ---
 
 from ..core import database  # noqa: E402  SQLite 存储层（任务 A）

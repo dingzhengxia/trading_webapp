@@ -1,6 +1,5 @@
 # backend/app/main.py
 import json
-import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -11,6 +10,7 @@ from fastapi.staticfiles import StaticFiles
 from .api import positions, protection, rebalance, reports, settings, signals, trading
 from .api import status as status_router  # status 模块与 fastapi.status 避免命名冲突
 from .core.exchange_manager import close_shared_exchange
+from .core.paths import IS_DOCKER
 from .core.security import access_key_warning
 from .core.ui_log_sink import install_ui_log_sink
 from .core.websocket_manager import log_message, manager
@@ -21,7 +21,6 @@ from .signals.service import shutdown_signals, startup_signals
 # monitor 引擎（信号/仓位保护）日志转发到网页日志抽屉（幂等）
 install_ui_log_sink()
 
-IS_DOCKER = os.environ.get("IS_DOCKER")
 STATIC_FILES_DIR = Path(__file__).resolve().parent / "frontend_dist"
 
 

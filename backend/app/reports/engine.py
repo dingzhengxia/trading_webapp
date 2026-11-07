@@ -14,7 +14,6 @@ import urllib.request
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-import numpy as np
 import pandas as pd
 import pandas_ta as pta
 from loguru import logger

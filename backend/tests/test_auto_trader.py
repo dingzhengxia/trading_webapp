@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import asyncio
 import sys
-import time
 from pathlib import Path
 
 import pytest
@@ -45,7 +44,6 @@ class FakePosition:
 
 @pytest.fixture(autouse=True)
 def isolated_db(tmp_path, monkeypatch):
-    from pathlib import Path
     monkeypatch.setattr(database, "DB_PATH", tmp_path / "app.db")
     monkeypatch.setattr(database, "USER_SETTINGS_FILE", tmp_path / "u.json")
     monkeypatch.setattr(database, "COIN_LISTS_FILE", tmp_path / "c.json")
@@ -160,8 +158,6 @@ def test_existing_position_skips():
 
 
 def test_open_callback_error_returns_error_action():
-    opened = []
-
     async def fail_callback(signal):
         raise Exception("exchange down")
 

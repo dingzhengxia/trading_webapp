@@ -99,14 +99,11 @@
           <v-card-text>
             <v-row dense>
               <v-col cols="12" sm="6" md="3">
-                <v-select
+                <SmartSelect
                   v-model="form.timeframe"
                   :items="timeframes"
                   label="结构判定周期"
-                  density="compact"
-                  variant="outlined"
-                  hide-details
-                ></v-select>
+                ></SmartSelect>
               </v-col>
               <v-col cols="12" sm="6" md="3">
                 <v-text-field
@@ -333,6 +330,8 @@ import { onMounted, onUnmounted, reactive, ref } from 'vue'
 import api from '@/services/api'
 import { useSnackbarStore } from '@/stores/snackbar'
 import { getErrorMessage } from '@/utils/errors'
+import { formatNumberOrDash as formatNumber } from '@/utils/format'
+import SmartSelect from '@/components/SmartSelect.vue'
 import type { ProtectionConfig, ProtectionPositionRow, ProtectionStatus } from '@/models/types'
 
 const snackbarStore = useSnackbarStore()
@@ -375,12 +374,6 @@ const form = reactive({
 })
 
 let pollTimer: number | undefined
-
-const formatNumber = (value: number | null | undefined, digits = 2): string => {
-  const num = Number(value)
-  if (!Number.isFinite(num) || num === 0) return '—'
-  return num.toLocaleString('en-US', { maximumFractionDigits: digits })
-}
 
 const hasTriggered = (row: ProtectionPositionRow): boolean =>
   row.tp1_done || row.tp2_done || row.tp3_done || row.t1_done || row.t2_done || row.t3_done

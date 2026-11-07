@@ -14,16 +14,14 @@ from typing import List, Optional
 
 from loguru import logger
 
+from .paths import PROJECT_ROOT
+
 _LOADED = False
 
 
 def _candidates() -> List[Path]:
-    project_root = Path(__file__).resolve().parents[3]
-    return [
-        project_root / '.env',
-        Path.cwd() / '.env',
-        Path('/app/.env'),
-    ]
+    """项目根目录 .env 优先，其次当前工作目录（Docker 下根目录即 /app）。"""
+    return list(dict.fromkeys([PROJECT_ROOT / '.env', Path.cwd() / '.env']))
 
 
 def load_env(force: bool = False) -> Optional[Path]:

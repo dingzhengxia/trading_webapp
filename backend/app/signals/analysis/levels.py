@@ -1,5 +1,4 @@
 # --- START OF FILE app/analysis/levels.py ---
-import pandas as pd
 
 
 def find_market_structure_swings(df, left_bars=7, right_bars=7):

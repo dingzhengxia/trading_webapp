@@ -827,8 +827,6 @@ async def _full_exit_with_revalidation(exchange, symbol, side, position, reason,
 
 LAST_STOP_ORDER_TIME = {}
 LAST_STOP_MAINTAIN_TIME = {}
-LAST_RISK_LOG_TIME = {}
-LAST_RISK_STATE_LOG_TIME = {}
 
 
 

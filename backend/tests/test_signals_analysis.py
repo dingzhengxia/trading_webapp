@@ -3,7 +3,6 @@ fake 行情 + fake 策略产出 -> 结构化 SignalRecord（direction/strategy/p
 """
 from __future__ import annotations
 
-import asyncio
 import queue
 import sys
 from pathlib import Path
@@ -80,7 +79,7 @@ def test_ma_breakout_emits_structured_record():
         "volume_confirm": False, "volume_multiplier": 1.5,
     }
     df = _make_df()
-    check_ma_breakout(None, "BTC/USDC:USDC", "1h", config, df, config["strategy_params"]["ma_breakout"], 0)
+    check_ma_breakout("BTC/USDC:USDC", "1h", config, df, config["strategy_params"]["ma_breakout"], 0)
 
     records = _drain_queue()
     assert len(records) == 1
@@ -105,11 +104,11 @@ def test_cooldown_dedup_blocks_second_signal():
         "enabled": True, "ma_type": "sma", "ma_periods": [7], "volume_confirm": False,
     }
     df = _make_df()
-    check_ma_breakout(None, "BTC/USDC:USDC", "1h", config, df, config["strategy_params"]["ma_breakout"], 0)
+    check_ma_breakout("BTC/USDC:USDC", "1h", config, df, config["strategy_params"]["ma_breakout"], 0)
     assert len(_drain_queue()) == 1
 
     # 同 alert_key 在冷却期内 -> 不重复发射
-    check_ma_breakout(None, "BTC/USDC:USDC", "1h", config, df, config["strategy_params"]["ma_breakout"], 0)
+    check_ma_breakout("BTC/USDC:USDC", "1h", config, df, config["strategy_params"]["ma_breakout"], 0)
     assert _drain_queue() == []
 
 
@@ -122,7 +121,7 @@ def test_ema_cross_direction_metadata():
     config["strategy_params"]["ema_cross"] = ema_params
     df = _make_df(n_flat=48)  # 需要 > EMA(30) 根数，保证 prev 行的 EMA 非 NaN
     # 前高后低结构：EMA(30) 上穿后有效突破 -> long
-    check_ema_signals(None, "ETH/USDC:USDC", "1h", config, df, ema_params, 2)
+    check_ema_signals("ETH/USDC:USDC", "1h", config, df, ema_params, 2)
 
     records = _drain_queue()
     assert records, "应产生至少一个结构化信号"
@@ -157,7 +156,7 @@ def test_level_breakout_emits_structured_record():
                         "open": c, "high": h, "low": l, "close": c, "volume": v}
                        for i, (c, h, l, v) in enumerate(zip(closes, highs, lows, volumes))])
 
-    check_level_breakout(None, "SOL/USDC:USDC", "1h", config, df,
+    check_level_breakout("SOL/USDC:USDC", "1h", config, df,
                          config["strategy_params"]["level_breakout"], 0)
 
     records = [r for r in _drain_queue() if r["strategy"] == "level_breakout"]

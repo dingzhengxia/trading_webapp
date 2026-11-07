@@ -148,47 +148,35 @@
 
             <v-row dense class="mt-2">
               <v-col cols="12" md="6">
-                <v-select
+                <SmartSelect
                   v-model="autoForm.directions"
                   :items="directionOptions"
                   item-title="title"
                   item-value="value"
                   label="允许方向"
                   multiple
-                  chips
-                  density="compact"
-                  variant="outlined"
-                  hide-details
                   @update:model-value="markAutoFormDirty"
-                ></v-select>
+                ></SmartSelect>
               </v-col>
               <v-col cols="12" md="6">
-                <v-select
+                <SmartSelect
                   v-model="autoForm.timeframes"
                   :items="timeframeOptions"
                   label="允许周期"
                   multiple
-                  chips
-                  density="compact"
-                  variant="outlined"
-                  hide-details
                   @update:model-value="markAutoFormDirty"
-                ></v-select>
+                ></SmartSelect>
               </v-col>
               <v-col cols="12">
-                <v-select
+                <SmartSelect
                   v-model="autoForm.strategies"
                   :items="strategyOptions"
                   item-title="title"
                   item-value="value"
                   label="策略白名单（观望类策略不会自动开仓）"
                   multiple
-                  chips
-                  density="compact"
-                  variant="outlined"
-                  hide-details
                   @update:model-value="markAutoFormDirty"
-                ></v-select>
+                ></SmartSelect>
               </v-col>
             </v-row>
 
@@ -370,6 +358,8 @@ import type {
   SignalStatus,
 } from '@/models/types'
 import { getErrorMessage, getErrorStatus } from '@/utils/errors'
+import { formatIsoTime as formatTime } from '@/utils/format'
+import SmartSelect from '@/components/SmartSelect.vue'
 
 const POLL_INTERVAL_MS = 10000
 
@@ -686,13 +676,6 @@ const fetchSignals = async (silent: boolean): Promise<void> => {
 
 const refresh = (): void => {
   void fetchSignals(false)
-}
-
-const formatTime = (value: string | null | undefined): string => {
-  if (!value) return '—'
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return value
-  return date.toLocaleString('zh-CN', { hour12: false })
 }
 
 const formatPrice = (value: number): string => {

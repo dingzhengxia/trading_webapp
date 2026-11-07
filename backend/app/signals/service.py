@@ -13,6 +13,7 @@ from loguru import logger
 from ..config.config import load_settings
 from ..core.exchange_manager import get_shared_exchange
 from ..core.rest_guardian import RestGuardian
+from ..core.tasks import cancel_task
 from ..core.trading_service import trading_service
 from ..logic.exchange_logic_async import fetch_positions_with_pnl_async
 from .auto_trader import SignalAutoTrader
@@ -131,14 +132,8 @@ async def start_consumer() -> None:
 
 async def stop_consumer() -> None:
     global _consumer_task
-    task = _consumer_task
-    _consumer_task = None
-    if task is not None and not task.done():
-        task.cancel()
-        try:
-            await task
-        except (asyncio.CancelledError, Exception):
-            pass
+    task, _consumer_task = _consumer_task, None
+    await cancel_task(task)
 
 
 # ------------------------------------------------------------------ 生命周期

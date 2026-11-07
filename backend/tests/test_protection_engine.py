@@ -258,62 +258,6 @@ def test_algo_compat_cancels_legacy_order(fake_exchange):
 
 
 # ---------------------------------------------------------------------------
-# 条件单兼容层：旧版 ccxt 退回标准 STOP_MARKET（closePosition=True）
-# ---------------------------------------------------------------------------
-class _FakeRest:
-    """直接执行调用，不走限流（测试专用）。"""
-
-    async def call(self, func, *args, priority="NORMAL", conf=None, **kwargs):
-        return await func(*args, **kwargs)
-
-
-def test_algo_compat_detects_missing_algo_api(fake_exchange):
-    from app.protection import algo_compat
-    assert algo_compat.supports_algo(fake_exchange) is False
-
-
-def test_algo_compat_creates_close_position_stop(fake_exchange):
-    import asyncio
-    from app.protection import algo_compat
-
-    order = asyncio.run(algo_compat.create_close_position_stop(
-        fake_exchange, SYMBOL, "long", "BOTH", 95000.0, "PM_WS_SL_TEST", {}, _FakeRest()))
-
-    assert order["type"] == "STOP_MARKET"
-    call = fake_exchange.create_order_calls[-1]
-    assert call["type"] == "STOP_MARKET"
-    assert call["side"] == "sell"  # 多单用卖出止损
-    assert call["amount"] is None  # closePosition 模式不指定数量
-    assert call["params"]["closePosition"] is True
-    assert call["params"]["stopPrice"] == "95000.0"
-    assert call["params"]["newClientOrderId"] == "PM_WS_SL_TEST"
-
-
-def test_algo_compat_fetches_and_normalizes_legacy_orders(fake_exchange):
-    import asyncio
-    from app.protection import algo_compat
-
-    fake_exchange._open_orders = [{
-        "id": "123", "clientOrderId": "PM_WS_SL_BTCUSDCUSDC_L_abc",
-        "symbol": SYMBOL, "type": "STOP_MARKET", "side": "sell",
-        "status": "open", "stopPrice": 95000.0,
-    }]
-    orders = asyncio.run(algo_compat.fetch_open_algo_orders(fake_exchange, SYMBOL, {}, _FakeRest()))
-    assert fake_exchange.fetch_open_orders_calls[-1][1] == {"stop": True}
-    assert orders[0]["algoId"] == "123"
-    assert orders[0]["orderType"] == "STOP_MARKET"
-    assert orders[0]["side"] == "SELL"
-
-
-def test_algo_compat_cancels_legacy_order(fake_exchange):
-    import asyncio
-    from app.protection import algo_compat
-
-    asyncio.run(algo_compat.cancel_algo_order(fake_exchange, SYMBOL, "123", {}, _FakeRest()))
-    assert fake_exchange.cancel_order_calls[-1] == ("123", SYMBOL)
-
-
-# ---------------------------------------------------------------------------
 # monitor 引擎日志转发到 UI 日志抽屉（ui_log_sink）
 # ---------------------------------------------------------------------------
 # 说明：loguru 的过滤器按「调用日志的模块名」判定，测试文件里的 logger.info

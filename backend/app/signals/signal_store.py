@@ -2,7 +2,6 @@
 """线程安全的信号环形缓冲 + 扫描统计（MERGE_PLAN §3.3）。"""
 import threading
 from collections import deque
-from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 MAX_SIGNALS = 200  # 环形缓冲上限，与前端展示上限一致

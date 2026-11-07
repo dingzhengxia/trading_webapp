@@ -10,6 +10,7 @@ from ..core.exchange_manager import get_exchange_dependency
 from ..core.security import verify_api_key
 from ..logic.utils import resolve_full_symbol
 from ..models.schemas import AddCoinRequest, CoinPoolsUpdate, SettingsResponse
+from .validators import validate_numbers
 
 router = APIRouter(prefix="/api/settings", tags=["Settings"], dependencies=[Depends(verify_api_key)])
 
@@ -42,23 +43,7 @@ NUMERIC_RANGES: Dict[str, tuple] = {
 
 def _validate_numeric_settings(updated: Dict[str, Any]) -> None:
     """校验交易安全相关数值；非法值返回 400，避免 "" / 0 杠杆等写入数据库。"""
-    for key, (low, high, is_int) in NUMERIC_RANGES.items():
-        if key not in updated:
-            continue
-        raw = updated[key]
-        try:
-            # bool 是 int 子类，需显式排除
-            if isinstance(raw, bool):
-                raise ValueError
-            number = float(raw)
-            if is_int and number != int(number):
-                raise ValueError
-        except (TypeError, ValueError):
-            raise HTTPException(status_code=400, detail=f"配置项 {key} 必须是有效数字。")
-        if not (low <= number <= high):
-            raise HTTPException(
-                status_code=400, detail=f"配置项 {key} 超出允许范围 [{low}, {high}]。")
-        updated[key] = int(number) if is_int else number
+    validate_numbers(updated, NUMERIC_RANGES)
 
 
 def _mask_secret(value: Any) -> str:

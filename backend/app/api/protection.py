@@ -8,6 +8,7 @@ from loguru import logger
 from ..config import config as app_config
 from ..core.security import verify_api_key
 from ..protection.service import get_protection_status, restart_protection
+from .validators import validate_numbers
 
 router = APIRouter(prefix="/api/protection", tags=["Protection"],
                    dependencies=[Depends(verify_api_key)])
@@ -68,22 +69,7 @@ def _validate(conf: Dict[str, Any]) -> None:
             status_code=400,
             detail=f"timeframe 必须是 {', '.join(ALLOWED_TIMEFRAMES)} 之一。")
 
-    for key, (low, high, is_int) in NUMERIC_RANGES.items():
-        if key not in conf:
-            continue
-        raw = conf[key]
-        try:
-            if isinstance(raw, bool):
-                raise ValueError
-            number = float(raw)
-            if is_int and number != int(number):
-                raise ValueError
-        except (TypeError, ValueError):
-            raise HTTPException(status_code=400, detail=f"配置项 {key} 必须是有效数字。")
-        if not (low <= number <= high):
-            raise HTTPException(
-                status_code=400, detail=f"配置项 {key} 超出允许范围 [{low}, {high}]。")
-        conf[key] = int(number) if is_int else number
+    validate_numbers(conf, NUMERIC_RANGES)
 
 
 @router.get("")

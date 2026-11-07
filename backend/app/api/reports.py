@@ -9,6 +9,7 @@ from ..config import config as app_config
 from ..core.security import verify_api_key
 from ..reports.engine import REPORT_INTERVALS
 from ..reports.service import get_reports_status, trigger_report
+from .validators import validate_numbers
 
 router = APIRouter(prefix="/api/reports", tags=["Reports"],
                    dependencies=[Depends(verify_api_key)])
@@ -29,16 +30,10 @@ MAX_REPORTS = 5
 
 
 def _validate_number(key: str, raw: Any) -> int:
-    if isinstance(raw, bool):
-        raise HTTPException(status_code=400, detail=f"配置项 {key} 必须是整数。")
-    try:
-        number = int(raw)
-    except (TypeError, ValueError):
-        raise HTTPException(status_code=400, detail=f"配置项 {key} 必须是整数。")
-    low, high = NUMERIC_RANGES[key]
-    if not (low <= number <= high):
-        raise HTTPException(status_code=400, detail=f"配置项 {key} 超出允许范围 [{low}, {high}]。")
-    return number
+    """报告参数都是正整数，越界/非数字直接 400。"""
+    conf = {key: raw}
+    validate_numbers(conf, NUMERIC_RANGES, default_int=True)
+    return conf[key]
 
 
 def _validate_report(conf: Any) -> Dict[str, Any]:

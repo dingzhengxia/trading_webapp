@@ -20,23 +20,18 @@ from typing import Any, Callable, Dict, List, Optional
 import pandas as pd
 from loguru import logger
 
+from ..core.paths import PROJECT_ROOT
+from ..core.tasks import cancel_task
 from . import runtime
 from .analysis.strategies import (
     check_ema_signals, check_kdj_cross, check_volatility_breakout,
     check_level_breakout, check_rsi_divergence, check_consecutive_candles,
     check_trend_channel_breakout, check_ob_luxalgo, check_ob_fluxcharts,
-    check_high_funding_rate, check_ma_breakout, _get_params_for_timeframe,
+    check_ma_breakout, _get_params_for_timeframe,
 )
 from .market_data import STABLE_BASES
 
-if os.environ.get("IS_DOCKER"):
-    _PROJECT_ROOT = '/app'
-else:
-    # backend/app/signals/scanner.py -> 向上 4 级 = 项目根
-    _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(
-        os.path.dirname(os.path.abspath(__file__)))))
-
-SIGNAL_CONFIG_FILE = os.path.join(_PROJECT_ROOT, 'signal_config.json')
+SIGNAL_CONFIG_FILE = os.path.join(str(PROJECT_ROOT), 'signal_config.json')
 
 # signal_config.json 缺失时的兜底配置（策略全部关闭，保证可运行）
 FALLBACK_SIGNAL_CONFIG: Dict[str, Any] = {
@@ -91,21 +86,6 @@ def build_scan_config(settings: Dict[str, Any]) -> Dict[str, Any]:
     return config
 
 
-class FundingFacade:
-    """只读资金费率门面：每轮提前批量获取快照，策略线程内同步查询。"""
-
-    def __init__(self, rates: Dict[str, Any]):
-        self._rates = rates or {}
-
-    def fetch_funding_rate(self, symbol: str) -> Optional[Dict[str, Any]]:
-        data = self._rates.get(symbol)
-        if not data:
-            return None
-        if isinstance(data, dict) and ('fundingRate' in data or 'info' in data):
-            return {'fundingRate': data.get('fundingRate'), 'info': data.get('info', {}) or {}}
-        return None
-
-
 def _static_full_symbols(bases: List[str], markets: Dict[str, Any]) -> List[str]:
     """静态币种解析为完整交易对：USDC 优先，其次 USDT。"""
     result = []
@@ -157,14 +137,8 @@ class SignalScanner:
 
     async def stop(self) -> None:
         self._stop_event.set()
-        task = self._loop_task
-        self._loop_task = None
-        if task is not None and not task.done():
-            task.cancel()
-            try:
-                await task
-            except (asyncio.CancelledError, Exception):
-                pass
+        task, self._loop_task = self._loop_task, None
+        await cancel_task(task)
         logger.info("信号扫描循环已停止。")
 
     # -------------------------------------------------------------- 状态

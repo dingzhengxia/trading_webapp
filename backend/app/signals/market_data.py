@@ -146,9 +146,3 @@ class MarketDataService:
 
         ranked.sort(key=lambda item: item[2], reverse=True)
         return [full_symbol for _, full_symbol, _ in ranked[:max(0, int(top_n))]]
-
-    def clear_caches(self) -> None:
-        """清空全部缓存（测试或配置热更新用）。"""
-        self._tickers_cache = None
-        self._ohlcv_cache.clear()
-        self._funding_cache = None

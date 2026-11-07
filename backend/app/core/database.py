@@ -15,17 +15,12 @@
 所有函数在调用时读取模块级 DB_PATH，测试可 monkeypatch 该路径指向 tmp_path。
 """
 import json
-import os
 import sqlite3
 from pathlib import Path
 from threading import RLock
 from typing import Any, Dict
 
-# --- 路径定义（与 config.py 的 IS_DOCKER 判断逻辑保持一致）---
-if os.environ.get("IS_DOCKER"):
-    _PROJECT_ROOT = Path('/app')
-else:
-    _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
+from .paths import PROJECT_ROOT as _PROJECT_ROOT
 
 DB_PATH: Path = _PROJECT_ROOT / 'data' / 'app.db'
 
@@ -132,19 +127,6 @@ def set_many(table: str, mapping: Dict[str, Any]) -> None:
         except Exception:
             conn.rollback()
             raise
-        finally:
-            conn.close()
-
-
-def delete_value(table: str, key: str) -> None:
-    """删除单个键（存在与否均安全）。"""
-    _check_table(table)
-    with _lock:
-        conn = _connect()
-        try:
-            key_col = _key_column(conn, table)
-            conn.execute(f"DELETE FROM {table} WHERE {key_col} = ?", (key,))
-            conn.commit()
         finally:
             conn.close()
 
