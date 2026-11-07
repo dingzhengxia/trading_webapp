@@ -159,9 +159,6 @@ def test_scan_endpoint_offline(client, api_key, monkeypatch):
         async def fetch_tickers(self):
             return {}
 
-        async def fetch_funding_rates(self, symbols):
-            return {}
-
         async def load_markets(self):
             return {}
 

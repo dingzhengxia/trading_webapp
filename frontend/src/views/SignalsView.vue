@@ -392,7 +392,6 @@ const strategyOptions = [
   { value: 'ob_fluxcharts', title: '订单块 (FluxCharts)' },
   { value: 'volatility_breakout', title: '波动率突破（观望，不开仓）' },
   { value: 'consecutive_candles', title: '连续 K 线警示（观望，不开仓）' },
-  { value: 'high_funding_rate', title: '高资金费率（观望，不开仓）' },
 ]
 
 const strategyTitleMap = new Map(strategyOptions.map((option) => [option.value, option.title]))

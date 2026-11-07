@@ -97,7 +97,7 @@ def test_strategy_whitelist():
     result = asyncio.run(trader.on_signal(_signal(strategy="volatility_breakout")))
     assert result['action'] == 'skip'
     assert result['action'] == 'skip' and opened == []
-    # neutral 类策略（consecutive_candles / high_funding_rate）默认不在白名单
+    # neutral 类策略（consecutive_candles）默认不在白名单
     result2 = asyncio.run(trader.on_signal(_signal(strategy="consecutive_candles")))
     assert result2['action'] == 'skip'
 

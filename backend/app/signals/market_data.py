@@ -1,5 +1,5 @@
 # backend/app/signals/market_data.py
-"""行情层：tickers/ohlcv/funding 缓存 + RestGuardian + 涨跌幅 TopN（MERGE_PLAN §2.3）。
+"""行情层：tickers/ohlcv 缓存 + RestGuardian + 涨跌幅 TopN（MERGE_PLAN §2.3）。
 
 要求：
 - 所有 REST 请求经 RestGuardian（信号扫描只用 NORMAL/LOW 优先级）；
@@ -28,16 +28,14 @@ class MarketDataService:
     """
 
     def __init__(self, exchange_provider: Callable[[], Any], guardian: Optional[RestGuardian] = None,
-                 ticker_ttl: float = 30.0, ohlcv_ttl: float = 30.0, funding_ttl: float = 60.0):
+                 ticker_ttl: float = 30.0, ohlcv_ttl: float = 30.0):
         self._exchange_provider = exchange_provider
         self.guardian = guardian or RestGuardian()
         self.ticker_ttl = max(1.0, float(ticker_ttl))
         self.ohlcv_ttl = max(1.0, float(ohlcv_ttl))
-        self.funding_ttl = max(1.0, float(funding_ttl))
         self._tickers_cache: Optional[Tuple[float, Dict[str, Any]]] = None
         self._ohlcv_cache: Dict[Tuple[str, str], Tuple[float, list]] = {}
         self._ohlcv_inflight: Dict[Tuple[str, str], asyncio.Future] = {}
-        self._funding_cache: Optional[Tuple[float, Dict[str, Any]]] = None
 
     async def _exchange(self):
         return await self._exchange_provider()
@@ -86,26 +84,6 @@ class MarketDataService:
             raise
         finally:
             self._ohlcv_inflight.pop(key, None)
-
-    # ------------------------------------------------------------------ funding
-    async def get_funding_rates(self, symbols: Sequence[str]) -> Dict[str, Any]:
-        """批量 fetch_funding_rates，缓存 60s。失败时返回已缓存内容或空 dict。"""
-        symbol_list = [str(s) for s in symbols or []]
-        now = time.monotonic()
-        if self._funding_cache and now - self._funding_cache[0] < self.funding_ttl:
-            return self._funding_cache[1]
-        if not symbol_list:
-            return {}
-        try:
-            exchange = await self._exchange()
-            rates = await self.guardian.call(
-                exchange.fetch_funding_rates, symbol_list, priority='NORMAL')
-            result = rates or {}
-            self._funding_cache = (time.monotonic(), result)
-            return result
-        except Exception as e:
-            print(f"--- [WARNING] 批量获取资金费率失败（跳过本轮费率策略）: {e} ---")
-            return self._funding_cache[1] if self._funding_cache else {}
 
     # ------------------------------------------------------------------ TopN
     async def get_top_symbols_by_volume(self, top_n: int = 100,

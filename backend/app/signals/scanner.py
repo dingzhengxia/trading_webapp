@@ -7,8 +7,7 @@
    同 base 去重，USDC 优先）；
 3. 对每个 (symbol, timeframe)：每轮每 key 只拉一次 K 线，同一份 df 跑该 timeframe 下
    所有启用策略（asyncio.to_thread 线程池执行）；
-4. 每轮结束更新 status；异常记录 last_error；
-5. funding_facade：每轮提前批量取资金费率，构造只读门面给策略。
+4. 每轮结束更新 status；异常记录 last_error。
 """
 import asyncio
 import json
@@ -104,15 +103,33 @@ def _static_full_symbols(bases: List[str], markets: Dict[str, Any]) -> List[str]
     return result
 
 
+def _enabled_param_sets(config: Dict[str, Any], timeframe: str) -> List[tuple]:
+    """展开某周期下真正要跑的 (策略名, 函数, 参数, 参数序号)。
+
+    跳过未 enabled 的参数组与 exclude_timeframes 命中的周期；供计算 K 线数量
+    与实际执行两处复用，避免同一套过滤条件写两遍。
+    """
+    result = []
+    for name, info in STRATEGY_MAP.items():
+        raw = config.get('strategy_params', {}).get(name, {})
+        for index, base_params in enumerate(raw if isinstance(raw, list) else [raw]):
+            if not isinstance(base_params, dict) or not base_params.get('enabled', False):
+                continue
+            final_params = _get_params_for_timeframe(base_params, timeframe)
+            if timeframe in final_params.get('exclude_timeframes', []):
+                continue
+            result.append((name, info['func'], info['limit'], final_params, index))
+    return result
+
+
 class SignalScanner:
     """信号扫描器：后台循环 + 手动触发；同一时刻只跑一轮（并发保护）。"""
 
     def __init__(self, settings_loader: Callable[[], Dict[str, Any]], store,
-                 market_data, auto_trader, exchange_provider: Callable[[], Any]):
+                 market_data, exchange_provider: Callable[[], Any]):
         self._settings_loader = settings_loader
         self._store = store
         self._market_data = market_data
-        self._auto_trader = auto_trader
         self._exchange_provider = exchange_provider
         self._scan_lock = asyncio.Lock()
         self._loop_task: Optional[asyncio.Task] = None
@@ -236,26 +253,12 @@ class SignalScanner:
             logger.info("本轮无目标币种（TopN 与静态列表均为空），跳过。")
             return {'scanned_symbols': 0, 'error_count': error_count, 'last_error': last_error}
 
-        # 3. 批量资金费率（每轮一次）+ 只读门面
-        funding_rates = await self._market_data.get_funding_rates(symbols)
-        facade = FundingFacade(funding_rates)
-
-        # 4. K 线扫描：每个 (symbol, timeframe) 只拉一次
+        # 3. K 线扫描：每个 (symbol, timeframe) 只拉一次
         for timeframe in timeframes:
-            enabled_limits = []
-            for name, info in STRATEGY_MAP.items():
-                raw = config.get('strategy_params', {}).get(name, {})
-                param_sets = raw if isinstance(raw, list) else [raw]
-                for base_params in param_sets:
-                    if not isinstance(base_params, dict) or not base_params.get('enabled', False):
-                        continue
-                    final_params = _get_params_for_timeframe(base_params, timeframe)
-                    if timeframe in final_params.get('exclude_timeframes', []):
-                        continue
-                    enabled_limits.append(info['limit'])
-            if not enabled_limits:
+            enabled = _enabled_param_sets(config, timeframe)
+            if not enabled:
                 continue
-            ohlcv_limit = max(enabled_limits)
+            ohlcv_limit = max(limit for _, _, limit, _, _ in enabled)
 
             for full_symbol in symbols:
                 if self._stop_event.is_set():
@@ -273,24 +276,15 @@ class SignalScanner:
                 if df.empty:
                     continue
 
-                for name, info in STRATEGY_MAP.items():
-                    raw = config.get('strategy_params', {}).get(name, {})
-                    param_sets = raw if isinstance(raw, list) else [raw]
-                    for i, base_params in enumerate(param_sets):
-                        if not isinstance(base_params, dict) or not base_params.get('enabled', False):
-                            continue
-                        final_params = _get_params_for_timeframe(base_params, timeframe)
-                        if timeframe in final_params.get('exclude_timeframes', []):
-                            continue
-                        # 单个策略异常只记录，不中断整轮
-                        try:
-                            await asyncio.to_thread(
-                                info['func'], facade, full_symbol, timeframe, config,
-                                df.copy(), final_params, i)
-                        except Exception as e:
-                            error_count += 1
-                            last_error = f"策略 {name} @ {full_symbol} {timeframe}: {e}"
-                            logger.error(last_error)
+                for name, func, _limit, params, index in enabled:
+                    # 单个策略异常只记录，不中断整轮
+                    try:
+                        await asyncio.to_thread(
+                            func, full_symbol, timeframe, config, df.copy(), params, index)
+                    except Exception as e:
+                        error_count += 1
+                        last_error = f"策略 {name} @ {full_symbol} {timeframe}: {e}"
+                        logger.error(last_error)
 
         return {'scanned_symbols': len(symbols), 'error_count': error_count, 'last_error': last_error}
 

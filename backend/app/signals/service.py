@@ -74,7 +74,6 @@ def _get_scanner() -> SignalScanner:
             settings_loader=load_settings,
             store=store,
             market_data=_get_market_data(),
-            auto_trader=_get_auto_trader(),
             exchange_provider=get_shared_exchange,
         )
     return scanner

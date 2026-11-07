@@ -173,7 +173,7 @@ SIGNAL_TIMEFRAMES = {'1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '8h
 SIGNAL_STRATEGIES = {
     'ema_cross', 'ma_breakout', 'kdj_cross', 'volatility_breakout', 'level_breakout',
     'rsi_divergence', 'trend_channel_breakout', 'consecutive_candles',
-    'ob_luxalgo', 'ob_fluxcharts', 'high_funding_rate',
+    'ob_luxalgo', 'ob_fluxcharts',
 }
 
 
@@ -188,7 +188,7 @@ class SignalConfigUpdate(BaseModel):
     signal_ohlcv_cache_seconds: Optional[int] = Field(None, ge=1, le=3600)
     signal_auto_trade_enabled: Optional[bool] = None
     signal_auto_trade_directions: Optional[List[Literal['long', 'short']]] = Field(None, max_length=2)
-    signal_auto_trade_strategies: Optional[List[str]] = Field(None, min_length=1, max_length=11)
+    signal_auto_trade_strategies: Optional[List[str]] = Field(None, min_length=1, max_length=10)
     signal_auto_trade_timeframes: Optional[List[str]] = Field(None, min_length=1, max_length=10)
     signal_auto_trade_confirmation_window_seconds: Optional[int] = Field(None, ge=1, le=86400)
     signal_auto_trade_confirmations: Optional[int] = Field(None, ge=1, le=10)

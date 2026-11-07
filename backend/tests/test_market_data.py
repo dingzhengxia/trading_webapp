@@ -19,13 +19,11 @@ from app.signals.market_data import MarketDataService  # noqa: E402
 class FakeExchange:
     """带请求计数器的假交易所（完全离线）。"""
 
-    def __init__(self, tickers=None, ohlcv=None, funding=None):
+    def __init__(self, tickers=None, ohlcv=None):
         self.tickers = tickers or {}
         self.ohlcv = ohlcv or {}
-        self.funding = funding or {}
         self.fetch_tickers_calls = 0
         self.fetch_ohlcv_calls = []
-        self.fetch_funding_rates_calls = 0
 
     async def fetch_tickers(self):
         self.fetch_tickers_calls += 1
@@ -35,10 +33,6 @@ class FakeExchange:
         self.fetch_ohlcv_calls.append((symbol, timeframe, limit))
         await asyncio.sleep(0.02)  # 模拟网络延迟，制造 in-flight 窗口
         return self.ohlcv.get((symbol, timeframe), [])
-
-    async def fetch_funding_rates(self, symbols):
-        self.fetch_funding_rates_calls += 1
-        return {s: self.funding.get(s, {"fundingRate": 0.0001}) for s in symbols}
 
 
 def _provider(exchange):
@@ -96,21 +90,6 @@ def test_ohlcv_cache_and_dedup():
     r1, r2, r3 = asyncio.run(run())
     assert r1 == r2 == r3 == [[1, 2, 3, 4, 5, 6]]
     assert exchange.fetch_ohlcv_calls == [("BTC/USDC:USDC", "1h", 100), ("ETH/USDC:USDC", "1h", 100)]
-
-
-def test_funding_rates_batch_and_cache():
-    exchange = FakeExchange(funding={"BTC/USDC:USDC": {"fundingRate": 0.01}})
-
-    async def run():
-        svc = make_service(exchange)
-        r1 = await svc.get_funding_rates(["BTC/USDC:USDC", "ETH/USDC:USDC"])
-        r2 = await svc.get_funding_rates(["BTC/USDC:USDC"])
-        return r1, r2
-
-    r1, r2 = asyncio.run(run())
-    assert r1["BTC/USDC:USDC"]["fundingRate"] == 0.01
-    assert r2 == r1
-    assert exchange.fetch_funding_rates_calls == 1  # 第二次命中缓存
 
 
 def test_top_symbols_usdc_priority_and_volume_order():

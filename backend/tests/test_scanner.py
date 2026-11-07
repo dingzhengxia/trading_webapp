@@ -40,7 +40,6 @@ class FakeScanExchange:
         }
         self.fetch_tickers_calls = 0
         self.fetch_ohlcv_calls = []
-        self.fetch_funding_rates_calls = 0
 
     async def fetch_tickers(self):
         self.fetch_tickers_calls += 1
@@ -56,10 +55,6 @@ class FakeScanExchange:
         volumes = [1000.0] * 129 + [5000.0]
         return [[1_700_000_000_000 + i * 3_600_000, c, c, c, c, v]
                 for i, (c, v) in enumerate(zip(closes, volumes))]
-
-    async def fetch_funding_rates(self, symbols):
-        self.fetch_funding_rates_calls += 1
-        return {s: {"fundingRate": 0.0001, "info": {}} for s in symbols}
 
 
 def _settings(**overrides):
@@ -105,15 +100,6 @@ def isolated_env(tmp_path, monkeypatch):
 def _make_scanner(exchange, settings):
     store = SignalStore()
 
-    async def dummy_open_callback(signal):
-        return True
-
-    async def dummy_position_provider():
-        return []
-
-    from app.signals.auto_trader import SignalAutoTrader
-    auto_trader = SignalAutoTrader(lambda: settings, dummy_position_provider, dummy_open_callback)
-
     market_data = MarketDataService(
         _provider(exchange),
         guardian=RestGuardian({"api_min_interval_sec": 0, "api_max_retries": 1}),
@@ -122,7 +108,7 @@ def _make_scanner(exchange, settings):
     async def exchange_provider():
         return exchange
 
-    return SignalScanner(lambda: settings, store, market_data, auto_trader, exchange_provider)
+    return SignalScanner(lambda: settings, store, market_data, exchange_provider)
 
 
 def _provider(exchange):
@@ -152,7 +138,6 @@ def test_scan_once_requests_ohlcv_once_per_key_and_emits_signals():
     assert sorted(exchange.fetch_ohlcv_calls) == [
         ("BTC/USDC:USDC", "1h"), ("ETH/USDC:USDC", "1h")]
     assert exchange.fetch_tickers_calls == 1  # 每轮只拉一次顶部行情
-    assert exchange.fetch_funding_rates_calls == 1  # 每轮只批量拉一次资金费率
 
     records = _drain_queue()
     # signal_config.json 还启用了其他策略，可能产生额外信号；ma_breakout 必须两个币种都触发
