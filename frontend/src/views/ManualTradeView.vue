@@ -21,7 +21,83 @@
 
             <v-row>
               <v-col cols="12" md="8">
+                <!-- 手机端：全屏选择页代替下拉框（下拉在窄屏上只有一条缝，没法用） -->
+                <template v-if="isMobile">
+                  <v-text-field
+                    :model-value="coinPickerLabel"
+                    label="选择币种（点这里打开选择页）"
+                    readonly
+                    variant="outlined"
+                    density="compact"
+                    hide-details
+                    prepend-inner-icon="mdi-magnify"
+                    append-inner-icon="mdi-chevron-down"
+                    :disabled="uiStore.isRunning"
+                    @click="coinDialog = true"
+                  ></v-text-field>
+
+                  <v-dialog
+                    v-model="coinDialog"
+                    fullscreen
+                    transition="dialog-bottom-transition"
+                  >
+                    <v-card>
+                      <v-toolbar density="compact">
+                        <v-toolbar-title>
+                          选择币种（已选 {{ selectedCoins.length }}）
+                        </v-toolbar-title>
+                        <v-spacer></v-spacer>
+                        <v-btn icon="mdi-close" @click="coinDialog = false"></v-btn>
+                      </v-toolbar>
+                      <v-divider></v-divider>
+                      <div class="pa-3 pb-1">
+                        <v-text-field
+                          v-model="coinSearch"
+                          label="搜索币种"
+                          prepend-inner-icon="mdi-magnify"
+                          variant="outlined"
+                          density="compact"
+                          hide-details
+                          clearable
+                          autofocus
+                        ></v-text-field>
+                      </div>
+                      <v-divider class="mt-1"></v-divider>
+                      <div class="coin-list">
+                        <div
+                          v-for="coin in filteredCoins"
+                          :key="coin"
+                          class="coin-row"
+                          @click="toggleCoin(coin)"
+                        >
+                          <span class="coin-row__symbol">{{ coin }}</span>
+                          <v-icon
+                            size="22"
+                            :color="isSelectedCoin(coin) ? 'primary' : 'grey'"
+                            :icon="isSelectedCoin(coin) ? 'mdi-check-circle' : 'mdi-circle-outline'"
+                          ></v-icon>
+                        </div>
+                        <div v-if="filteredCoins.length === 0" class="pa-6 text-center text-caption text-grey">
+                          没有匹配的币种
+                        </div>
+                      </div>
+                      <v-divider></v-divider>
+                      <v-card-actions class="pa-3">
+                        <v-btn
+                          block
+                          color="primary"
+                          variant="tonal"
+                          @click="coinDialog = false"
+                        >
+                          完成（已选 {{ selectedCoins.length }} 个币种）
+                        </v-btn>
+                      </v-card-actions>
+                    </v-card>
+                  </v-dialog>
+                </template>
+
                 <v-autocomplete
+                  v-else
                   v-model="selectedCoins"
                   :items="availableCoins"
                   label="选择币种（可多选，输入即搜索）"
@@ -41,20 +117,31 @@
                 </v-autocomplete>
               </v-col>
               <v-col cols="12" md="4">
-                <v-text-field
-                  v-model.number="defaultValue"
-                  label="默认每币种价值 (USD)"
-                  type="number"
-                  min="0"
-                  step="10"
-                  density="compact"
-                  variant="outlined"
-                  hide-details
-                  prefix="$"
-                  :disabled="uiStore.isRunning"
-                  :error="!isDefaultValueValid"
-                  :messages="isDefaultValueValid ? '新增币种时自动填充该价值' : '默认价值必须大于 0'"
-                ></v-text-field>
+                <div class="d-flex align-center ga-2">
+                  <v-text-field
+                    v-model.number="defaultValue"
+                    label="默认每币种价值 (USD)"
+                    type="number"
+                    min="0"
+                    step="10"
+                    density="compact"
+                    variant="outlined"
+                    hide-details
+                    prefix="$"
+                    class="flex-grow-1"
+                    :disabled="uiStore.isRunning"
+                    :error="!isDefaultValueValid"
+                    :messages="isDefaultValueValid ? '新增币种时自动填充，可一键应用到全部' : '默认价值必须大于 0'"
+                  ></v-text-field>
+                  <v-btn
+                    variant="tonal"
+                    size="small"
+                    :disabled="!isDefaultValueValid || rows.length === 0 || uiStore.isRunning"
+                    @click="applyDefaultToAll"
+                  >
+                    应用到全部
+                  </v-btn>
+                </div>
               </v-col>
             </v-row>
 
@@ -494,6 +581,31 @@ const availableCoins = computed(() => {
   return [...new Set([...pool, ...exchangeCoins.value])].sort()
 })
 
+// ---- 手机端全屏币种选择页 ----
+const coinDialog = ref(false)
+const coinSearch = ref('')
+
+const filteredCoins = computed(() => {
+  const keyword = (coinSearch.value || '').trim().toUpperCase()
+  if (!keyword) return availableCoins.value
+  return availableCoins.value.filter((coin) => coin.toUpperCase().includes(keyword))
+})
+
+const isSelectedCoin = (coin: string): boolean => selectedCoins.value.includes(coin)
+
+const toggleCoin = (coin: string): void => {
+  selectedCoins.value = isSelectedCoin(coin)
+    ? selectedCoins.value.filter((item) => item !== coin)
+    : [...selectedCoins.value, coin]
+}
+
+const coinPickerLabel = computed(() => {
+  const count = selectedCoins.value.length
+  if (count === 0) return '未选择'
+  const preview = selectedCoins.value.slice(0, 3).join('、')
+  return count <= 3 ? preview : `${preview} 等 ${count} 个`
+})
+
 const isDefaultValueValid = computed(() => {
   const value = Number(defaultValue.value)
   return Number.isFinite(value) && value > 0
@@ -585,6 +697,15 @@ const fetchResolvedSymbols = async (): Promise<void> => {
 const applyActionToAll = (action: ManualTradeAction): void => {
   rows.value.forEach((row) => {
     row.action = action
+  })
+}
+
+// 默认价值一键应用到所有行（覆盖已填写的价值）
+const applyDefaultToAll = (): void => {
+  const fallback = defaultRowValue()
+  if (!fallback) return
+  rows.value.forEach((row) => {
+    row.value = fallback
   })
 }
 
@@ -687,5 +808,30 @@ onMounted(() => {
 }
 .manual-table :deep(td) {
   vertical-align: middle;
+}
+
+/* 手机端全屏币种选择页：平铺大行，手指好点 */
+.coin-list {
+  height: calc(100vh - 170px);
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+.coin-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 52px;
+  padding: 0 16px;
+  border-bottom: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  cursor: pointer;
+}
+.coin-row:active {
+  background: rgba(var(--v-theme-primary), 0.08);
+}
+.coin-row__symbol {
+  font-size: 1rem;
+  font-weight: 500;
 }
 </style>
