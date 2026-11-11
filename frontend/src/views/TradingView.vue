@@ -7,6 +7,37 @@
           <ControlPanel v-model="activeTab" />
         </v-col>
       </v-row>
+
+      <!-- 当前持仓：反手 / 平仓都在这里的每一行上操作 -->
+      <v-row>
+        <v-col cols="12">
+          <PnlSummary />
+        </v-col>
+      </v-row>
+
+      <v-row>
+        <v-col cols="12">
+          <PositionsTable
+            title="▲ 多头仓位"
+            side="long"
+            :positions="positionStore.longPositions"
+            :loading="positionStore.loading"
+            @refresh="positionStore.fetchPositions()"
+          />
+        </v-col>
+      </v-row>
+
+      <v-row>
+        <v-col cols="12">
+          <PositionsTable
+            title="▼ 空头仓位"
+            side="short"
+            :positions="positionStore.shortPositions"
+            :loading="positionStore.loading"
+            @refresh="positionStore.fetchPositions()"
+          />
+        </v-col>
+      </v-row>
     </v-container>
   </div>
 
@@ -68,6 +99,8 @@ import { useUiStore } from '@/stores/uiStore'
 import { usePositionStore } from '@/stores/positionStore'
 import { useSettingsStore } from '@/stores/settingsStore'
 import ControlPanel from '@/components/ControlPanel.vue'
+import PositionsTable from '@/components/PositionsTable.vue'
+import PnlSummary from '@/components/PnlSummary.vue'
 import apiClient from '@/services/api'
 import type { RebalanceCriteria } from '@/models/types'
 import { getErrorMessage } from '@/utils/errors'
