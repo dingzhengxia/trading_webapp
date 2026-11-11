@@ -2,10 +2,14 @@
 <template>
   <v-app>
     <v-app-bar app density="compact">
-      <v-app-bar-nav-icon @click="drawer = !drawer" class="d-md-none"></v-app-bar-nav-icon>
       <v-toolbar-title>Web 交易终端</v-toolbar-title>
       <v-spacer></v-spacer>
-      <v-chip :color="uiStore.statusColor" class="mr-4" label>{{ uiStore.statusMessage }}</v-chip>
+      <v-chip :color="uiStore.statusColor" class="mr-2" label>{{ uiStore.statusMessage }}</v-chip>
+
+      <!-- 导航抽屉按钮：移到应用栏右侧，手机端不再使用底部导航 -->
+      <v-btn icon @click="drawer = !drawer" class="d-md-none">
+        <v-icon>mdi-menu</v-icon>
+      </v-btn>
 
       <!-- 主题切换按钮 -->
       <v-btn
@@ -41,13 +45,6 @@
       </v-list>
     </v-navigation-drawer>
 
-    <v-bottom-navigation v-if="$vuetify.display.smAndDown" app grow style="z-index: 1007">
-      <v-btn v-for="route in routes" :key="`bottom-${route.name?.toString()}`" :to="route.path">
-        <v-icon>{{ route.meta.icon }}</v-icon>
-        <span>{{ route.meta.title }}</span>
-      </v-btn>
-    </v-bottom-navigation>
-
     <v-main>
       <v-container fluid>
         <router-view />
@@ -67,7 +64,7 @@
 
 <script setup lang="ts">
 import { onMounted, ref, watch, computed } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRouter, useRoute } from 'vue-router'
 import { useDisplay, useTheme } from 'vuetify'
 import { useUiStore } from '@/stores/uiStore'
 import { useSettingsStore } from '@/stores/settingsStore'
@@ -101,6 +98,15 @@ const themeIcon = computed(() =>
 )
 
 const drawer = ref(mdAndUp.value)
+
+// 手机端：路由变化后自动收起抽屉，避免抽屉盖住页面让用户误以为点击无效
+const currentRoute = useRoute()
+watch(
+  () => currentRoute.path,
+  () => {
+    if (!mdAndUp.value) drawer.value = false
+  },
+)
 
 // 应用初始化函数
 const initializeApp = async () => {

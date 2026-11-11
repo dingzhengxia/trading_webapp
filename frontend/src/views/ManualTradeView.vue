@@ -33,7 +33,7 @@
                   variant="outlined"
                   hide-details
                   :disabled="uiStore.isRunning"
-                  :menu-props="{ maxHeight: '45vh', location: 'bottom' }"
+                  :menu-props="coinMenuProps"
                 >
                   <template v-slot:no-data>
                     <v-list-item title="没有匹配的币种" />
@@ -387,6 +387,10 @@ const settingsStore = useSettingsStore()
 const positionStore = usePositionStore()
 const { smAndDown } = useDisplay()
 const isMobile = computed(() => smAndDown.value)
+// 手机端下拉限高 45vh（防止铺满全屏），桌面端用固定 420px（矮窗口下 vh 会把菜单压扁）
+const coinMenuProps = computed(() =>
+  isMobile.value ? { maxHeight: '45vh' } : { maxHeight: '420px' },
+)
 
 const actionOptions: { title: string; value: ManualTradeAction }[] = [
   { title: '做多', value: 'long' },
