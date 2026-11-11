@@ -1,4 +1,4 @@
-<!-- frontend/src/views/ManualTradeView.vue (手动做多/做空/反手) -->
+<!-- frontend/src/views/ManualTradeView.vue (手动做多/做空) -->
 <template>
   <div>
     <v-row>
@@ -6,15 +6,14 @@
         <v-card>
           <v-card-title class="text-h6 d-flex align-center">
             <v-icon start>mdi-hand-coin-outline</v-icon>
-            <span>手动交易（做多 / 做空 / 反手）</span>
+            <span>手动交易（做多 / 做空）</span>
           </v-card-title>
           <v-divider></v-divider>
           <v-card-text>
             <v-alert type="info" variant="tonal" density="compact" class="mb-4 text-caption">
               <div>· 所有开仓均为<strong>限价 post-only 单</strong>，不会使用市价单。</div>
-              <div>· 反手 = 先按当前持仓方向<strong>全平</strong>（确认无残留）后再反向限价开仓。</div>
-              <div>· 反手时若无持仓会跳过并记录 warning 日志；同一币种多空持仓并存时同样跳过。</div>
-              <div>· 每行「价值」为目标名义价值（USD）；反手行的价值即反向开仓后的目标价值。</div>
+              <div>· 每行「价值」为目标名义价值（USD）。</div>
+              <div>· 要把已有仓位反向，请在下方<strong>持仓列表</strong>对应仓位上点「反手」（先全平再反向开仓）。</div>
               <div>· 币种列表 = 你的币种池 + 币安全部 USDT/USDC 永续，支持输入搜索，池外币种也可直接开仓。</div>
               <div>· 执行期间不可修改/提交，任务结束后会自动刷新下方持仓。</div>
             </v-alert>
@@ -80,16 +79,6 @@
                 @click="applyActionToAll('short')"
               >
                 全部做空
-              </v-btn>
-              <v-btn
-                color="warning"
-                variant="tonal"
-                size="small"
-                prepend-icon="mdi-swap-vertical-bold"
-                :disabled="rows.length === 0 || uiStore.isRunning"
-                @click="applyActionToAll('reverse')"
-              >
-                全部反手
               </v-btn>
               <v-spacer></v-spacer>
               <v-btn
@@ -287,15 +276,12 @@
     </v-col>
   </v-row>
 
-  <!-- 执行前确认：反手/批量下单风险较高，强制二次确认 -->
+  <!-- 执行前确认：批量下单风险较高，强制二次确认 -->
   <v-dialog v-model="showConfirm" max-width="560">
     <v-card>
       <v-card-title class="text-h6">确认执行手动交易</v-card-title>
       <v-divider></v-divider>
       <v-card-text>
-        <v-alert v-if="reverseCount > 0" type="warning" variant="tonal" density="compact" class="mb-3 text-caption">
-          包含 {{ reverseCount }} 个「反手」操作：将先按当前持仓方向全平，确认无残留后再反向限价开仓。
-        </v-alert>
         <div class="text-caption text-grey mb-2">
           合计 {{ rows.length }} 个币种，总名义价值 ${{ formatNumber(totalValue) }}；全部为限价 post-only 单。
         </div>
@@ -393,7 +379,6 @@ const isMobile = computed(() => smAndDown.value)
 const actionOptions: { title: string; value: ManualTradeAction }[] = [
   { title: '做多', value: 'long' },
   { title: '做空', value: 'short' },
-  { title: '反手', value: 'reverse' },
 ]
 
 const selectedCoins = ref<string[]>([])
@@ -467,7 +452,7 @@ const restorePreset = async (): Promise<void> => {
         const saved = rowMap.get(symbol)
         return {
           symbol,
-          action: (saved?.action ?? 'long') as ManualTradeAction,
+          action: (saved?.action === 'short' ? 'short' : 'long') as ManualTradeAction,
           value: Number.isFinite(Number(saved?.value)) && Number(saved?.value) > 0
             ? Number(saved?.value)
             : (Number(preset.default_value) > 0 ? Number(preset.default_value) : 100),
@@ -521,8 +506,6 @@ const canExecute = computed(
 )
 
 const showConfirm = ref(false)
-
-const reverseCount = computed(() => rows.value.filter((row) => row.action === 'reverse').length)
 
 const actionTitle = (action: ManualTradeAction): string =>
   actionOptions.find((option) => option.value === action)?.title ?? action
