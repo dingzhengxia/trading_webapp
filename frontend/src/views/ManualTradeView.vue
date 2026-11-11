@@ -33,7 +33,7 @@
                   variant="outlined"
                   hide-details
                   :disabled="uiStore.isRunning"
-                  :menu-props="{ maxHeight: '420px' }"
+                  :menu-props="{ maxHeight: '45vh', location: 'bottom' }"
                 >
                   <template v-slot:no-data>
                     <v-list-item title="没有匹配的币种" />
@@ -101,7 +101,83 @@
               </v-btn>
             </div>
 
-            <v-table v-if="rows.length > 0" density="compact" class="manual-table">
+            <!-- 手机端：卡片式布局，避免 6 列表格横向溢出、动作按钮竖排 -->
+            <div v-if="isMobile && rows.length > 0">
+              <v-card
+                v-for="row in rows"
+                :key="`m-${row.symbol}`"
+                variant="outlined"
+                class="mb-2"
+              >
+                <v-card-text class="pa-3">
+                  <div class="d-flex align-center flex-wrap ga-1 mb-2">
+                    <span class="font-weight-medium text-body-1">{{ row.symbol }}</span>
+                    <v-chip
+                      v-if="resolvedSymbols[row.symbol]"
+                      size="x-small"
+                      variant="tonal"
+                      :color="quoteColor(resolvedSymbols[row.symbol])"
+                    >
+                      {{ quoteLabel(resolvedSymbols[row.symbol]) }}
+                    </v-chip>
+                    <span v-else class="text-caption text-grey">解析中...</span>
+                    <template v-if="positionsOf(row.symbol).length > 0">
+                      <v-chip
+                        v-for="position in positionsOf(row.symbol)"
+                        :key="position.full_symbol"
+                        size="x-small"
+                        variant="tonal"
+                        :color="position.side === 'long' ? 'success' : 'error'"
+                      >
+                        {{ position.side === 'long' ? '多' : '空' }}
+                        ${{ formatNumber(position.notional) }}
+                      </v-chip>
+                    </template>
+                    <span v-else class="text-caption text-grey">未持仓</span>
+                    <v-spacer></v-spacer>
+                    <v-btn
+                      icon="mdi-close"
+                      size="x-small"
+                      variant="text"
+                      :disabled="uiStore.isRunning"
+                      @click="removeRow(row.symbol)"
+                    ></v-btn>
+                  </div>
+                  <div class="d-flex align-center flex-wrap ga-2">
+                    <div class="flex-grow-1" style="flex-basis: 100%">
+                      <SmartSelect
+                        v-model="row.action"
+                        :items="actionOptions"
+                        item-title="title"
+                        item-value="value"
+                        :disabled="uiStore.isRunning"
+                      ></SmartSelect>
+                    </div>
+                    <v-text-field
+                      v-model.number="row.value"
+                      type="number"
+                      min="0"
+                      step="10"
+                      density="compact"
+                      variant="outlined"
+                      hide-details
+                      prefix="$"
+                      label="价值 (USD)"
+                      class="flex-grow-1"
+                      style="flex-basis: 130px"
+                      :error="!isRowValueValid(row)"
+                      :disabled="uiStore.isRunning"
+                    ></v-text-field>
+                  </div>
+                </v-card-text>
+              </v-card>
+            </div>
+
+            <v-table
+              v-else-if="rows.length > 0"
+              density="compact"
+              class="manual-table"
+            >
               <thead>
                 <tr>
                   <th class="text-left">币种</th>
@@ -280,6 +356,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
+import { useDisplay } from 'vuetify'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { usePositionStore } from '@/stores/positionStore'
 import { useUiStore } from '@/stores/uiStore'
@@ -308,6 +385,8 @@ interface ManualRow {
 const uiStore = useUiStore()
 const settingsStore = useSettingsStore()
 const positionStore = usePositionStore()
+const { smAndDown } = useDisplay()
+const isMobile = computed(() => smAndDown.value)
 
 const actionOptions: { title: string; value: ManualTradeAction }[] = [
   { title: '做多', value: 'long' },

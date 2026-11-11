@@ -31,7 +31,7 @@
     </v-toolbar>
 
     <!-- 第二行操作栏 -->
-    <v-toolbar density="compact" flat color="transparent" class="px-2">
+    <v-toolbar density="compact" flat color="transparent" class="px-2 toolbar-wrap">
       <v-btn
         color="warning"
         variant="tonal"
@@ -58,14 +58,14 @@
 
     <v-data-table-virtual
       v-model="positionStore.selectedPositions"
-      :headers="headers"
+      :headers="visibleHeaders"
       :items="positions"
       item-value="full_symbol"
       show-select
       density="compact"
       class="text-caption position-table"
       fixed-header
-      height="calc(50vh - 120px)"
+      :height="isMobile ? '45vh' : 'calc(50vh - 120px)'"
       no-data-text="无持仓数据"
     >
       <template v-slot:item.notional="{ item }">${{ item.notional.toFixed(2) }}</template>
@@ -156,6 +156,7 @@
 
 <script setup lang="ts">
 import { computed, ref } from 'vue'
+import { useDisplay } from 'vuetify'
 import type { Position } from '@/models/types'
 import { useUiStore } from '@/stores/uiStore'
 import { usePositionStore } from '@/stores/positionStore'
@@ -233,6 +234,13 @@ const headers: TDataTableHeader[] = [
   { title: '开仓均价', key: 'entry_price', width: '15%' },
   { title: '操作', key: 'actions', sortable: false, align: 'end', width: '12%' },
 ]
+
+// 手机端隐藏「开仓均价」列，避免表格横向溢出
+const { smAndDown } = useDisplay()
+const isMobile = computed(() => smAndDown.value)
+const visibleHeaders = computed(() =>
+  isMobile.value ? headers.filter((header) => header.key !== 'entry_price') : headers,
+)
 </script>
 
 <!-- FINAL, CORRECT FIX: 使用更强力的CSS规则 -->
@@ -245,4 +253,13 @@ const headers: TDataTableHeader[] = [
 :deep(.position-table .v-data-table__th) {
   white-space: nowrap !important;
 }
+
+/* 手机端：操作栏按钮允许换行，避免被裁切 */
+.toolbar-wrap :deep(.v-toolbar__content) {
+  flex-wrap: wrap;
+  height: auto !important;
+  padding: 6px 8px !important;
+  gap: 6px;
+}
+
 </style>

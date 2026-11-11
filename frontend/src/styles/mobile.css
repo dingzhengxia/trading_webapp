@@ -26,4 +26,30 @@
   * {
     -webkit-tap-highlight-color: transparent;
   }
+
+  /* 底部导航：7 个入口在窄屏上禁止换行、压缩最小宽度 */
+  .v-bottom-navigation .v-btn {
+    min-width: 0;
+    flex: 1 1 0;
+    padding: 0 2px;
+  }
+  .v-bottom-navigation .v-btn__content {
+    font-size: 10px;
+    line-height: 1.2;
+  }
+  .v-bottom-navigation .v-btn__content span {
+    white-space: nowrap;
+  }
+
+  /* 数据表格：收紧单元格内边距，减少横向溢出 */
+  .v-data-table .v-data-table__th,
+  .v-data-table .v-data-table__td {
+    padding-left: 6px !important;
+    padding-right: 6px !important;
+  }
+
+  /* 应用栏状态 chip 不再挤占标题空间 */
+  .v-app-bar .v-toolbar-title {
+    min-width: 0;
+  }
 }
