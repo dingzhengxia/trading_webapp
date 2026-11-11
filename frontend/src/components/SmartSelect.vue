@@ -1,44 +1,111 @@
 <!-- frontend/src/components/SmartSelect.vue -->
 <!--
-  移动端友好的选择器：
-  - 桌面（≥ md）：行为完全等同 v-select，保留下拉菜单；
-  - 手机（< md）：把选项平铺成可换行的胶囊按钮，点一下就选中，没有弹出层，
-    避免 Vuetify 下拉在窄屏上“菜单太小 / 被卡片裁切 / 需要精准点按”的问题。
+  统一的选择器：
+  - 桌面（≥ md）：v-select（searchable 时用 v-autocomplete，可输入搜索），保留下拉菜单；
+  - 手机（< md）：只读输入框 + 全屏选择页（顶部搜索、平铺大行、点选即勾选），
+    彻底避开 Vuetify 下拉在窄屏上只有一条缝、完全没法点的问题。
 -->
 <template>
   <div class="smart-select">
     <template v-if="isMobile">
-      <div v-if="label" class="smart-select__label">{{ label }}</div>
-      <div class="smart-select__chips" :class="{ 'smart-select__chips--dense': dense }">
-        <button
-          v-for="opt in normalizedItems"
-          :key="String(opt.value)"
-          type="button"
-          class="smart-chip"
-          :class="{ 'smart-chip--on': isSelected(opt.value) }"
-          :disabled="disabled"
-          :aria-pressed="isSelected(opt.value)"
-          @click="toggle(opt.value)"
-        >
-          {{ opt.title }}
-        </button>
+      <v-text-field
+        :model-value="summary"
+        :label="label"
+        readonly
+        :variant="variant"
+        :density="density"
+        :hide-details="hideDetails"
+        :disabled="disabled"
+        :hint="hint"
+        :persistent-hint="!!hint"
+        :placeholder="placeholderText"
+        @click="openDialog"
+      >
+        <template #append-inner>
+          <v-icon icon="mdi-chevron-down" size="20" />
+        </template>
+      </v-text-field>
 
-        <button
-          v-if="clearable && hasValue && !multiple"
-          type="button"
-          class="smart-chip smart-chip--clear"
-          :disabled="disabled"
-          @click="clear"
-        >
-          清除
-        </button>
+      <v-dialog v-model="dialog" fullscreen transition="dialog-bottom-transition">
+        <v-card>
+          <v-toolbar density="compact">
+            <v-toolbar-title>{{ label || '请选择' }}</v-toolbar-title>
+            <v-spacer></v-spacer>
+            <v-btn icon="mdi-close" @click="dialog = false"></v-btn>
+          </v-toolbar>
+          <v-divider></v-divider>
 
-        <span v-if="!normalizedItems.length" class="text-caption text-medium-emphasis">
-          暂无可选项
-        </span>
-      </div>
-      <div v-if="hint" class="text-caption text-medium-emphasis mt-1">{{ hint }}</div>
+          <div class="pa-3">
+            <v-text-field
+              v-model="search"
+              label="搜索"
+              prepend-inner-icon="mdi-magnify"
+              variant="outlined"
+              density="compact"
+              hide-details
+              clearable
+            ></v-text-field>
+          </div>
+          <v-divider></v-divider>
+
+          <div class="ss-list">
+            <div
+              v-for="opt in filteredItems"
+              :key="String(opt.value)"
+              class="ss-row"
+              :class="{ 'ss-row--on': isSelected(opt.value) }"
+              @click="pick(opt.value)"
+            >
+              <span class="ss-row__title">{{ opt.title }}</span>
+              <v-icon
+                size="22"
+                :color="isSelected(opt.value) ? 'primary' : 'grey'"
+                :icon="isSelected(opt.value) ? 'mdi-check-circle' : 'mdi-circle-outline'"
+              ></v-icon>
+            </div>
+            <div v-if="filteredItems.length === 0" class="pa-6 text-center text-caption text-grey">
+              没有匹配的选项
+            </div>
+          </div>
+
+          <v-divider></v-divider>
+          <div class="pa-3 d-flex align-center ga-2">
+            <v-btn
+              v-if="clearable"
+              variant="text"
+              class="flex-grow-1"
+              :disabled="!hasValue"
+              @click="clearAndClose"
+            >
+              清空
+            </v-btn>
+            <v-btn color="primary" variant="tonal" class="flex-grow-1" @click="dialog = false">
+              完成{{ multiple ? `（已选 ${selectedValues.length}）` : '' }}
+            </v-btn>
+          </div>
+        </v-card>
+      </v-dialog>
     </template>
+
+    <v-autocomplete
+      v-else-if="searchable"
+      :model-value="modelValue"
+      :items="items"
+      :item-title="itemTitle"
+      :item-value="itemValue"
+      :label="label"
+      :multiple="multiple"
+      :chips="multiple"
+      :closable-chips="multiple"
+      :disabled="disabled"
+      :clearable="clearable"
+      :density="density"
+      :variant="variant"
+      :hide-details="hideDetails"
+      :hint="hint"
+      :persistent-hint="!!hint"
+      @update:model-value="onSelect"
+    ></v-autocomplete>
 
     <v-select
       v-else
@@ -48,19 +115,22 @@
       :item-value="itemValue"
       :label="label"
       :multiple="multiple"
+      :chips="multiple"
+      :closable-chips="multiple"
       :disabled="disabled"
       :clearable="clearable"
       :density="density"
       :variant="variant"
       :hide-details="hideDetails"
       :hint="hint"
+      :persistent-hint="!!hint"
       @update:model-value="onSelect"
     ></v-select>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { useDisplay } from 'vuetify'
 
 type Primitive = string | number
@@ -84,6 +154,8 @@ const props = withDefaults(
     hint?: string
     /** 表格单元格等窄容器里用更小的胶囊 */
     dense?: boolean
+    /** 桌面端允许输入搜索（选项很多时用） */
+    searchable?: boolean
   }>(),
   {
     items: () => [],
@@ -96,6 +168,7 @@ const props = withDefaults(
     variant: 'outlined',
     hideDetails: true,
     dense: false,
+    searchable: false,
   },
 )
 
@@ -103,6 +176,10 @@ const emit = defineEmits<{ (e: 'update:modelValue', value: SelectValue): void }>
 
 const { smAndDown } = useDisplay()
 const isMobile = computed(() => smAndDown.value)
+
+// ---- 手机端全屏选择页 ----
+const dialog = ref(false)
+const search = ref('')
 
 const normalizedItems = computed(() =>
   props.items.map((raw) => {
@@ -126,6 +203,25 @@ const selectedValues = computed<Primitive[]>(() => {
 
 const hasValue = computed(() => selectedValues.value.length > 0)
 
+const filteredItems = computed(() => {
+  const keyword = search.value.trim().toUpperCase()
+  if (!keyword) return normalizedItems.value
+  return normalizedItems.value.filter((opt) => opt.title.toUpperCase().includes(keyword))
+})
+
+const summary = computed(() => {
+  const list = selectedValues.value
+  if (list.length === 0) return ''
+  const titles = list.map(
+    (value) => normalizedItems.value.find((opt) => opt.value === value)?.title ?? String(value),
+  )
+  if (!props.multiple) return titles[0] ?? String(list[0])
+  if (titles.length <= 2) return titles.join('、')
+  return `${titles.slice(0, 2).join('、')} 等 ${titles.length} 项`
+})
+
+const placeholderText = computed(() => (selectedValues.value.length === 0 ? '点击选择' : ''))
+
 function isSelected(value: Primitive): boolean {
   return selectedValues.value.includes(value)
 }
@@ -134,7 +230,22 @@ function onSelect(value: unknown): void {
   emit('update:modelValue', value as SelectValue)
 }
 
-function toggle(value: Primitive): void {
+function clear(): void {
+  emit('update:modelValue', props.multiple ? [] : null)
+}
+
+function clearAndClose(): void {
+  clear()
+  dialog.value = false
+}
+
+function openDialog(): void {
+  if (props.disabled) return
+  search.value = ''
+  dialog.value = true
+}
+
+function pick(value: Primitive): void {
   if (props.disabled) return
   if (props.multiple) {
     const next = isSelected(value)
@@ -143,12 +254,9 @@ function toggle(value: Primitive): void {
     emit('update:modelValue', next)
     return
   }
-  // 单选：再次点击已选项时，若允许清除就取消选择，否则保持
+  // 单选：点选后关闭（再次点已选项且允许清除则取消）
   emit('update:modelValue', isSelected(value) && props.clearable ? null : value)
-}
-
-function clear(): void {
-  emit('update:modelValue', props.multiple ? [] : null)
+  dialog.value = false
 }
 </script>
 
@@ -156,67 +264,30 @@ function clear(): void {
 .smart-select {
   min-width: 0;
 }
-.smart-select__label {
-  font-size: 0.75rem;
-  line-height: 1.2;
-  opacity: 0.7;
-  margin-bottom: 6px;
-}
-.smart-select__chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  max-height: 40vh;
+.ss-list {
+  flex: 1 1 auto;
+  height: calc(100vh - 260px);
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
 }
-.smart-chip {
-  appearance: none;
-  -webkit-appearance: none;
-  border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
-  background: transparent;
-  color: rgb(var(--v-theme-on-surface));
-  border-radius: 999px;
-  min-height: 40px;
+.ss-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 52px;
   padding: 0 16px;
-  font-size: 0.9375rem;
-  line-height: 1.1;
-  font-family: inherit;
+  border-bottom: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
   cursor: pointer;
-  transition:
-    background-color 0.15s ease,
-    border-color 0.15s ease,
-    transform 0.08s ease;
   touch-action: manipulation;
   -webkit-tap-highlight-color: transparent;
 }
-.smart-chip:active {
-  transform: scale(0.97);
+.ss-row:active {
+  background: rgba(var(--v-theme-primary), 0.08);
 }
-.smart-chip--on {
-  background: rgb(var(--v-theme-primary));
-  border-color: rgb(var(--v-theme-primary));
-  color: rgb(var(--v-theme-on-primary));
+.ss-row--on .ss-row__title {
   font-weight: 600;
 }
-.smart-chip:disabled {
-  opacity: 0.45;
-  cursor: default;
-}
-.smart-chip--clear {
-  border-style: dashed;
-  opacity: 0.75;
-  padding: 0 12px;
-  font-size: 0.875rem;
-}
-.smart-select__chips--dense .smart-chip {
-  min-height: 32px;
-  padding: 0 10px;
-  font-size: 0.8125rem;
-}
-/* 表格单元格里不做内部滚动，避免和表格自身的横向滚动打架 */
-.smart-select__chips--dense {
-  max-height: none;
-  gap: 6px;
+.ss-row__title {
+  font-size: 1rem;
 }
 </style>

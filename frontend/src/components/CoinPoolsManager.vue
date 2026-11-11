@@ -59,85 +59,15 @@
             </v-tooltip>
           </div>
 
-          <v-autocomplete
-            v-model="settingsStore.availableLongCoins"
+          <SmartSelect
+            :model-value="settingsStore.availableLongCoins"
             :items="availableForLongPool"
-            label="从总池中选择做多备选币种（输入即搜索）"
+            label="从总池中选择做多备选币种（可搜索）"
             multiple
             clearable
-            variant="outlined"
-            hide-details
-            item-title="title"
-            item-value="value"
-            :menu-props="{ maxHeight: '300px' }"
-            :hide-selected="!longPoolShowAll"
-            :close-on-content-click="false"
-          >
-            <template v-slot:selection="{ index }">
-              <div
-                v-if="index === 0"
-                class="selection-wrapper"
-                :class="{ 'is-expanded': isLongPoolExpanded }"
-              >
-                <v-chip
-                  v-for="(poolItem, chipIndex) in settingsStore.availableLongCoins"
-                  :key="`long-${poolItem}`"
-                  v-show="isLongPoolExpanded || chipIndex < MAX_VISIBLE_CHIPS"
-                  class="ma-1"
-                  closable
-                  @click:close="removePoolItemValue('long', poolItem)"
-                >
-                  <span>{{ poolItem }}</span>
-                </v-chip>
-                <v-chip
-                  v-if="
-                    !isLongPoolExpanded &&
-                    settingsStore.availableLongCoins.length > MAX_VISIBLE_CHIPS
-                  "
-                  class="ma-1"
-                  @mousedown.stop="isLongPoolExpanded = true"
-                  size="small"
-                >
-                  +{{ settingsStore.availableLongCoins.length - MAX_VISIBLE_CHIPS }}
-                </v-chip>
-                <v-btn
-                  v-if="isLongPoolExpanded"
-                  icon="mdi-chevron-up"
-                  variant="text"
-                  size="x-small"
-                  @mousedown.stop="isLongPoolExpanded = false"
-                  class="ml-1"
-                ></v-btn>
-              </div>
-            </template>
-
-            <template v-slot:prepend-item>
-              <div class="d-flex align-center px-4 pt-2 pb-1">
-                <v-switch
-                  v-model="longPoolShowAll"
-                  label="显示已选"
-                  density="compact"
-                  color="primary"
-                  hide-details
-                  class="flex-shrink-0"
-                  @click.stop
-                ></v-switch>
-              </div>
-              <v-divider></v-divider>
-            </template>
-
-            <template v-slot:item="{ item, props }">
-              <v-list-item v-bind="props" class="pl-0">
-                <template v-slot:prepend>
-                  <v-checkbox-btn
-                    :model-value="settingsStore.availableLongCoins.includes(item.value)"
-                    readonly
-                    class="mr-2"
-                  ></v-checkbox-btn>
-                </template>
-              </v-list-item>
-            </template>
-          </v-autocomplete>
+            searchable
+            @update:model-value="setAvailableLongCoins"
+          ></SmartSelect>
         </v-card>
       </v-col>
 
@@ -162,85 +92,15 @@
             </v-tooltip>
           </div>
 
-          <v-autocomplete
-            v-model="settingsStore.availableShortCoins"
+          <SmartSelect
+            :model-value="settingsStore.availableShortCoins"
             :items="availableForShortPool"
-            label="从总池中选择做空备选币种（输入即搜索）"
+            label="从总池中选择做空备选币种（可搜索）"
             multiple
             clearable
-            variant="outlined"
-            hide-details
-            item-title="title"
-            item-value="value"
-            :menu-props="{ maxHeight: '300px' }"
-            :hide-selected="!shortPoolShowAll"
-            :close-on-content-click="false"
-          >
-            <template v-slot:selection="{ index }">
-              <div
-                v-if="index === 0"
-                class="selection-wrapper"
-                :class="{ 'is-expanded': isShortPoolExpanded }"
-              >
-                <v-chip
-                  v-for="(poolItem, chipIndex) in settingsStore.availableShortCoins"
-                  :key="`short-${poolItem}`"
-                  v-show="isShortPoolExpanded || chipIndex < MAX_VISIBLE_CHIPS"
-                  class="ma-1"
-                  closable
-                  @click:close="removePoolItemValue('short', poolItem)"
-                >
-                  <span>{{ poolItem }}</span>
-                </v-chip>
-                <v-chip
-                  v-if="
-                    !isShortPoolExpanded &&
-                    settingsStore.availableShortCoins.length > MAX_VISIBLE_CHIPS
-                  "
-                  class="ma-1"
-                  @mousedown.stop="isShortPoolExpanded = true"
-                  size="small"
-                >
-                  +{{ settingsStore.availableShortCoins.length - MAX_VISIBLE_CHIPS }}
-                </v-chip>
-                <v-btn
-                  v-if="isShortPoolExpanded"
-                  icon="mdi-chevron-up"
-                  variant="text"
-                  size="x-small"
-                  @mousedown.stop="isShortPoolExpanded = false"
-                  class="ml-1"
-                ></v-btn>
-              </div>
-            </template>
-
-            <template v-slot:prepend-item>
-              <div class="d-flex align-center px-4 pt-2 pb-1">
-                <v-switch
-                  v-model="shortPoolShowAll"
-                  label="显示已选"
-                  density="compact"
-                  color="primary"
-                  hide-details
-                  class="flex-shrink-0"
-                  @click.stop
-                ></v-switch>
-              </div>
-              <v-divider></v-divider>
-            </template>
-
-            <template v-slot:item="{ item, props }">
-              <v-list-item v-bind="props" class="pl-0">
-                <template v-slot:prepend>
-                  <v-checkbox-btn
-                    :model-value="settingsStore.availableShortCoins.includes(item.value)"
-                    readonly
-                    class="mr-2"
-                  ></v-checkbox-btn>
-                </template>
-              </v-list-item>
-            </template>
-          </v-autocomplete>
+            searchable
+            @update:model-value="setAvailableShortCoins"
+          ></SmartSelect>
         </v-card>
       </v-col>
     </v-row>
@@ -249,6 +109,7 @@
 
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
+import SmartSelect from '@/components/SmartSelect.vue'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { useSnackbarStore } from '@/stores/snackbar'
 import apiClient from '@/services/api'
@@ -319,6 +180,15 @@ const availableForShortPool = computed(() => {
   const longSet = new Set(settingsStore.availableLongCoins)
   return mapToSelectItems(allAvailableCoins.value.filter((coin) => !longSet.has(coin)))
 })
+
+// SmartSelect 回写（多选）：保持池子为字符串数组
+const setAvailableLongCoins = (value: string | number | (string | number)[] | null | undefined) => {
+  settingsStore.availableLongCoins = Array.isArray(value) ? value.map(String) : []
+}
+
+const setAvailableShortCoins = (value: string | number | (string | number)[] | null | undefined) => {
+  settingsStore.availableShortCoins = Array.isArray(value) ? value.map(String) : []
+}
 
 const selectAllCoins = (poolType: 'long' | 'short') => {
   if (poolType === 'long') {

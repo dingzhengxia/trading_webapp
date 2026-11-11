@@ -28,70 +28,16 @@
                     :disabled="!settingsStore.settings.enable_long_trades"
                   ></v-text-field>
 
-                  <v-autocomplete
-                    v-model="settingsStore.settings.long_coin_list"
+                  <SmartSelect
+                    :model-value="settingsStore.settings.long_coin_list"
                     :items="longListItems"
-                    label="从备选池中选择做多币种（输入即搜索）"
+                    label="从备选池中选择做多币种（可搜索）"
                     multiple
-                    :hide-selected="!longListShowAll"
-                    :close-on-content-click="false"
+                    clearable
+                    searchable
                     :disabled="!settingsStore.settings.enable_long_trades"
-                  >
-                    <template v-slot:selection="{ index }">
-                      <div
-                        v-if="index === 0"
-                        class="selection-wrapper"
-                        :class="{ 'is-expanded': isLongListExpanded }"
-                      >
-                        <v-chip
-                          v-for="(coin, chipIndex) in settingsStore.settings.long_coin_list"
-                          :key="`long-trade-${coin}`"
-                          v-show="isLongListExpanded || chipIndex < MAX_VISIBLE_CHIPS"
-                          class="ma-1"
-                          closable
-                          @click:close="removeListItemValue('long', coin)"
-                        >
-                          <span>{{ coin }}</span>
-                        </v-chip>
-                        <v-chip
-                          v-if="
-                            !isLongListExpanded &&
-                            settingsStore.settings.long_coin_list.length > MAX_VISIBLE_CHIPS
-                          "
-                          class="ma-1"
-                          @mousedown.stop="isLongListExpanded = true"
-                          size="small"
-                        >
-                          +{{
-                            settingsStore.settings.long_coin_list.length - MAX_VISIBLE_CHIPS
-                          }}
-                        </v-chip>
-                        <v-btn
-                          v-if="isLongListExpanded"
-                          icon="mdi-chevron-up"
-                          variant="text"
-                          size="x-small"
-                          @mousedown.stop="isLongListExpanded = false"
-                          class="ml-1"
-                        ></v-btn>
-                      </div>
-                    </template>
-
-                    <template v-slot:prepend-item>
-                      <div class="d-flex align-center px-4 pt-2 pb-1">
-                        <v-switch
-                          v-model="longListShowAll"
-                          label="显示已选"
-                          density="compact"
-                          color="primary"
-                          hide-details
-                          class="flex-shrink-0"
-                          @click.stop
-                        ></v-switch>
-                      </div>
-                      <v-divider></v-divider>
-                    </template>
-                  </v-autocomplete>
+                    @update:model-value="setLongCoinList"
+                  ></SmartSelect>
 
                   <v-btn
                     size="small"
@@ -172,70 +118,16 @@
                     :disabled="!settingsStore.settings.enable_short_trades"
                   ></v-text-field>
 
-                  <v-autocomplete
-                    v-model="settingsStore.settings.short_coin_list"
+                  <SmartSelect
+                    :model-value="settingsStore.settings.short_coin_list"
                     :items="shortListItems"
-                    label="从备选池中选择空头币种（输入即搜索）"
+                    label="从备选池中选择空头币种（可搜索）"
                     multiple
-                    :hide-selected="!shortListShowAll"
-                    :close-on-content-click="false"
+                    clearable
+                    searchable
                     :disabled="!settingsStore.settings.enable_short_trades"
-                  >
-                    <template v-slot:selection="{ index }">
-                      <div
-                        v-if="index === 0"
-                        class="selection-wrapper"
-                        :class="{ 'is-expanded': isShortListExpanded }"
-                      >
-                        <v-chip
-                          v-for="(coin, chipIndex) in settingsStore.settings.short_coin_list"
-                          :key="`short-trade-${coin}`"
-                          v-show="isShortListExpanded || chipIndex < MAX_VISIBLE_CHIPS"
-                          class="ma-1"
-                          closable
-                          @click:close="removeListItemValue('short', coin)"
-                        >
-                          <span>{{ coin }}</span>
-                        </v-chip>
-                        <v-chip
-                          v-if="
-                            !isShortListExpanded &&
-                            settingsStore.settings.short_coin_list.length > MAX_VISIBLE_CHIPS
-                          "
-                          class="ma-1"
-                          @mousedown.stop="isShortListExpanded = true"
-                          size="small"
-                        >
-                          +{{
-                            settingsStore.settings.short_coin_list.length - MAX_VISIBLE_CHIPS
-                          }}
-                        </v-chip>
-                        <v-btn
-                          v-if="isShortListExpanded"
-                          icon="mdi-chevron-up"
-                          variant="text"
-                          size="x-small"
-                          @mousedown.stop="isShortListExpanded = false"
-                          class="ml-1"
-                        ></v-btn>
-                      </div>
-                    </template>
-
-                    <template v-slot:prepend-item>
-                      <div class="d-flex align-center px-4 pt-2 pb-1">
-                        <v-switch
-                          v-model="shortListShowAll"
-                          label="显示已选"
-                          density="compact"
-                          color="primary"
-                          hide-details
-                          class="flex-shrink-0"
-                          @click.stop
-                        ></v-switch>
-                      </div>
-                      <v-divider></v-divider>
-                    </template>
-                  </v-autocomplete>
+                    @update:model-value="setShortCoinList"
+                  ></SmartSelect>
 
                   <v-divider class="my-4"></v-divider>
                   <v-switch
@@ -373,17 +265,16 @@
             </v-col>
             <v-col cols="12" md="6">
               <div v-if="settingsStore.settings.rebalance_method === 'multi_factor_weakest'">
-                <v-autocomplete
-                  v-model="settingsStore.settings.rebalance_benchmark_coin"
+                <SmartSelect
+                  :model-value="settingsStore.settings.rebalance_benchmark_coin"
                   :items="longListItems"
                   label="相对强度基准币种"
                   multiple
-                  chips
-                  closable-chips
+                  searchable
                   persistent-hint
-                  variant="outlined"
-                  density="compact"
-                ></v-autocomplete>
+                  hint="用于计算相对强度"
+                  @update:model-value="setBenchmarkCoins"
+                ></SmartSelect>
                 <v-text-field
                   v-model.number="settingsStore.settings.rebalance_abs_momentum_days"
                   label="绝对动量天数"
@@ -526,6 +417,25 @@ const removeListItemValue = (listType: 'long' | 'short', value: string) => {
   if (index >= 0) {
     list.splice(index, 1)
   }
+}
+
+// SmartSelect 回写：settings 可能为 null（未加载完成），这里统一兜底
+const toList = (value: string | number | (string | number)[] | null | undefined): string[] =>
+  Array.isArray(value) ? value.map(String) : []
+
+const setLongCoinList = (value: string | number | (string | number)[] | null | undefined) => {
+  if (!settingsStore.settings) return
+  settingsStore.settings.long_coin_list = toList(value)
+}
+
+const setShortCoinList = (value: string | number | (string | number)[] | null | undefined) => {
+  if (!settingsStore.settings) return
+  settingsStore.settings.short_coin_list = toList(value)
+}
+
+const setBenchmarkCoins = (value: string | number | (string | number)[] | null | undefined) => {
+  if (!settingsStore.settings) return
+  settingsStore.settings.rebalance_benchmark_coin = toList(value)
 }
 
 const rebalanceMethods = [{ value: 'multi_factor_weakest', text: '多因子弱势策略' }]
