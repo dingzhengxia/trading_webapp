@@ -1,6 +1,6 @@
 <!-- frontend/src/views/TradingView.vue (完整代码) -->
 <template>
-  <div :style="{ paddingBottom: $vuetify.display.smAndDown ? '128px' : '80px' }">
+  <div :style="{ paddingBottom: '80px' }">
     <v-container fluid>
       <v-row>
         <v-col cols="12">
@@ -116,7 +116,7 @@ const isGeneratingPlan = ref(false)
 
 const footerStyle = computed(() => {
   const styles: { bottom: string; left: string } = {
-    bottom: vuetifyDisplay.smAndDown.value ? '56px' : '0px',
+    bottom: '0px',
     left: '0px',
   }
   if (vuetifyDisplay.mdAndUp.value) {
