@@ -166,7 +166,8 @@ class SignalScanner:
         return self._scan_lock.locked()
 
     def status(self) -> Dict[str, Any]:
-        return self._store.snapshot()
+        """快照 + 扫描开关真实状态（以扫描循环是否在跑为准，前端开关依赖此字段）。"""
+        return {'enabled': self.is_loop_running(), **self._store.snapshot()}
 
     # -------------------------------------------------------------- 扫描
     async def scan_once(self) -> Dict[str, Any]:

@@ -62,6 +62,7 @@ async def get_signals() -> Dict[str, Any]:
     scanner: Optional[signal_service.SignalScanner] = signal_service.scanner
     if scanner is None:
         status = signal_service.store.snapshot()
+        status['enabled'] = False  # 扫描循环从未启动
     else:
         status = scanner.status()
     settings = load_settings()
