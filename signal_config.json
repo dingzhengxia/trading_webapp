@@ -103,7 +103,7 @@
       "exempt_static_on_volume": true,
       "volume_multiplier": 2,
       "atr_period": 14,
-      "atr_multiplier": 1.5,
+      "atr_multiplier": 1.0,
       "exclude_timeframes": []
     },
     "kdj_cross": {
