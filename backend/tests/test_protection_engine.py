@@ -397,3 +397,47 @@ def test_risk_action_cooldown_blocks_and_expires():
     assert engine._risk_action_on_cooldown("BTC/USDC:USDC", "long", "T1", conf) is False
     # interval<=0 时完全关闭冷却
     assert engine._risk_action_on_cooldown("BTC/USDC:USDC", "long", "T1", {"risk_action_min_interval_sec": 0}) is False
+
+
+def test_status_log_throttles_repeated_lines():
+    """逐轮状态行：同 (kind, symbol, side) 在间隔内只打一条；不同 key 互不影响。"""
+    engine._STATUS_LOG_LAST.clear()
+    seen = []
+    orig = engine.logger.log
+    engine.logger.log = lambda lvl, msg: seen.append((lvl, msg))
+    try:
+        conf_interval = 900.0
+        engine._status_log("tp_status", "BTC", "long", "INFO", "m1", conf_interval)
+        engine._status_log("tp_status", "BTC", "long", "INFO", "m2", conf_interval)
+        assert len(seen) == 1  # 间隔内被节流
+        engine._status_log("tp_status", "ETH", "long", "INFO", "m3", conf_interval)
+        engine._status_log("blackswan", "BTC", "long", "DEBUG", "m4", conf_interval)
+        assert len(seen) == 3  # 不同 kind/symbol 不互斥
+        # interval=0 表示每条都打（紧急触发路径）
+        engine._status_log("blackswan", "BTC", "long", "INFO", "m5", 0.0)
+        assert len(seen) == 4
+    finally:
+        engine.logger.log = orig
+    engine._STATUS_LOG_LAST.clear()
+
+
+def test_status_log_throttles_repeated_lines():
+    """逐轮状态行：同 (kind, symbol, side) 在间隔内只打一条；不同 key 互不影响。"""
+    engine._STATUS_LOG_LAST.clear()
+    seen = []
+    orig = engine.logger.log
+    engine.logger.log = lambda lvl, msg: seen.append((lvl, msg))
+    try:
+        conf_interval = 900.0
+        engine._status_log("tp_status", "BTC", "long", "INFO", "m1", conf_interval)
+        engine._status_log("tp_status", "BTC", "long", "INFO", "m2", conf_interval)
+        assert len(seen) == 1  # 间隔内被节流
+        engine._status_log("tp_status", "ETH", "long", "INFO", "m3", conf_interval)
+        engine._status_log("blackswan", "BTC", "long", "DEBUG", "m4", conf_interval)
+        assert len(seen) == 3  # 不同 kind/symbol 不互斥
+        # interval=0 表示每条都打（紧急触发路径）
+        engine._status_log("blackswan", "BTC", "long", "INFO", "m5", 0.0)
+        assert len(seen) == 4
+    finally:
+        engine.logger.log = orig
+    engine._STATUS_LOG_LAST.clear()

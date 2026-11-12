@@ -99,41 +99,17 @@
 
       <v-row dense>
         <v-col cols="12" md="5">
-          <div class="text-caption text-grey mb-1">静态币种（{{ scanStaticSymbols.length }} 个）</div>
-          <div class="d-flex flex-wrap align-center ga-1 mb-2 static-symbol-chips">
-            <v-chip
-              v-for="symbol in scanStaticSymbols"
-              :key="symbol"
-              size="small"
-              variant="tonal"
-              closable
-              @click:close="removeStaticSymbol(symbol)"
-            >
-              {{ symbol }}
-            </v-chip>
-            <span v-if="scanStaticSymbols.length === 0" class="text-caption text-grey">
-              未设置，仅按成交额 Top N 扫描
-            </span>
-          </div>
-          <div class="d-flex ga-2">
-            <v-text-field
-              v-model="staticSymbolInput"
-              density="compact"
-              variant="outlined"
-              hide-details
-              placeholder="输入币种（如 SOL），回车添加"
-              @keydown.enter.prevent="addStaticSymbol"
-            ></v-text-field>
-            <v-btn
-              color="primary"
-              variant="tonal"
-              height="40"
-              :disabled="!staticSymbolInput.trim()"
-              @click="addStaticSymbol"
-            >
-              添加
-            </v-btn>
-          </div>
+          <SmartSelect
+            :model-value="scanStaticSymbols"
+            :items="staticSymbolItems"
+            label="静态币种（始终扫描并实时推送）"
+            multiple
+            clearable
+            searchable
+            :hide-details="false"
+            hint="从备选池中搜索选择（始终扫描并在钉钉实时推送）"
+            @update:model-value="setStaticSymbols"
+          ></SmartSelect>
         </v-col>
         <v-col cols="12" sm="6" md="2">
           <v-text-field
@@ -767,6 +743,7 @@ import { getErrorMessage, getErrorStatus } from '@/utils/errors'
 import { formatIsoTime as formatTime } from '@/utils/format'
 import SmartSelect from '@/components/SmartSelect.vue'
 import PageCard from '@/components/PageCard.vue'
+import { useSettingsStore } from '@/stores/settingsStore'
 
 const POLL_INTERVAL_MS = 10000
 
@@ -859,6 +836,7 @@ type DirectionFilter = (typeof DIRECTION_FILTERS)[number]
 
 const snackbarStore = useSnackbarStore()
 const uiStore = useUiStore()
+const settingsStore = useSettingsStore()
 
 const status = ref<SignalStatus>({ ...defaultSignalStatus })
 const signals = ref<SignalRecord[]>([])
@@ -933,7 +911,6 @@ const paperFormValid = computed(
 // ------------------------------------------------- 扫描范围（静态币 / TopN / 周期）
 const savingScope = ref(false)
 const scopeDirty = ref(false)
-const staticSymbolInput = ref('')
 const scanStaticSymbols = ref<string[]>([...defaultSignalConfig.signal_scan_static_symbols])
 const scopeTopN = ref<number>(defaultSignalConfig.signal_scan_top_n)
 const scopeTimeframes = ref<string[]>([...defaultSignalConfig.signal_scan_timeframes])
@@ -1396,18 +1373,17 @@ const syncScopeForm = (nextConfig: SignalConfig): void => {
 const normalizeSymbolInput = (value: string): string =>
   value.trim().toUpperCase().split('/')[0].split(':')[0]
 
-const addStaticSymbol = (): void => {
-  const symbol = normalizeSymbolInput(staticSymbolInput.value)
-  if (!symbol) return
-  if (!scanStaticSymbols.value.includes(symbol)) {
-    scanStaticSymbols.value = [...scanStaticSymbols.value, symbol]
-    scopeDirty.value = true
-  }
-  staticSymbolInput.value = ''
-}
+// 下拉选项 = 备选总池 ∪ 已选（保证已选但不在池内的币种照常显示，与控制面板口径一致）
+const staticSymbolItems = computed<string[]>(() => {
+  const pool = (settingsStore.availableCoins ?? []).map((item) => normalizeSymbolInput(item)).filter(Boolean)
+  return [...new Set([...scanStaticSymbols.value, ...pool])].sort()
+})
 
-const removeStaticSymbol = (symbol: string): void => {
-  scanStaticSymbols.value = scanStaticSymbols.value.filter((item) => item !== symbol)
+const setStaticSymbols = (value: unknown): void => {
+  const list = Array.isArray(value) ? value : []
+  const next = [...new Set(list.map((item) => normalizeSymbolInput(String(item))).filter(Boolean))]
+  // 顺序稳定：新选中的追加在尾部，避免 chips 顺序抖动
+  scanStaticSymbols.value = next
   scopeDirty.value = true
 }
 
@@ -1792,9 +1768,5 @@ onUnmounted(() => {
   -webkit-box-orient: vertical;
   overflow: hidden;
   white-space: pre-line;
-}
-/* 静态币 chips 区固定最小高度，避免空/非空切换时行高跳动 */
-.static-symbol-chips {
-  min-height: 26px;
 }
 </style>

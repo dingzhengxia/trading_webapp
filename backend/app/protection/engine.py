@@ -133,7 +133,8 @@ DEFAULT_CONFIG = {
  'price_source_tolerance_pct': 0.01,
  'risk_action_min_interval_sec': 1800.0,
  'identity_grace_after_reduce_sec': 900.0,
- 'flat_confirm_sec': 30.0}
+ 'flat_confirm_sec': 30.0,
+ 'status_log_interval_sec': 900.0}
 }
 
 
@@ -285,6 +286,27 @@ class Runtime:
 
 
 RUNTIME = Runtime()
+
+
+# ---------------------------------------------------------------------------
+# 逐轮状态日志节流：止盈/止损位、黑天鹅监控这类状态行每仓每轮一条，
+# 仓位一多控制台/日志文件就被刷满。事件类日志（success/warning/error）不经过这里。
+# ---------------------------------------------------------------------------
+_STATUS_LOG_LAST = {}
+
+
+def _status_log(kind, symbol, side, level, message, interval_sec):
+    """同一 (kind, symbol, side) 的状态行至多每 interval_sec 秒输出一条。"""
+    key = (kind, symbol, side)
+    now = time.time()
+    if now - _STATUS_LOG_LAST.get(key, 0.0) < max(0.0, float(interval_sec)):
+        return
+    if len(_STATUS_LOG_LAST) > 4096:
+        cutoff = now - max(float(interval_sec), 3600.0) * 2
+        for stale in [k for k, ts in _STATUS_LOG_LAST.items() if ts < cutoff]:
+            _STATUS_LOG_LAST.pop(stale, None)
+    _STATUS_LOG_LAST[key] = now
+    logger.log(level, message)
 
 
 async def _rest(exchange, method_name, *args, priority="NORMAL", conf=None, **kwargs):
@@ -1098,18 +1120,22 @@ async def _ensure_disaster_stop(exchange, symbol, side, pos, current_price, conf
         duplicate_stops = len(stops) > 1
         existing_trigger = _algo_trigger(stops[0]) if stops else None
         if strategy:
-            logger.info(
+            _status_log(
+                "stop_overview", symbol, side, "INFO",
                 f"[{symbol}] 🛡️ 止盈/止损位 | 方向:{side} | 当前价:{current_price:.8f} | "
                 f"策略止损:{stop:.8f} | 距离:{distance:.2%} | "
                 f"EMA26:{strategy['ema_fast']:.8f} | EMA83:{strategy['ema_slow']:.8f} | "
                 f"ATR14:{strategy['atr']:.8f} | 结构止损:{strategy['long_structure'] if side == 'long' else strategy['short_structure']:.8f} | "
-                f"趋势:{strategy['trend']} | TP保护阶段:{tp_stage} | TP保护止损:{tp_protected_stop if tp_protected_stop else '未启用'} | 交易所STOP:{existing_trigger if existing_trigger is not None else '不存在'}"
+                f"趋势:{strategy['trend']} | TP保护阶段:{tp_stage} | TP保护止损:{tp_protected_stop if tp_protected_stop else '未启用'} | 交易所STOP:{existing_trigger if existing_trigger is not None else '不存在'}",
+                float(conf.get("status_log_interval_sec", 900.0)),
             )
         else:
-            logger.info(
+            _status_log(
+                "stop_overview", symbol, side, "INFO",
                 f"[{symbol}] 🛡️ 止损位 | 方向:{side} | 当前价:{current_price:.8f} | "
                 f"ATR兜底止损:{stop:.8f} | 距离:{distance:.2%} | "
-                f"交易所STOP:{existing_trigger if existing_trigger is not None else '不存在'}"
+                f"交易所STOP:{existing_trigger if existing_trigger is not None else '不存在'}",
+                float(conf.get("status_log_interval_sec", 900.0)),
             )
 
         needs_update = False
@@ -1151,11 +1177,15 @@ async def _ensure_disaster_stop(exchange, symbol, side, pos, current_price, conf
                 else:
                     # 细微变化直接沿用原STOP，不取消、不重挂。
                     stop = existing_trigger
-                    logger.debug(
-                        f"[{symbol}] 🧊 STOP变化过小，保持原单 | "
-                        f"旧:{existing_trigger:.8f} 新:{stop:.8f} | "
-                        f"实际推进:{actual_move:.8f} | 最小有效推进:{min_move:.8f}"
-                    )
+                    if actual_move > 0:
+                        # 完全没变化（推进为0）时零信息量，直接不打；有提议但被门槛挡住才节流输出
+                        _status_log(
+                            "stop_hold", symbol, side, "DEBUG",
+                            f"[{symbol}] 🧊 STOP变化过小，保持原单 | "
+                            f"旧:{existing_trigger:.8f} 新:{stop:.8f} | "
+                            f"实际推进:{actual_move:.8f} | 最小有效推进:{min_move:.8f}",
+                            float(conf.get("status_log_interval_sec", 900.0)),
+                        )
 
             if duplicate_stops:
                 # 重复STOP与价格推进阈值无关，必须立即清理，只保留一个。
@@ -1540,7 +1570,8 @@ async def watch_symbol_position(exchange, symbol, side):
                 tp_stage = int(pos_state.get("tp_protection_stage", 0) or 0)
                 tp_keep = _tp3_remaining_ratio(conf)
                 tp3_action = "全平" if tp_keep <= 0 else f"保留{tp_keep:.0%}"
-                logger.info(
+                _status_log(
+                    "tp_status", symbol, side, "INFO",
                     f"[{symbol}] 🛡️🎯 止盈止损状态 | 方向:{'多' if side=='long' else '空'} | "
                     f"当前价:{current_price:.8f} | 开仓价:{entry_price:.8f} | 仓位:{contracts:.8f} | "
                     f"STOP(交易所实际):{_f(actual_stop, pos_state.get('last_stop_price') or 0):.8f} | "
@@ -1549,7 +1580,8 @@ async def watch_symbol_position(exchange, symbol, side):
                     f"TP2:{_f(pos_state.get('tp2_price'), 0):.8f} → {float(conf.get('tp2_ratio', 0.30)):.0%} [{'已完成' if pos_state.get('tp2_triggered') else '待触发'}] | "
                     f"躺平:{_f(pos_state.get('tp3_price'), 0):.8f} → {tp3_action} [{'已完成' if pos_state.get('tp3_triggered') else '待触发'}] | "
                     f"保护阶段:TP{tp_stage} | TP保护STOP:{_f(pos_state.get('tp_protected_stop'), 0):.8f} | "
-                    f"R:{_f(pos_state.get('tp_risk_distance'), 0):.8f} | 周期:{pos_state.get('risk_cycle_id')}"
+                    f"R:{_f(pos_state.get('tp_risk_distance'), 0):.8f} | 周期:{pos_state.get('risk_cycle_id')}",
+                    float(conf.get("status_log_interval_sec", 900.0)),
                 )
 
             # ---------------- 分批止盈：1R/2R/3R ----------------
@@ -1658,15 +1690,17 @@ async def watch_symbol_position(exchange, symbol, side):
                 emergency, details = await _emergency_signal(exchange, symbol, side, conf)
 
                 if details:
-                    # 常规状态行属于每轮噪音：正常走 DEBUG（只进控制台），真正触发才升到 INFO
-                    logger.log(
+                    # 常规状态行属于每轮噪音：正常走 DEBUG 且节流，真正触发才升到 INFO 立即打
+                    _status_log(
+                        "blackswan", symbol, side,
                         "INFO" if emergency else "DEBUG",
                         f"[{symbol}] 🚨 黑天鹅监控 | 方向:{side} | "
                         f"当前波动:{details.get('move',0):.4f} | "
                         f"触发阈值:{details.get('threshold',0):.4f} | "
                         f"成交量异常:{details.get('volume_crash',False)} | "
                         f"结构确认:{details.get('structure',False)} | "
-                        f"状态:{'触发' if emergency else '正常'}"
+                        f"状态:{'触发' if emergency else '正常'}",
+                        0.0 if emergency else float(conf.get("status_log_interval_sec", 900.0)),
                     )
 
                 if details and details.get("volume_crash"):
