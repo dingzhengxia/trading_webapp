@@ -161,6 +161,7 @@ export interface SignalRecord {
   strategy_index: number
   direction: SignalDirection
   price: number
+  volume_ratio: number | null
   title: string
   message: string
 }

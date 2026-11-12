@@ -29,14 +29,20 @@ RECORDS = []
 def _sink(config, symbol, timeframe, df, info):
     if df is None:
         return
-    if info.get('volume_must_confirm'):
+    # 与生产一致：app_settings.volume_filter_mode='record' 时量能只记录、不拦截
+    mode = str((config.get('app_settings') or {}).get('volume_filter_mode', 'block')).lower()
+    if info.get('volume_must_confirm') and mode != 'record':
         mult = get_dynamic_volume_multiplier(symbol, config, info.get('fallback_multiplier', 1.5))
         ok, _, _ = is_realtime_volume_over(df, timeframe_to_minutes(timeframe), 20, mult)
         if not ok:
             return
+    ratio = None
+    if info.get('volume_must_confirm'):
+        mult = get_dynamic_volume_multiplier(symbol, config, info.get('fallback_multiplier', 1.5))
+        _, _, ratio = is_realtime_volume_over(df, timeframe_to_minutes(timeframe), 20, mult)
     RECORDS.append({'symbol': symbol, 'tf': timeframe, 'ts': int(df.iloc[-1]['timestamp']),
                     'strategy': info.get('strategy_name'), 'direction': info.get('direction'),
-                    'price': float(df.iloc[-1]['close'])})
+                    'price': float(df.iloc[-1]['close']), 'volume_ratio': ratio})
 
 
 def enabled_sets(config, tf):

@@ -423,6 +423,7 @@
               <th class="text-left">策略</th>
               <th class="text-left">周期</th>
               <th class="text-left">价格</th>
+              <th class="text-left">量能</th>
               <th class="text-left">标题 / 说明</th>
             </tr>
           </thead>
@@ -442,6 +443,7 @@
               <td class="text-no-wrap">{{ strategyLabel(signal.strategy) }}</td>
               <td class="text-no-wrap">{{ signal.timeframe }}</td>
               <td class="text-no-wrap">${{ formatPrice(signal.price) }}</td>
+              <td class="text-no-wrap text-caption" :class="volumeClass(signal)">{{ volumeLabel(signal) }}</td>
               <td class="signal-title">
                 <div class="text-body-2">{{ signal.title }}</div>
                 <div class="text-caption text-grey signal-message">{{ plainMessage(signal.message) }}</div>
@@ -787,6 +789,10 @@ const normalizeSignals = (raw: unknown): SignalRecord[] => {
       strategy_index: toNumber(record.strategy_index, 0),
       direction: normalizeDirection(record.direction),
       price: toNumber(record.price, 0),
+      volume_ratio:
+        typeof record.volume_ratio === 'number' && Number.isFinite(record.volume_ratio)
+          ? record.volume_ratio
+          : null,
       title: typeof record.title === 'string' ? record.title : '',
       message: typeof record.message === 'string' ? record.message : '',
     })
@@ -861,6 +867,17 @@ const directionColor = (direction: string): string => {
 }
 
 const strategyLabel = (strategy: string): string => strategyTitleMap.get(strategy) ?? strategy
+
+// 量能只记录不拦截：倍数照实展示，是否达到推送门槛用颜色区分（静态币始终推送）
+const volumeLabel = (signal: SignalRecord): string =>
+  signal.volume_ratio == null ? '—' : `${signal.volume_ratio.toFixed(1)}x`
+
+const volumeClass = (signal: SignalRecord): string => {
+  if (signal.volume_ratio == null) return 'text-grey'
+  const threshold = pushStatus.value.signal_push_volume_multiplier || 2
+  const isStatic = pushStatus.value.static_symbols.includes(signal.symbol)
+  return signal.volume_ratio >= threshold || isStatic ? 'text-success font-weight-medium' : 'text-grey'
+}
 
 const plainMessage = (value: string): string =>
   value

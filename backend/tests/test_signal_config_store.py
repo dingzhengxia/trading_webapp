@@ -153,3 +153,48 @@ def test_rsi_divergence_requires_min_gap():
 
 def test_rsi_divergence_requires_new_high():
     assert strategies.detect_rsi_divergence(_top_divergence_frame(last_close=118.0), 60, 5, 5.0) is None
+
+
+# ------------------------------------------------ 量能：只记录不拦截（volume_filter_mode）
+def _flat_df():
+    return pd.DataFrame({
+        "timestamp": [i * 3600_000 for i in range(5)],
+        "open": [100.0] * 5, "high": [101.0] * 5,
+        "low": [99.0] * 5, "close": [100.0] * 5, "volume": [10.0] * 5,
+    })
+
+
+def _run_volume_gate(mode, monkeypatch):
+    """用低量能（0.4x）跑统一出口，返回实际发出的信号。"""
+    emitted = []
+    monkeypatch.setattr(strategies, "is_realtime_volume_over", lambda *a, **k: (False, "vol", 0.4))
+    monkeypatch.setattr(strategies, "emit_signal", lambda **kw: emitted.append(kw))
+    monkeypatch.setattr(strategies, "save_alert_states", lambda: None)
+    strategies.alerted_states.pop("BTCUSDT_1h_TEST", None)
+    config = {
+        "app_settings": {"volume_filter_mode": mode},
+        "market_settings": {"static_symbols": ["ETH"]},
+        "strategy_params": {},
+    }
+    info = {
+        "log_name": "TEST", "strategy_name": "ma_breakout", "strategy_index": 0,
+        "direction": "long", "alert_key": "BTCUSDT_1h_TEST",
+        "volume_must_confirm": True, "fallback_multiplier": 2.0,
+        "title_template": "T {vol_label}", "message_template": "{trend_message}{vol_text}",
+        "template_data": {},
+    }
+    strategies._prepare_and_send_notification(config, "BTC/USDT:USDT", "1h", _flat_df(), info)
+    return emitted
+
+
+def test_volume_filter_record_keeps_signal(monkeypatch):
+    """record 模式：量能不足也发信号，倍数只进记录与正文。"""
+    emitted = _run_volume_gate("record", monkeypatch)
+    assert len(emitted) == 1
+    assert emitted[0]["volume_ratio"] == 0.4
+    assert emitted[0]["title"] == "T"  # 「量能不足」不再写进标题
+
+
+def test_volume_filter_block_drops_signal(monkeypatch):
+    """默认 block 模式保持旧行为，避免存量配置语义静默变化。"""
+    assert _run_volume_gate("block", monkeypatch) == []

@@ -129,3 +129,75 @@ python analyze2.py         # 趋势对齐 + 策略汇总
 脚本直接调用 `backend/app/signals/analysis/strategies.py` 的生产函数，只把
 `_prepare_and_send_notification` 换成记录器（保留量能过滤、去掉真实时钟冷却，
 否则回放会被冷却锁死）。改策略后重跑即可对比。
+
+---
+
+## 6. 落地记录（2026-11-12 已实施）
+
+`signal_config.json` 升到 **config_version 3**，改动如下：
+
+| 项 | 优先级 | 改前 | 改后 |
+|---|---|---|---|
+| `level_breakout.exclude_timeframes` | P1 | `[]` | `["1h"]`（1h 不再跑关键位突破，4h/1d 保留） |
+| `ema_cross.atr_multiplier` | P3 | 1.0 | **0.4**（突破缓冲收窄，从"基本不触发"回到可用频率） |
+| `app_settings.volume_filter_mode` | P4 | 无（等价 `block`） | **`record`**：量能只写进 `volume_ratio`，不再拦截信号 |
+| `ob_luxalgo.alert_on_rejection` | P5 | true | **false**（1h 测试区观望提示关闭，只留突破） |
+| `ob_fluxcharts.alert_on_rejection` | P5 | true | **false**（同上，4h/1d 测试区提示关闭） |
+
+配套代码/页面改动：
+
+- `strategies.py`：`volume_filter_mode='record'` 时跳过量能拦截；标题只在放量时带
+  `放量(x.x)` 标签，量能不足不再拼接自相矛盾的「缩量(2.7x) 强势突破」，倍数只留在正文
+  「成交量分析」里。默认仍为 `block`，存量配置语义不变。
+- 信号列表新增「量能」列：显示 `volume_ratio`，达到推送倍数或静态币高亮，未达标置灰——
+  量能不拦截之后，需要能一眼看出哪条是放量、哪条只是形态触发。
+- 测试：新增 record/block 两种模式的出口用例，全量 **222 passed**。
+
+**未做**：
+
+- **P2（时间止损）**依赖持仓监控，当前 `auto_trader.py` 只有开仓、没有任何出场逻辑，
+  要动交易主链路，单独排期。
+- **P6（前视收益产品化）**尚未实现，目前只能用 `tools/strategy_probe` 离线回放。
+
+### 6.1 改完再回放一次（同一份数据，v2 → v3）
+
+同一批 K 线、同一个回放器，只换配置（`tools/strategy_probe/cmp.py` 可直接复现）：
+
+| 组合 | v2 | v3 |
+|---|---|---|
+| 1h / 持有 4 根 | 385 笔 / **-13bp** | 914 笔 / **+5bp** |
+| 4h / 持有 3 根 | 269 笔 / **+10bp** | 616 笔 / **-1bp** |
+
+| 策略（1h h=4） | v2 | v3 |
+|---|---|---|
+| `level_breakout` | 155 笔 / -31bp | **0 笔**（P1 停用） |
+| `ema_cross` | 9 笔 / +32bp | **62 笔 / -1bp**（P3 生效，不再空转，但也没优势） |
+| `ma_breakout` | 98 笔 / -1bp | 729 笔 / +7bp |
+| `trend_channel` | 123 笔 / -1bp | 123 笔 / -1bp（无变化，符合预期） |
+
+| 策略（4h h=3） | v2 | v3 |
+|---|---|---|
+| `level_breakout` | 80 笔 / **+21bp** | 130 笔 / **+7bp** |
+| `ma_breakout` | 69 笔 / +6bp | 350 笔 / **-8bp** |
+| `ema_cross` | 4 笔 / +60bp | 20 笔 / +40bp |
+| `rsi_divergence`、`trend_channel` | 不变 | 不变 |
+
+**读法**：
+
+1. P1 是这一轮唯一确定赚钱的改动：1h 合计 -13bp → +5bp，全靠砍掉 155 笔 -31bp 的关键位突破。
+2. P3 让 `ema_cross` 从"125 天 9 条"回到可用频率（62 条），但超额从 +32bp 掉到 -1bp——
+   说明之前的高分是极少数样本的运气，不是被压住的好信号。这条改动是"让策略能被评价"，不是"让它赚钱"。
+3. **P4 有副作用，必须一起看**：4h 合计从 +10bp 掉到 **-1bp**。原因很直接——量能不再拦截后
+   `ma_breakout` 4h 从 69 笔/+6bp 变成 350 笔/**-8bp**，`level_breakout` 4h 从 80 笔/+21bp 稀释到
+   130 笔/+7bp。**4h 上量能门槛确实在筛掉弱信号**（与 1h 结论相反），所以：
+   - 展示层放开（量能只记录、列表标出倍数）是安全的；
+   - **推送层门槛（`signal_push_volume_multiplier`）不要取消**，非静态币继续按倍数筛；
+   - **未来启用自动开仓时，必须在开仓链路重新加一道量能要求**，否则 4h 那点优势会被稀释掉。
+4. 1h 扣成本后仍然全为负（最好的 `ma_breakout` 也就 -1bp），**1h 依旧不具备交易价值**，
+   只适合当提示看。4h 的 `level/rsi` 扣成本后 ≈ 打平，同样不足以支撑自动开仓。
+
+**上线注意**：服务器需重跑 `./deploy.sh`；首次启动会用新文件播种策略配置到 DB，
+之后改参数走 `POST /api/signals/strategy-config`（不会再被镜像覆盖）。推送倍数
+`signal_push_volume_multiplier` 仍是 7.0，建议改回 **2.0**，否则非静态币依旧推不出去。
+
+

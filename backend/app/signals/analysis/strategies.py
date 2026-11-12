@@ -60,6 +60,9 @@ def _prepare_and_send_notification(config, symbol, timeframe, df, signal_info):
         original_volume_confirm = signal_info.get('volume_must_confirm', False)
         final_volume_confirm = False if (
                 exemption_enabled_for_this_strategy and is_static_symbol) else original_volume_confirm
+        # volume_filter_mode='record'：量能只写进信号记录（volume_ratio），不再拦截信号。
+        # 依据回测：量能门槛砍掉的多是后续赚钱的那批，作为闸门没有筛选价值（docs/strategy-validation）。
+        volume_filter_mode = str((config.get('app_settings') or {}).get('volume_filter_mode', 'block')).lower()
 
         dynamic_multiplier = get_dynamic_volume_multiplier(symbol, config, signal_info.get('fallback_multiplier', 1.5))
 
@@ -75,11 +78,12 @@ def _prepare_and_send_notification(config, symbol, timeframe, df, signal_info):
         )
         volume_ratio = actual_vol_ratio
 
-        if final_volume_confirm and not is_vol_over:
+        if final_volume_confirm and not is_vol_over and volume_filter_mode != 'record':
             logger.debug(f"[{symbol}|{timeframe}] 信号 '{signal_info.get('log_name', 'N/A')}' 因成交量不足被过滤。")
             return
 
-        volume_label = f"放量({actual_vol_ratio:.1f}x) " if is_vol_over else f"缩量({actual_vol_ratio:.1f}x) "
+        # 标题只在放量时带标签；量能不足的倍数放在正文「成交量分析」里，避免「缩量(2.7x)强势突破」这类自相矛盾文案
+        volume_label = f"放量({actual_vol_ratio:.1f}x) " if is_vol_over else ""
         if v_text and signal_info.get('always_show_volume', True):
             vol_text = f"\n---\n{v_text}"
 
