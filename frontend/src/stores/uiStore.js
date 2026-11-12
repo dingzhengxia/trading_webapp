@@ -1,0 +1,206 @@
+// frontend/src/stores/uiStore.ts (主题切换版)
+import { defineStore } from 'pinia';
+import { computed, ref } from 'vue';
+import { useLogStore } from './logStore';
+import api from '@/services/api';
+export const useUiStore = defineStore('ui', () => {
+    const logStore = useLogStore();
+    // --- 新增：主题状态 ---
+    // 从 localStorage 读取保存的主题，如果没有则默认为 'dark'
+    const theme = ref(localStorage.getItem('theme') || 'dark');
+    // --- 修改结束 ---
+    const statusMessage = ref('初始化中...');
+    const isRunning = ref(false);
+    const isStopping = ref(false);
+    const progress = ref({
+        success_count: 0,
+        failed_count: 0,
+        total: 0,
+        task_name: '',
+        show: false,
+        is_final: false,
+    });
+    const showLogDrawer = ref(false);
+    const showRebalanceDialog = ref(false);
+    const rebalancePlan = ref(null);
+    const showCloseDialog = ref(false);
+    const closeTarget = ref(null);
+    const showWeightDialog = ref(false);
+    let progressResetTimer;
+    // 停止指令兜底：后端若因交易所请求卡住而未能广播 status(false)，必须恢复按钮可用
+    let stopGuardTimer;
+    const clearStopGuard = () => {
+        if (stopGuardTimer !== undefined) {
+            clearTimeout(stopGuardTimer);
+            stopGuardTimer = undefined;
+        }
+    };
+    const statusColor = computed(() => {
+        if (isStopping.value)
+            return 'orange';
+        if (isRunning.value)
+            return 'warning';
+        if (statusMessage.value === '已断开' || statusMessage.value.includes('失败'))
+            return 'error';
+        if (statusMessage.value === '已连接' || statusMessage.value === '准备就绪')
+            return 'success';
+        return 'info';
+    });
+    // --- 新增：切换主题的 action ---
+    function toggleTheme(vuetifyTheme) {
+        const newTheme = theme.value === 'dark' ? 'light' : 'dark';
+        theme.value = newTheme;
+        vuetifyTheme.global.name.value = newTheme; // 告诉 Vuetify 更新主题
+        localStorage.setItem('theme', newTheme); // 保存用户的选择
+    }
+    // --- 修改结束 ---
+    function hideProgress() {
+        progress.value.show = false;
+        progress.value.is_final = false;
+    }
+    // (其他函数保持不变)
+    function launchTask(endpoint, payload, taskName, totalTasks) {
+        if (isRunning.value) {
+            logStore.addLog({
+                message: '已有任务在运行中，请稍后再试。',
+                level: 'warning',
+                timestamp: new Date().toLocaleTimeString(),
+            });
+            return;
+        }
+        const requestId = `req-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
+        const payloadWithId = { ...payload, request_id: requestId };
+        setStatus(`正在提交: ${taskName}...`, true);
+        updateProgress({
+            success_count: 0,
+            failed_count: 0,
+            total: totalTasks,
+            task_name: taskName,
+            is_final: false,
+        });
+        logStore.addLog({
+            message: `[前端] 已发送 '${taskName}' 启动指令 (ID: ${requestId})。`,
+            level: 'info',
+            timestamp: new Date().toLocaleTimeString(),
+        });
+        api
+            .post(endpoint, payloadWithId)
+            .then((response) => {
+            console.log('API call successful:', response.data.message);
+        })
+            .catch((error) => {
+            const errorMsg = error.response?.data?.detail || error.message;
+            logStore.addLog({
+                message: `[前端] 任务提交失败: ${errorMsg}`,
+                level: 'error',
+                timestamp: new Date().toLocaleTimeString(),
+            });
+            setStatus('任务启动失败', false);
+        });
+    }
+    function setStatus(message, running) {
+        statusMessage.value = message;
+        if (running !== undefined) {
+            isRunning.value = running;
+        }
+        if (running === false) {
+            isStopping.value = false;
+            clearStopGuard();
+            if (progress.value.is_final) {
+                clearTimeout(progressResetTimer);
+                progressResetTimer = window.setTimeout(hideProgress, 3000);
+            }
+            else {
+                hideProgress();
+            }
+        }
+    }
+    function updateProgress(data) {
+        if (isStopping.value)
+            return;
+        clearTimeout(progressResetTimer);
+        progress.value = { ...data, show: true };
+        if (data.is_final) {
+            clearTimeout(progressResetTimer);
+            progressResetTimer = window.setTimeout(hideProgress, 3000);
+        }
+    }
+    function initiateStop() {
+        if (!isRunning.value)
+            return;
+        isStopping.value = true;
+        statusMessage.value = '正在停止...';
+        clearStopGuard();
+        // 15s 内未收到后端 "isRunning=false" 就恢复交互，避免停止按钮永久不可用
+        stopGuardTimer = window.setTimeout(() => {
+            stopGuardTimer = undefined;
+            if (!isStopping.value)
+                return;
+            isStopping.value = false;
+            statusMessage.value = '停止指令未确认，请重试';
+            logStore.addLog({
+                message: '停止指令在 15 秒内未得到后端确认，已恢复界面交互，请重试或检查后端日志。',
+                level: 'warning',
+                timestamp: new Date().toLocaleTimeString(),
+            });
+        }, 15000);
+    }
+    async function checkInitialStatus() {
+        try {
+            const response = await api.get('/api/status');
+            const { is_running, progress: progressData } = response.data;
+            if (is_running && progressData && typeof progressData.total !== 'undefined') {
+                isRunning.value = true;
+                statusMessage.value = `正在执行: ${progressData.task_name}...`;
+                progress.value = {
+                    success_count: progressData.success_count || 0,
+                    failed_count: progressData.failed_count || 0,
+                    total: progressData.total || 0,
+                    task_name: progressData.task_name,
+                    show: true,
+                    is_final: false,
+                };
+                return true;
+            }
+            else {
+                isRunning.value = false;
+                statusMessage.value = '准备就绪';
+            }
+        }
+        catch (error) {
+            console.error('Initial status check failed:', error);
+            statusMessage.value = '状态检查失败';
+        }
+        return false;
+    }
+    function toggleLogDrawer() {
+        showLogDrawer.value = !showLogDrawer.value;
+    }
+    function openCloseDialog(target) {
+        closeTarget.value = target;
+        showCloseDialog.value = true;
+    }
+    return {
+        logStore,
+        theme, // 导出 theme
+        statusMessage,
+        isRunning,
+        isStopping,
+        progress,
+        showLogDrawer,
+        showRebalanceDialog,
+        rebalancePlan,
+        showCloseDialog,
+        closeTarget,
+        showWeightDialog,
+        statusColor,
+        toggleTheme, // 导出 toggleTheme
+        launchTask,
+        setStatus,
+        updateProgress,
+        initiateStop,
+        checkInitialStatus,
+        toggleLogDrawer,
+        openCloseDialog,
+    };
+});

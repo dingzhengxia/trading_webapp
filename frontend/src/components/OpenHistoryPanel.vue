@@ -174,8 +174,8 @@ const SOURCE_META: Record<string, { label: string; color: string }> = {
   rebalance: { label: '再平衡', color: 'purple' },
 }
 
-const sourceLabel = (source: string) => SOURCE_META[source]?.label ?? source ?? '—'
-const sourceColor = (source: string) => SOURCE_META[source]?.color ?? 'grey'
+const sourceLabel = (source?: string) => SOURCE_META[source ?? '']?.label ?? source ?? '—'
+const sourceColor = (source?: string) => SOURCE_META[source ?? '']?.color ?? 'grey'
 
 const sideLabel = (item: OpenHistoryItem) => {
   const side = String(item.side || '').toLowerCase()
@@ -185,7 +185,7 @@ const sideLabel = (item: OpenHistoryItem) => {
   return item.side || '—'
 }
 
-const sideColor = (side: string) => {
+const sideColor = (side?: string) => {
   // 配色约定：绿涨红跌；平仓用中性灰
   const s = String(side || '').toLowerCase()
   if (s === 'buy') return '#1D9E75'
