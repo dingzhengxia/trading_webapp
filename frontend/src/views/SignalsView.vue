@@ -39,13 +39,11 @@
                   color="primary"
                   inset
                   hide-details
-                  :hint="pushHint"
-                  persistent-hint
                   @update:model-value="onToggleDingtalkPush"
                 ></v-switch>
               </v-col>
               <v-col cols="12" md="6">
-                <div class="d-flex flex-wrap ga-2">
+                <div class="d-flex flex-wrap ga-2 align-center">
                   <v-chip size="small" variant="tonal" prepend-icon="mdi-clock-outline">
                     上次扫描: {{ formatTime(status.last_scan_at) }}
                   </v-chip>
@@ -152,21 +150,22 @@
                   @update:model-value="pushVolumeDirty = true"
                 ></v-text-field>
               </v-col>
-              <v-col cols="12" sm="6" md="2">
-                <v-btn
-                  color="primary"
-                  variant="tonal"
-                  :loading="savingPushConfig"
-                  @click="savePushVolume"
-                >
-                  保存
-                </v-btn>
-              </v-col>
               <v-col cols="12" md="7">
                 <div class="text-caption text-grey">
                   静态币（{{ pushStatus.static_symbols.join(' / ') || '无' }}）的信号始终实时推送；
                   其它币种需放量达标才推送。所有信号仍会进入下方列表与自动开仓链路，此门槛只作用于钉钉推送。
                 </div>
+              </v-col>
+              <v-col cols="12" sm="6" md="2" class="d-flex justify-end">
+                <v-btn
+                  color="primary"
+                  variant="tonal"
+                  prepend-icon="mdi-content-save"
+                  :loading="savingPushConfig"
+                  @click="savePushVolume"
+                >
+                  保存
+                </v-btn>
               </v-col>
             </v-row>
           </v-card-text>
@@ -198,7 +197,7 @@
             </v-alert>
 
             <v-row dense align="center">
-              <v-col cols="12" md="5">
+              <v-col cols="12" sm="6" md="3">
                 <v-switch
                   :model-value="autoTradeEnabled"
                   :loading="savingAutoTrade"
@@ -209,7 +208,7 @@
                   @update:model-value="onToggleAutoTrade"
                 ></v-switch>
               </v-col>
-              <v-col cols="12" md="7" class="text-caption">
+              <v-col cols="12" md="9" class="text-caption text-grey d-flex align-center">
                 最近自动开仓: {{ lastAutoOpenText }}
               </v-col>
             </v-row>
@@ -249,7 +248,7 @@
             </v-row>
 
             <v-row dense class="mt-1">
-              <v-col cols="12" sm="6" md="3">
+              <v-col cols="12" sm="6" md="4">
                 <v-text-field
                   v-model.number="autoForm.confirmations"
                   label="确认数"
@@ -263,7 +262,7 @@
                   @update:model-value="markAutoFormDirty"
                 ></v-text-field>
               </v-col>
-              <v-col cols="12" sm="6" md="3">
+              <v-col cols="12" sm="6" md="4">
                 <v-text-field
                   v-model.number="autoForm.confirmationWindowSeconds"
                   label="确认窗口 (秒)"
@@ -277,7 +276,7 @@
                   @update:model-value="markAutoFormDirty"
                 ></v-text-field>
               </v-col>
-              <v-col cols="12" sm="6" md="3">
+              <v-col cols="12" sm="6" md="4">
                 <v-text-field
                   v-model.number="autoForm.cooldownSeconds"
                   label="冷却时间 (秒)"
@@ -291,7 +290,7 @@
                   @update:model-value="markAutoFormDirty"
                 ></v-text-field>
               </v-col>
-              <v-col cols="12" sm="6" md="3">
+              <v-col cols="12" sm="6" md="4">
                 <v-text-field
                   v-model.number="autoForm.valueUsd"
                   label="单笔金额 (USD)"
@@ -305,7 +304,7 @@
                   @update:model-value="markAutoFormDirty"
                 ></v-text-field>
               </v-col>
-              <v-col cols="12" sm="6" md="3">
+              <v-col cols="12" sm="6" md="4">
                 <v-text-field
                   v-model.number="autoForm.maxPositions"
                   label="最大持仓数"
@@ -551,12 +550,6 @@ const autoFormDirty = ref(false)
 let pollTimer: number | undefined
 
 const autoTradeEnabled = computed(() => config.value.signal_auto_trade_enabled)
-
-const pushHint = computed(() => {
-  if (!pushStatus.value.dingtalk_configured) return '未配置 DINGTALK_WEBHOOK_URL，无法推送'
-  if (!pushStatus.value.dingtalk_enabled) return '需先在「周期报告」页开启钉钉推送总开关'
-  return '同批信号合并为一条消息推送'
-})
 
 const autoFormValid = computed(() => {
   const form = autoForm.value
