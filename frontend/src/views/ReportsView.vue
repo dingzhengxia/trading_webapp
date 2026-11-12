@@ -1,64 +1,43 @@
 <!-- frontend/src/views/ReportsView.vue（周期报告：monitor periodic_reporter 并入） -->
+<!--
+  重设计（redesign-spec 2026-11-13 · B3）：
+  旧版首屏是一排配置卡 + 8 行 .env 说明，真正的报告内容沉底。
+  新版顺序：最近报告内容置顶 → 报告配置卡×N（lg 6:6 双列）→ 钉钉推送配置
+  （.env 长文默认折叠成一行「推送配置说明 ▸」）。
+-->
 <template>
   <div>
-    <!-- 状态卡 -->
-    <v-card class="mb-4">
-      <v-card-title class="text-h6 d-flex align-center flex-wrap ga-2">
-        <v-icon start>mdi-newspaper-variant-outline</v-icon>
-        <span>周期报告</span>
+    <!-- 最近报告内容（置顶：本页职责是「看报告」） -->
+    <v-card>
+      <v-card-title class="text-subtitle-1 font-weight-medium d-flex align-center flex-wrap ga-2">
+        <v-icon start>mdi-text-box-outline</v-icon>
+        <span>最近报告</span>
         <v-spacer></v-spacer>
-        <v-chip size="small" variant="tonal" :color="enabledCount > 0 ? 'success' : 'grey'">
-          已启用 {{ enabledCount }} / {{ reports.length }}
-        </v-chip>
-        <v-chip size="small" variant="tonal" :color="status.running ? 'info' : 'grey'">
-          {{ status.running ? '正在生成' : '空闲' }}
-        </v-chip>
-        <v-chip
-          size="small"
-          variant="tonal"
-          :color="status.dingtalk_configured ? 'success' : 'warning'"
-          prepend-icon="mdi-bell-ring-outline"
-        >
-          钉钉{{ status.dingtalk_configured ? '已配置' : '未配置' }}
-        </v-chip>
+        <SmartSelect
+          v-model="selectedReport"
+          :items="latestNames"
+          class="reports-picker"
+        ></SmartSelect>
       </v-card-title>
       <v-divider></v-divider>
       <v-card-text>
-        <v-alert type="info" variant="tonal" density="compact" class="mb-3">
-          报告按周期统计热门合约的涨幅榜、放量榜、连涨榜与 RSI 超买超卖，结果同时写入网页日志。
-          钉钉推送需要在服务器上 <strong>项目根目录的 <code>.env</code></strong>（与 <code>deploy.sh</code> 同级）中配置
-          <code>DINGTALK_WEBHOOK_URL</code> 与（可选）<code>DINGTALK_SECRET</code>，
-          改完需重建容器或重启后端；密钥不会写入数据库或日志。
+        <template v-if="currentLatest">
+          <div class="text-caption text-medium-emphasis mb-2">
+            {{ currentLatest.title }} · 生成于 {{ formatTime(currentLatest.generated_at) }}
+          </div>
+          <pre class="report-body">{{ currentLatest.markdown }}</pre>
+        </template>
+        <v-alert v-else type="info" variant="tonal" density="compact">
+          还没有报告。启用周期报告后到点自动生成，或点某份报告的「立即生成」。
         </v-alert>
-        <div class="d-flex flex-wrap align-center ga-4">
-          <v-switch
-            v-model="dingtalkEnabled"
-            label="钉钉推送（报告 + 仓位保护告警）"
-            color="primary"
-            inset
-            hide-details
-            density="compact"
-            :disabled="!status.dingtalk_configured || saving"
-          ></v-switch>
-          <v-spacer></v-spacer>
-          <v-btn
-            color="primary"
-            variant="tonal"
-            prepend-icon="mdi-content-save"
-            :loading="saving"
-            @click="saveConfig"
-          >
-            保存配置
-          </v-btn>
-        </div>
       </v-card-text>
     </v-card>
 
-    <!-- 报告配置卡 -->
-    <v-row>
+    <!-- 报告配置卡（lg 6:6 双列） -->
+    <v-row class="mt-4">
       <v-col v-for="report in reports" :key="report.report_name" cols="12" lg="6">
         <v-card height="100%">
-          <v-card-title class="text-subtitle-1 d-flex align-center flex-wrap ga-2">
+          <v-card-title class="text-subtitle-1 font-weight-medium d-flex align-center flex-wrap ga-2">
             <span>{{ report.report_name }}</span>
             <v-chip v-if="report.running" size="x-small" color="info" variant="flat">生成中</v-chip>
             <v-spacer></v-spacer>
@@ -166,29 +145,64 @@
       </v-col>
     </v-row>
 
-    <!-- 最近报告内容 -->
+    <!-- 全局状态 + 钉钉推送配置（.env 说明折叠） -->
     <v-card class="mt-4">
-      <v-card-title class="text-subtitle-1 d-flex align-center flex-wrap ga-2">
-        <v-icon start>mdi-text-box-outline</v-icon>
-        <span>最近报告</span>
+      <v-card-title class="text-subtitle-1 font-weight-medium d-flex align-center flex-wrap ga-2">
+        <v-icon start>mdi-newspaper-variant-outline</v-icon>
+        <span>周期报告</span>
         <v-spacer></v-spacer>
-        <SmartSelect
-          v-model="selectedReport"
-          :items="latestNames"
-          class="reports-picker"
-        ></SmartSelect>
+        <v-chip size="small" variant="tonal" :color="enabledCount > 0 ? 'success' : 'grey'">
+          已启用 {{ enabledCount }} / {{ reports.length }}
+        </v-chip>
+        <v-chip size="small" variant="tonal" :color="status.running ? 'info' : 'grey'">
+          {{ status.running ? '正在生成' : '空闲' }}
+        </v-chip>
+        <v-chip
+          size="small"
+          variant="tonal"
+          :color="status.dingtalk_configured ? 'success' : 'warning'"
+          prepend-icon="mdi-bell-ring-outline"
+        >
+          钉钉{{ status.dingtalk_configured ? '已配置' : '未配置' }}
+        </v-chip>
       </v-card-title>
       <v-divider></v-divider>
       <v-card-text>
-        <template v-if="currentLatest">
-          <div class="text-caption text-medium-emphasis mb-2">
-            {{ currentLatest.title }} · 生成于 {{ formatTime(currentLatest.generated_at) }}
-          </div>
-          <pre class="report-body">{{ currentLatest.markdown }}</pre>
-        </template>
-        <v-alert v-else type="info" variant="tonal" density="compact">
-          还没有报告。启用周期报告后到点自动生成，或点某份报告的「立即生成」。
-        </v-alert>
+        <div class="d-flex flex-wrap align-center ga-4">
+          <v-switch
+            v-model="dingtalkEnabled"
+            label="钉钉推送（报告 + 仓位保护告警）"
+            color="primary"
+            inset
+            hide-details
+            density="compact"
+            :disabled="!status.dingtalk_configured || saving"
+          ></v-switch>
+          <v-spacer></v-spacer>
+          <v-btn
+            color="primary"
+            variant="tonal"
+            prepend-icon="mdi-content-save"
+            :loading="saving"
+            @click="saveConfig"
+          >
+            保存配置
+          </v-btn>
+        </div>
+
+        <!-- .env 说明：默认折叠成一行，需要时再展开看 -->
+        <v-expansion-panels class="mt-3">
+          <v-expansion-panel title="推送配置说明">
+            <v-expansion-panel-text>
+              <div class="text-caption">
+                报告按周期统计热门合约的涨幅榜、放量榜、连涨榜与 RSI 超买超卖，结果同时写入网页日志。
+                钉钉推送需要在服务器上 <strong>项目根目录的 <code>.env</code></strong>（与 <code>deploy.sh</code> 同级）中配置
+                <code>DINGTALK_WEBHOOK_URL</code> 与（可选）<code>DINGTALK_SECRET</code>，
+                改完需重建容器或重启后端；密钥不会写入数据库或日志。
+              </div>
+            </v-expansion-panel-text>
+          </v-expansion-panel>
+        </v-expansion-panels>
       </v-card-text>
     </v-card>
   </div>

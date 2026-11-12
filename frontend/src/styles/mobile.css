@@ -4,8 +4,8 @@
  * 2) iOS Safari 对字号 <16px 的输入框会自动放大页面，统一提到 16px；
  * 3) 去掉触摸时整块变灰的高亮。
  *
- * 注：底部导航的规则已删除 —— 导航早已改成顶部抽屉（见 App.vue），
- * 那些 .v-bottom-navigation 选择器匹配不到任何元素。
+ * 注：底部留白 / Tab 栏 / 操作条的定位规则统一在 base.css（§2.2 / §2.3），
+ * 这里不再覆盖 --dock-h（此前写 96px，与操作条实际 64px 不符）。
  */
 @media (max-width: 600px) {
   .v-overlay-container .v-list-item {
@@ -40,10 +40,5 @@
   /* 应用栏状态 chip 不再挤占标题空间 */
   .v-app-bar .v-toolbar-title {
     min-width: 0;
-  }
-
-  /* 悬浮底栏在手机上更高一点，避开 iOS 底部安全区 */
-  :root {
-    --dock-h: 96px;
   }
 }

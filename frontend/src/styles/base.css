@@ -85,12 +85,96 @@
 
 /* ---------------- 3. 布局与浮层 ---------------- */
 
-/* 悬浮底栏的留白统一在这里给，页面里不再各自硬编码 paddingBottom */
+/* 高度令牌（§2.2）：dock 实测 64px（AppDockFooter 内部高度），底部 Tab 栏 56px。
+   两者与 safe-area 的叠加只发生在手机断点（见下方媒体查询）。 */
 :root {
-  --dock-h: 80px;
+  --dock-h: 64px;
+  --tabbar-h: 56px;
 }
+
+/* 底部留白按页面声明（§2.3，P0 修复）：
+   之前无条件给所有页面加 padding-bottom: var(--dock-h)，导致没有操作条的
+   页面底部永久多出一条空洞；现在由路由 meta.hasDock 驱动（App.vue 挂 with-dock 类）。
+   md+：无 dock 24px / 有 dock 再加一条 dock 高度；
+   <md：先给底部 Tab 栏让位（+ safe-area），有 dock 的页面再让出 dock。 */
 .v-main {
-  padding-bottom: var(--dock-h) !important;
+  padding-bottom: 24px !important;
+}
+.v-main.with-dock {
+  padding-bottom: calc(var(--dock-h) + 24px) !important;
+}
+
+/* 固定操作条：默认贴底（桌面无 Tab 栏），手机断点见下方媒体查询抬高。
+   这条必须写在媒体查询之前 —— 同权重下后写的会覆盖媒体查询里的 bottom。 */
+.app-dock {
+  bottom: 0;
+}
+
+@media (max-width: 959px) {
+  .v-main {
+    padding-bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom) + 16px) !important;
+  }
+  .v-main.with-dock {
+    padding-bottom: calc(
+      var(--tabbar-h) + env(safe-area-inset-bottom) + var(--dock-h) + 16px
+    ) !important;
+  }
+
+  /* 操作条浮在底部 Tab 栏之上，不重叠 */
+  .app-dock {
+    bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom));
+  }
+
+  /* 任务进度条再叠一层：无操作条的页面压在 Tab 栏上方，
+     有操作条的页面（交易/设置）再抬高一个 dock 高度，三者不互相遮挡 */
+  .progress-dock {
+    bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom)) !important;
+  }
+  .progress-dock.progress-dock--stacked {
+    bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom) + var(--dock-h)) !important;
+  }
+}
+
+/* 底部 Tab 栏（手机专用，<md 渲染）：图标 + 10px 文字，触控区 ≥56px */
+.app-tabbar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: stretch;
+  height: calc(var(--tabbar-h) + env(safe-area-inset-bottom));
+  padding-bottom: env(safe-area-inset-bottom);
+  background: rgb(var(--v-theme-surface));
+  border-top: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+}
+.tabbar-item {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: var(--tabbar-h);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  font-size: 10px;
+  line-height: 1.2;
+  color: rgba(var(--v-theme-on-surface), 0.64);
+  text-decoration: none;
+  border: none;
+  background: transparent;
+  padding: 0;
+  cursor: pointer;
+}
+.tabbar-item .v-icon {
+  font-size: 20px;
+}
+.tabbar-item--active {
+  color: rgb(var(--v-theme-primary));
+}
+.tabbar-item--active .v-icon {
+  color: rgb(var(--v-theme-primary));
 }
 
 /* 浮层描边跟随主题：之前写死 rgba(255,255,255,.12)，浅色主题下这条线直接消失 */

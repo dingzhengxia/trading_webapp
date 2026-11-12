@@ -1,9 +1,17 @@
-<!-- frontend/src/components/PositionsTable.vue (最终正确版) -->
+<!-- frontend/src/components/PositionsTable.vue -->
+<!--
+  重设计（redesign-spec 2026-11-13 · B4）：
+  xs（<600）：6 列表格降级为卡片——头行 合约 + 方向徽标 + 浮动盈亏大字；
+  次行 回报率 · 名义价值；底部 反手/平仓按钮（40px 高，右对齐）。
+  checkbox 与「开仓均价」列在 xs 隐藏（开仓均价进卡片点击展开）；批量选择用「多选」开关。
+  sm+ 保留表格（sm 横滚、md+ 完整 6 列）；表格高度 xs 不再占用 45vh（卡片流自然高度）。
+  判色一律走 tone.ts（pnlClass / directionTone）。
+-->
 <template>
   <v-card>
     <!-- 顶部标题栏 -->
     <v-toolbar density="compact" flat>
-      <v-toolbar-title class="text-h6">{{ title }}</v-toolbar-title>
+      <v-toolbar-title class="text-subtitle-2 font-weight-medium">{{ title }}</v-toolbar-title>
       <v-spacer></v-spacer>
       <v-chip
         :color="side === 'long' ? 'long' : 'short'"
@@ -43,6 +51,17 @@
         平掉选中 ({{ selectedInThisTable.length }})
       </v-btn>
       <v-spacer></v-spacer>
+      <!-- xs：批量选择改走「多选」开关（卡片出现 checkbox），完成批量平仓 -->
+      <v-switch
+        v-if="isXs"
+        v-model="selectMode"
+        label="多选"
+        color="primary"
+        density="compact"
+        inset
+        hide-details
+        class="mr-1 mobile-switch"
+      ></v-switch>
       <v-btn
         color="error"
         variant="outlined"
@@ -56,16 +75,91 @@
 
     <v-divider></v-divider>
 
+    <!-- xs：卡片化 -->
+    <div v-if="isXs" class="pa-2 d-flex flex-column ga-2">
+      <EmptyState
+        v-if="positions.length === 0 && !loading"
+        icon="mdi-chart-line-variant"
+        title="无持仓数据"
+      />
+      <div
+        v-for="item in positions"
+        :key="item.full_symbol"
+        class="position-card"
+        @click="toggleCardExpand(item.full_symbol)"
+      >
+        <!-- 头行：合约 + 方向徽标 + 浮动盈亏大字 -->
+        <div class="d-flex align-center ga-2">
+          <v-checkbox-btn
+            v-if="selectMode"
+            :model-value="isCardSelected(item)"
+            density="compact"
+            hide-details
+            color="primary"
+            @click.stop
+            @update:model-value="toggleCardSelect(item)"
+          ></v-checkbox-btn>
+          <span class="position-card__symbol">{{ item.full_symbol }}</span>
+          <span class="dir-badge" :class="`dir-badge--${directionTone(item.side).key}`">
+            <v-icon>{{ directionTone(item.side).icon }}</v-icon
+            >{{ directionTone(item.side).label }}
+          </span>
+          <v-spacer></v-spacer>
+          <span class="position-card__pnl num" :class="pnlClass(item.pnl)">
+            {{ formatSigned(item.pnl) }}
+          </span>
+        </div>
+        <!-- 次行：回报率 · 名义价值 -->
+        <div class="position-card__sub text-caption">
+          <span>回报率 <span class="num" :class="pnlClass(item.pnl_percentage)">{{ formatSignedPercent(item.pnl_percentage) }}</span></span>
+          <span>名义价值 <span class="num">${{ item.notional.toFixed(2) }}</span></span>
+          <v-spacer></v-spacer>
+          <v-icon size="16" class="text-medium-emphasis">
+            {{ cardExpanded.has(item.full_symbol) ? 'mdi-chevron-up' : 'mdi-chevron-down' }}
+          </v-icon>
+        </div>
+        <!-- 点击展开：开仓均价 / 数量（xs 表格列隐藏，细节收在这里） -->
+        <div v-if="cardExpanded.has(item.full_symbol)" class="text-caption text-medium-emphasis mt-1">
+          开仓均价 <span class="num">{{ entryPriceText(item.entry_price) }}</span>
+          · 数量 <span class="num">{{ item.contracts }}</span>
+        </div>
+        <!-- 底部操作：40px 高按钮，右对齐 -->
+        <div class="d-flex ga-2 justify-end mt-2" @click.stop>
+          <v-btn
+            color="warning"
+            variant="tonal"
+            size="small"
+            class="position-card__btn"
+            :disabled="uiStore.isRunning"
+            @click="openReverseDialog(item)"
+          >
+            反手
+          </v-btn>
+          <v-btn
+            color="error"
+            variant="tonal"
+            size="small"
+            class="position-card__btn"
+            @click="uiStore.openCloseDialog({ type: 'single', position: item })"
+          >
+            平仓
+          </v-btn>
+        </div>
+      </div>
+    </div>
+
+    <!-- sm+：表格 -->
     <v-data-table-virtual
+      v-else
       v-model="positionStore.selectedPositions"
-      :headers="visibleHeaders"
+      :headers="headers"
       :items="positions"
       item-value="full_symbol"
       show-select
       density="compact"
       class="text-caption position-table"
       fixed-header
-      :height="isMobile ? '45vh' : 'calc(50vh - 120px)'"
+      :height="isSm ? '45vh' : 'calc(50vh - 120px)'"
       no-data-text="无持仓数据"
     >
       <template v-slot:item.notional="{ item }">
@@ -80,13 +174,13 @@
         </span>
       </template>
       <template v-slot:item.entry_price="{ item }">
-        <span class="num">{{ Number(item.entry_price).toLocaleString('en-US', { maximumFractionDigits: 6 }) }}</span>
+        <span class="num">{{ entryPriceText(item.entry_price) }}</span>
       </template>
       <template v-slot:item.actions="{ item }">
         <v-btn
           color="warning"
           variant="text"
-          size="x-small"
+          size="small"
           :disabled="uiStore.isRunning"
           @click="openReverseDialog(item)"
         >
@@ -95,7 +189,7 @@
         <v-btn
           color="error"
           variant="text"
-          size="x-small"
+          size="small"
           @click="uiStore.openCloseDialog({ type: 'single', position: item })"
         >
           平仓
@@ -106,7 +200,7 @@
     <!-- 反手确认弹窗：先全平当前仓位，再按价值反向开仓（限价 post-only） -->
     <v-dialog v-model="reverseDialog" max-width="460" persistent>
       <v-card>
-        <v-card-title class="text-h6">
+        <v-card-title class="text-subtitle-1 font-weight-medium">
           <v-icon color="warning" class="mr-2">mdi-swap-horizontal</v-icon>
           确认反手
         </v-card-title>
@@ -165,6 +259,7 @@ import { useUiStore } from '@/stores/uiStore'
 import { usePositionStore } from '@/stores/positionStore'
 import { directionTone, pnlClass } from '@/utils/tone'
 import { formatSigned, formatSignedPercent } from '@/utils/format'
+import EmptyState from '@/components/EmptyState.vue'
 
 type TDataTableHeader = {
   key: string
@@ -184,6 +279,11 @@ const props = defineProps<{
 const emit = defineEmits(['refresh'])
 const uiStore = useUiStore()
 const positionStore = usePositionStore()
+const display = useDisplay()
+
+// ---- 断点：xs 卡片化 / sm 表格(45vh) / md+ 表格(calc 高度) ----
+const isXs = computed(() => display.xs.value)
+const isSm = computed(() => display.sm.value)
 
 const totalNotional = computed(() => {
   return props.positions.reduce((sum, position) => sum + position.notional, 0)
@@ -205,6 +305,30 @@ const handleCloseSelected = () => {
   if (selectedInThisTable.value.length > 0) {
     uiStore.openCloseDialog({ type: 'selected', positions: selectedInThisTable.value })
   }
+}
+
+// --- xs 卡片：展开明细（开仓均价 / 数量） ---
+const cardExpanded = ref<Set<string>>(new Set())
+const toggleCardExpand = (fullSymbol: string): void => {
+  const next = new Set(cardExpanded.value)
+  if (next.has(fullSymbol)) {
+    next.delete(fullSymbol)
+  } else {
+    next.add(fullSymbol)
+  }
+  cardExpanded.value = next
+}
+const entryPriceText = (value: number): string =>
+  Number(value).toLocaleString('en-US', { maximumFractionDigits: 6 })
+
+// --- xs 卡片：批量选择（与 v-data-table 共用 positionStore.selectedPositions） ---
+const selectMode = ref(false)
+const isCardSelected = (item: Position): boolean =>
+  positionStore.selectedPositions.includes(item.full_symbol)
+const toggleCardSelect = (item: Position): void => {
+  positionStore.selectedPositions = isCardSelected(item)
+    ? positionStore.selectedPositions.filter((s) => s !== item.full_symbol)
+    : [...positionStore.selectedPositions, item.full_symbol]
 }
 
 // --- 反手（单仓位）---
@@ -239,22 +363,10 @@ const headers: TDataTableHeader[] = [
   { title: '开仓均价', key: 'entry_price', width: '15%' },
   { title: '操作', key: 'actions', sortable: false, align: 'end', width: '12%' },
 ]
-
-// 手机端隐藏「开仓均价」列，避免表格横向溢出
-const { smAndDown } = useDisplay()
-const isMobile = computed(() => smAndDown.value)
-const visibleHeaders = computed(() =>
-  isMobile.value ? headers.filter((header) => header.key !== 'entry_price') : headers,
-)
 </script>
 
-<!-- FINAL, CORRECT FIX: 使用更强力的CSS规则 -->
 <style scoped>
-/*
-  使用 :deep() 来穿透组件作用域，直接作用于 Vuetify 的内部 class。
-  我们直接 targeting the table header cell (<th>) 本身。
-  并使用 !important 来确保我们的样式拥有最高优先级，覆盖任何 Vuetify 的默认响应式样式。
-*/
+/* 表头不换行（sm+ 表格） */
 :deep(.position-table .v-data-table__th) {
   white-space: nowrap !important;
 }
@@ -267,4 +379,39 @@ const visibleHeaders = computed(() =>
   gap: 6px;
 }
 
+/* xs 卡片：只写结构样式，配色全部走主题令牌 */
+.position-card {
+  border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+  border-radius: 10px;
+  padding: 10px 12px;
+  min-width: 0;
+  cursor: pointer;
+}
+.position-card__symbol {
+  font-size: 14px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.position-card__pnl {
+  font-size: 16px;
+  font-weight: 600;
+}
+.position-card__sub {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 4px;
+  color: rgba(var(--v-theme-on-surface), 0.72);
+}
+/* 底部按钮 40px 高（规格要求的手机触控高度） */
+.position-card__btn {
+  min-height: 40px;
+}
+/* 开关在手机工具栏里收紧，避免把「批量平仓」挤下去 */
+.mobile-switch {
+  flex: 0 0 auto;
+  transform: translateY(-4px);
+}
 </style>

@@ -4,7 +4,7 @@
   <v-row :class="{ 'mt-2': spaced }">
     <v-col cols="12">
       <v-card>
-        <v-card-title class="text-h6 d-flex align-center flex-wrap ga-2">
+        <v-card-title class="text-subtitle-1 font-weight-medium d-flex align-center flex-wrap ga-2">
           <v-icon v-if="icon" start>{{ icon }}</v-icon>
           <span>{{ title }}</span>
           <v-spacer></v-spacer>

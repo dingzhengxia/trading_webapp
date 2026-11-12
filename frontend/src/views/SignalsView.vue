@@ -1,9 +1,9 @@
 <!-- frontend/src/views/SignalsView.vue (信号监控) -->
 <!--
-  结构调整：原来 4 张卡纵向堆叠，首屏是 8 个同权重 chip + 一屏设置表单，
-  真正的「信号列表」排在第 4 张卡、首屏看不到。
-  现在改成：KPI 指标行 + Tab（信号列表 / 扫描范围 / 推送与开仓 / 出场与统计），
-  按「读」和「改」切分——用户 90% 的时间是在读信号，10% 才在调参。
+  按「看 / 配」拆分（规格 §3 A10）：
+  页面只保留 KPI 行 + 状态点行 + 信号列表（首屏可见）+ 纸面跟踪折叠区；
+  扫描范围 / 推送与开仓 / 出场规则三类参数收进共享的 ConfigDrawer（3 个 Tab），
+  与交易页复用同一个抽屉容器。?tab= 深链保留，映射到抽屉 Tab。
 -->
 <template>
   <div>
@@ -75,118 +75,125 @@
       最近错误：{{ status.last_error }}
     </v-alert>
 
+    <!-- 信号列表：首屏主体；工具栏右侧的「配置」按钮打开参数抽屉 -->
     <v-card variant="flat" class="signal-shell">
-      <v-tabs v-model="activeTab" class="tabs-quiet" show-arrows>
-        <v-tab value="list">
-          <v-icon start size="16">mdi-format-list-bulleted</v-icon>
-          信号列表
-          <v-chip v-if="signals.length" size="x-small" variant="tonal" class="ml-2">
-            {{ signals.length }}
-          </v-chip>
-        </v-tab>
-        <v-tab value="scope">
-          <v-icon start size="16">mdi-tune-variant</v-icon>
-          扫描范围
-        </v-tab>
-        <v-tab value="push">
-          <v-icon start size="16">mdi-bell-ring-outline</v-icon>
-          推送与开仓
-        </v-tab>
-        <v-tab value="exit">
-          <v-icon start size="16">mdi-chart-timeline-variant</v-icon>
-          出场与统计
-        </v-tab>
-      </v-tabs>
-
-      <v-card-text>
-        <v-window v-model="activeTab">
-          <v-window-item value="list">
-            <SignalListPanel
-              v-model:direction="directionFilter"
-              :signals="filteredSignals"
-              :total="signals.length"
-              :forward-bars="tracking.params.forward_bars"
-              :volume-threshold="pushStatus.signal_push_volume_multiplier"
-              :static-symbols="pushStatus.static_symbols"
-              :strategy-labels="strategyLabels"
-              :scanning="scanning"
-              :clearing="clearing"
-              :loading="loading"
-              @scan="scanNow"
-              @clear="clearSignals"
-              @refresh="refresh"
-            />
-          </v-window-item>
-
-          <v-window-item value="scope">
-            <ScanScopePanel
-              :enabled="status.enabled"
-              :saving-scan="savingScan"
-              :static-symbols="scanStaticSymbols"
-              :static-items="staticSymbolItems"
-              :top-n="scopeTopN"
-              :timeframes="scopeTimeframes"
-              :timeframe-options="timeframeOptions"
-              :valid="scopeValid"
-              :saving="savingScope"
-              :dirty="scopeDirty"
-              @update:static-symbols="setStaticSymbols"
-              @update:top-n="onScopeTopNChange"
-              @update:timeframes="onScopeTimeframesChange"
-              @toggle="onToggleScan"
-              @save="saveScanScope"
-            />
-          </v-window-item>
-
-          <v-window-item value="push">
-            <PushAutoPanel
-              :push-status="pushStatus"
-              :push-volume-input="pushVolumeInput"
-              :push-volume-dirty="pushVolumeDirty"
-              :saving-dingtalk-push="savingDingtalkPush"
-              :saving-push-config="savingPushConfig"
-              :auto-enabled="autoTradeEnabled"
-              :saving-auto-trade="savingAutoTrade"
-              :auto-form="autoForm"
-              :auto-valid="autoFormValid"
-              :saving-auto="savingAuto"
-              :last-auto-open-text="lastAutoOpenText"
-              :direction-options="directionOptions"
-              :timeframe-options="timeframeOptions"
-              :strategy-options="strategyOptions"
-              @update:push-volume-input="onPushVolumeChange"
-              @toggle-dingtalk="onToggleDingtalkPush"
-              @save-volume="savePushVolume"
-              @toggle-auto="onToggleAutoTrade"
-              @save-auto="saveAutoConfig"
-              @dirty="markAutoFormDirty"
-            />
-          </v-window-item>
-
-          <v-window-item value="exit">
-            <ExitStatsPanel
-              :exit-mode="exitMode"
-              :tracking="tracking"
-              :live-exit="liveExit"
-              :paper-form="paperForm"
-              :atr-timeframes="ATR_TIMEFRAMES"
-              :strategy-labels="strategyLabels"
-              :valid="paperFormValid"
-              :saving-paper-config="savingPaperConfig"
-              :saving-paper-toggle="savingPaperToggle"
-              :saving-live-timeout="savingLiveTimeout"
-              :saving-sltp-guard="savingSltpGuard"
-              @change-mode="onChangeExitMode"
-              @toggle-paper="onTogglePaper"
-              @save-paper="savePaperConfig"
-              @toggle-live-timeout="onToggleLiveTimeout"
-              @toggle-sltp-guard="onToggleSltpGuard"
-              @dirty="paperDirty = true"
-            />
-          </v-window-item>
-        </v-window>
-      </v-card-text>
+      <SignalListPanel
+        v-model:direction="directionFilter"
+        :signals="filteredSignals"
+        :total="signals.length"
+        :forward-bars="tracking.params.forward_bars"
+        :volume-threshold="pushStatus.signal_push_volume_multiplier"
+        :static-symbols="pushStatus.static_symbols"
+        :strategy-labels="strategyLabels"
+        :scanning="scanning"
+        :clearing="clearing"
+        :loading="loading"
+        @scan="scanNow"
+        @clear="clearSignals"
+        @refresh="refresh"
+      >
+        <template #toolbar-append>
+          <v-btn size="small" variant="text" prepend-icon="mdi-cog" @click="configOpen = true">
+            配置
+          </v-btn>
+        </template>
+      </SignalListPanel>
     </v-card>
+
+    <!-- 纸面跟踪明细：默认收起，只读数据（参数在抽屉的「出场规则」Tab） -->
+    <v-expansion-panels class="mt-3">
+      <v-expansion-panel>
+        <v-expansion-panel-title>
+          <span class="text-subtitle-1 font-weight-medium">纸面跟踪明细</span>
+          <span class="text-caption text-medium-emphasis ml-3">
+            {{ paperEnabled ? '启用中' : '未启用' }} · 纸面持仓 {{ tracking.open_positions.length }} ·
+            已平仓样本 {{ tracking.paper_stats.total }}
+          </span>
+        </v-expansion-panel-title>
+        <v-expansion-panel-text>
+          <PaperTrackingPanel
+            :tracking="tracking"
+            :live-exit="liveExit"
+            :strategy-labels="strategyLabels"
+          />
+        </v-expansion-panel-text>
+      </v-expansion-panel>
+    </v-expansion-panels>
+
+    <!-- 共享参数抽屉：扫描范围 / 推送与开仓 / 出场规则 -->
+    <ConfigDrawer
+      v-model="configOpen"
+      title="信号配置"
+      icon="mdi-tune-variant"
+      :tabs="signalConfigTabs"
+      default-tab="scope"
+    >
+      <template #scope>
+        <ScanScopePanel
+          :enabled="status.enabled"
+          :saving-scan="savingScan"
+          :static-symbols="scanStaticSymbols"
+          :static-items="staticSymbolItems"
+          :top-n="scopeTopN"
+          :timeframes="scopeTimeframes"
+          :timeframe-options="timeframeOptions"
+          :valid="scopeValid"
+          :saving="savingScope"
+          :dirty="scopeDirty"
+          @update:static-symbols="setStaticSymbols"
+          @update:top-n="onScopeTopNChange"
+          @update:timeframes="onScopeTimeframesChange"
+          @toggle="onToggleScan"
+          @save="saveScanScope"
+        />
+      </template>
+
+      <template #push>
+        <PushAutoPanel
+          :push-status="pushStatus"
+          :push-volume-input="pushVolumeInput"
+          :push-volume-dirty="pushVolumeDirty"
+          :saving-dingtalk-push="savingDingtalkPush"
+          :saving-push-config="savingPushConfig"
+          :auto-enabled="autoTradeEnabled"
+          :saving-auto-trade="savingAutoTrade"
+          :auto-form="autoForm"
+          :auto-valid="autoFormValid"
+          :saving-auto="savingAuto"
+          :last-auto-open-text="lastAutoOpenText"
+          :direction-options="directionOptions"
+          :timeframe-options="timeframeOptions"
+          :strategy-options="strategyOptions"
+          @update:push-volume-input="onPushVolumeChange"
+          @toggle-dingtalk="onToggleDingtalkPush"
+          @save-volume="savePushVolume"
+          @toggle-auto="onToggleAutoTrade"
+          @save-auto="saveAutoConfig"
+          @dirty="markAutoFormDirty"
+        />
+      </template>
+
+      <template #exit>
+        <ExitParamsPanel
+          :exit-mode="exitMode"
+          :paper-form="paperForm"
+          :paper-enabled="paperEnabled"
+          :live-exit="liveExit"
+          :atr-timeframes="ATR_TIMEFRAMES"
+          :valid="paperFormValid"
+          :saving-paper-config="savingPaperConfig"
+          :saving-paper-toggle="savingPaperToggle"
+          :saving-live-timeout="savingLiveTimeout"
+          :saving-sltp-guard="savingSltpGuard"
+          @change-mode="onChangeExitMode"
+          @toggle-paper="onTogglePaper"
+          @save-paper="savePaperConfig"
+          @toggle-live-timeout="onToggleLiveTimeout"
+          @toggle-sltp-guard="onToggleSltpGuard"
+          @dirty="paperDirty = true"
+        />
+      </template>
+    </ConfigDrawer>
   </div>
 </template>
 
@@ -210,13 +217,22 @@ import { getErrorMessage, getErrorStatus } from '@/utils/errors'
 import { formatIsoTime as formatTime } from '@/utils/format'
 import { directionLabel } from '@/utils/tone'
 import MetricCard from '@/components/MetricCard.vue'
+import ConfigDrawer from '@/components/ConfigDrawer.vue'
 import SignalListPanel from '@/components/signals/SignalListPanel.vue'
 import ScanScopePanel from '@/components/signals/ScanScopePanel.vue'
 import PushAutoPanel, { type AutoTradeForm } from '@/components/signals/PushAutoPanel.vue'
-import ExitStatsPanel, { type PaperForm } from '@/components/signals/ExitStatsPanel.vue'
+import ExitParamsPanel, { type PaperForm } from '@/components/signals/ExitParamsPanel.vue'
+import PaperTrackingPanel from '@/components/signals/PaperTrackingPanel.vue'
 import { useSettingsStore } from '@/stores/settingsStore'
 
 const POLL_INTERVAL_MS = 10000
+
+// 抽屉的三个参数 Tab（扫描范围 / 推送与开仓 / 出场规则），?tab= 深链映射到这里
+const signalConfigTabs = [
+  { key: 'scope', title: '扫描范围', icon: 'mdi-tune-variant' },
+  { key: 'push', title: '推送与开仓', icon: 'mdi-bell-ring-outline' },
+  { key: 'exit', title: '出场规则', icon: 'mdi-chart-timeline-variant' },
+]
 
 const directionOptions = [
   { title: '做多', value: 'long' },
@@ -298,13 +314,10 @@ const snackbarStore = useSnackbarStore()
 const uiStore = useUiStore()
 const settingsStore = useSettingsStore()
 
-// 支持 ?tab=list|scope|push|exit 深链，方便把某一页配置直接发给别人
+// 支持 ?tab=scope|push|exit 深链：带着参数进来时直接展开配置抽屉并落到对应 Tab
 const route = useRoute()
-const activeTab = ref(
-  ['list', 'scope', 'push', 'exit'].includes(String(route.query.tab))
-    ? String(route.query.tab)
-    : 'list',
-)
+const configOpen = ref(['scope', 'push', 'exit'].includes(String(route.query.tab)))
+
 const status = ref<SignalStatus>({ ...defaultSignalStatus })
 const signals = ref<SignalRecord[]>([])
 const config = ref<SignalConfig>({ ...defaultSignalConfig })

@@ -25,7 +25,7 @@
       <v-expansion-panels v-else v-model="openedPanel">
         <v-expansion-panel v-for="rec in records" :key="rec.id">
           <v-expansion-panel-title>
-            <div class="d-flex align-center ga-3" style="min-width: 0; width: 100%">
+            <div class="d-flex flex-wrap align-center ga-3" style="min-width: 0; width: 100%">
               <span class="text-no-wrap text-caption">{{ formatTime(rec.ts) }}</span>
               <v-chip size="x-small" :color="sourceColor(rec.source)" class="text-no-wrap">
                 {{ sourceLabel(rec.source) }}
@@ -51,41 +51,43 @@
               {{ snapshotDetail(rec) }}
             </div>
 
-            <!-- 每笔结果 -->
-            <v-table density="compact" class="open-history-table">
-              <thead>
-                <tr>
-                  <th class="text-left">币种</th>
-                  <th class="text-left">方向</th>
-                  <th class="text-right">目标价值 (USD)</th>
-                  <th class="text-left">结果</th>
-                  <th class="text-left">说明</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-for="(item, idx) in rec.items" :key="idx">
-                  <td>{{ item.coin || '—' }}</td>
-                  <td>
-                    <span :class="sideToneClass(item.side)">{{ sideLabel(item) }}</span>
-                  </td>
-                  <td class="text-right">
-                    {{ item.target_value != null ? formatValue(item.target_value) : '—' }}
-                  </td>
-                  <td>
-                    <v-chip
-                      size="x-small"
-                      variant="tonal"
-                      :color="resultColor(item)"
-                    >
-                      {{ resultLabel(item) }}
-                    </v-chip>
-                  </td>
-                  <td class="text-caption text-medium-emphasis">
-                    {{ itemNote(item) }}
-                  </td>
-                </tr>
-              </tbody>
-            </v-table>
+            <!-- 每笔结果（5 列 ≤ 降级判据，xs 保留横滚 + 首列 sticky） -->
+            <div class="open-history-scroll">
+              <v-table density="compact" class="open-history-table">
+                <thead>
+                  <tr>
+                    <th class="text-left">币种</th>
+                    <th class="text-left">方向</th>
+                    <th class="text-right">目标价值 (USD)</th>
+                    <th class="text-left">结果</th>
+                    <th class="text-left">说明</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="(item, idx) in rec.items" :key="idx">
+                    <td>{{ item.coin || '—' }}</td>
+                    <td>
+                      <span :class="sideToneClass(item.side)">{{ sideLabel(item) }}</span>
+                    </td>
+                    <td class="text-right">
+                      {{ item.target_value != null ? formatValue(item.target_value) : '—' }}
+                    </td>
+                    <td>
+                      <v-chip
+                        size="x-small"
+                        variant="tonal"
+                        :color="resultColor(item)"
+                      >
+                        {{ resultLabel(item) }}
+                      </v-chip>
+                    </td>
+                    <td class="text-caption text-medium-emphasis">
+                      {{ itemNote(item) }}
+                    </td>
+                  </tr>
+                </tbody>
+              </v-table>
+            </div>
           </v-expansion-panel-text>
         </v-expansion-panel>
       </v-expansion-panels>
@@ -283,5 +285,16 @@ const snapshotDetail = (rec: OpenHistoryRecord) => {
 .open-history-table {
   border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
   border-radius: 8px;
+}
+/* 列数判定：每笔结果表 5 列（币种/方向/目标价值/结果/说明）≤ 5，
+   按规格走「横滚 + 首列 sticky」，不做卡片化 */
+.open-history-scroll {
+  overflow-x: auto;
+}
+.open-history-table :is(th, td):first-child {
+  position: sticky;
+  left: 0;
+  background: rgb(var(--v-theme-surface));
+  z-index: 1;
 }
 </style>

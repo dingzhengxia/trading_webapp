@@ -5,7 +5,7 @@
   因此不使用主题色当底色（浅色主题下会变成白底白字）。
 -->
 <template>
-  <v-footer v-if="uiStore.progress.show" app class="pa-0 progress-dock" style="z-index: 1008">
+  <v-footer v-if="uiStore.progress.show" app class="pa-0 progress-dock" :class="{ 'progress-dock--stacked': hasDock }" style="z-index: 1008">
     <div class="progress-card d-flex align-center px-2 px-sm-4 w-100">
       <!-- 左侧任务名 -->
       <span class="hud-title flex-shrink-0 mr-4 d-none d-md-flex">
@@ -68,10 +68,16 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
+import { useRoute } from 'vue-router'
 import { useUiStore } from '@/stores/uiStore'
 import api from '@/services/api'
 
 const uiStore = useUiStore()
+const route = useRoute()
+
+// 手机端进度条要叠在底部 Tab 栏（以及固定操作条）之上，否则任务执行中会挡住导航。
+// 偏移量由 base.css 的 .progress-dock / --stacked 规则处理，这里只判断当前页有没有操作条。
+const hasDock = computed(() => route.meta.hasDock === true)
 
 const progressPercentage = computed(() => {
   const total = uiStore.progress.total

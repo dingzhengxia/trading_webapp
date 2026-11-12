@@ -1,4 +1,13 @@
 <!-- frontend/src/views/ProtectionView.vue（仓位保护：monitor 实时风控并入） -->
+<!--
+  重设计（redesign-spec 2026-11-13 · B2）：
+  旧版 677 行、40 个参数控件纵向铺满首屏。新版首屏只留：
+    状态卡 → 守卫中的仓位表 → 最近保护动作；
+  40 个参数收进 v-expansion-panels 三组（核心参数 / v2 分档参数 / 执行开关），
+  折叠标题行始终显示当前值摘要，收起状态也能读到关键值。
+  守卫表：xs 卡片化（TP1/TP2/躺平合并 chip 组，点开看具体价）；sm/md 隐藏「开仓价」列；lg 全列。
+  保存按钮保持页内（本页无 dock）。
+-->
 <template>
   <div>
     <!-- 状态卡 -->
@@ -74,293 +83,6 @@
       </v-alert>
     </PageCard>
 
-    <!-- 参数卡 -->
-    <!-- 参数卡 -->
-    <PageCard icon="mdi-tune" title="核心参数" spaced>
-      <template #badges>
-        <v-btn
-          size="small"
-          color="primary"
-          variant="tonal"
-          prepend-icon="mdi-content-save"
-          :loading="saving"
-          @click="saveConfig"
-        >
-          保存参数
-        </v-btn>
-      </template>
-        <v-row dense>
-          <v-col cols="12" sm="6" md="3">
-            <SmartSelect
-              v-model="form.timeframe"
-              :items="timeframes"
-              label="结构判定周期"
-            ></SmartSelect>
-          </v-col>
-          <v-col cols="12" sm="6" md="3">
-            <v-text-field
-              v-model.number="form.tp1_r_multiple"
-              type="number"
-              step="0.1"
-              min="0.1"
-              label="TP1 (R 倍数)"
-              density="compact"
-              variant="outlined"
-              hide-details
-            ></v-text-field>
-          </v-col>
-          <v-col cols="12" sm="6" md="3">
-            <v-text-field
-              v-model.number="form.tp2_r_multiple"
-              type="number"
-              step="0.1"
-              min="0.1"
-              label="TP2 (R 倍数)"
-              density="compact"
-              variant="outlined"
-              hide-details
-            ></v-text-field>
-          </v-col>
-          <v-col cols="12" sm="6" md="3">
-            <v-text-field
-              v-model.number="form.tp3_r_multiple"
-              type="number"
-              step="0.1"
-              min="0.1"
-              label="躺平 (R 倍数)"
-              density="compact"
-              variant="outlined"
-              hide-details
-            ></v-text-field>
-          </v-col>
-          <v-col cols="12" sm="6" md="3">
-            <v-text-field
-              v-model.number="form.t1_structure_lookback"
-              type="number"
-              min="2"
-              label="T1 结构回看(根)"
-              density="compact"
-              variant="outlined"
-              hide-details
-            ></v-text-field>
-          </v-col>
-          <v-col cols="12" sm="6" md="3">
-            <v-text-field
-              v-model.number="form.t2_structure_lookback"
-              type="number"
-              min="2"
-              label="T2 结构回看(根)"
-              density="compact"
-              variant="outlined"
-              hide-details
-            ></v-text-field>
-          </v-col>
-          <v-col cols="12" sm="6" md="3">
-            <v-text-field
-              v-model.number="form.t3_structure_lookback"
-              type="number"
-              min="2"
-              label="T3 结构回看(根)"
-              density="compact"
-              variant="outlined"
-              hide-details
-            ></v-text-field>
-          </v-col>
-          <v-col cols="12" sm="6" md="3">
-            <v-text-field
-              v-model.number="form.structure_buffer_atr"
-              type="number"
-              step="0.1"
-              min="0"
-              label="结构缓冲 (ATR)"
-              density="compact"
-              variant="outlined"
-              hide-details
-            ></v-text-field>
-          </v-col>
-        </v-row>
-
-        <v-row dense class="mt-2">
-          <v-col cols="12" sm="6" md="3">
-            <v-switch
-              v-model="form.profit_protection_enabled"
-              label="浮盈保护（上移止损）"
-              color="primary"
-              density="compact"
-              inset
-              hide-details
-            ></v-switch>
-          </v-col>
-          <v-col cols="12" sm="6" md="3">
-            <v-switch
-              v-model="form.emergency_enabled"
-              label="紧急结构止损"
-              color="primary"
-              density="compact"
-              inset
-              hide-details
-            ></v-switch>
-          </v-col>
-          <v-col cols="12" sm="6" md="3">
-            <v-switch
-              v-model="form.exchange_hard_stop_enabled"
-              label="交易所灾难止损单"
-              color="primary"
-              density="compact"
-              inset
-              hide-details
-            ></v-switch>
-          </v-col>
-          <v-col cols="12" sm="6" md="3">
-            <v-text-field
-              v-model.number="form.hard_stop_min_distance_pct"
-              type="number"
-              step="0.01"
-              min="0"
-              max="1"
-              label="灾难止损最小距离 (比例)"
-              density="compact"
-              variant="outlined"
-              hide-details
-            ></v-text-field>
-          </v-col>
-        </v-row>
-    </PageCard>
-
-    <!-- v2 分档参数（结构 + ATR 四档） -->
-    <PageCard icon="mdi-layers-triple-outline" title="v2 分档参数（结构 + ATR）" spaced>
-      <template #badges>
-        <v-btn
-          size="small"
-          color="primary"
-          variant="tonal"
-          prepend-icon="mdi-content-save"
-          :loading="saving"
-          @click="saveConfig"
-        >
-          保存参数
-        </v-btn>
-      </template>
-      <v-row dense>
-        <v-col cols="12" sm="6" md="3">
-          <SmartSelect
-            v-model="form.engine_version"
-            :items="engineVersions"
-            label="风控引擎版本"
-          ></SmartSelect>
-        </v-col>
-        <v-col cols="12" sm="6" md="3">
-          <SmartSelect
-            v-model="form.v2_timeframe"
-            :items="timeframes"
-            label="v2 结构判定周期"
-          ></SmartSelect>
-        </v-col>
-        <v-col cols="12" sm="6" md="3">
-          <v-text-field
-            v-model.number="form.risk_min_pct"
-            type="number"
-            step="0.005"
-            min="0.001"
-            max="0.5"
-            label="最小单笔风险（占价格比例）"
-            density="compact"
-            variant="outlined"
-            hide-details
-          ></v-text-field>
-        </v-col>
-        <v-col cols="12" sm="6" md="3">
-          <v-text-field
-            v-model.number="form.risk_max_pct"
-            type="number"
-            step="0.01"
-            min="0.001"
-            max="0.5"
-            label="最大单笔风险（占价格比例）"
-            density="compact"
-            variant="outlined"
-            hide-details
-          ></v-text-field>
-        </v-col>
-      </v-row>
-      <v-row dense class="mt-1">
-        <v-col v-for="(_, i) in 4" :key="`tier-${i}`" cols="6" sm="3" md="3">
-          <v-text-field
-            v-model.number="form.tier_ratios[i]"
-            type="number"
-            step="0.05"
-            min="0"
-            max="1"
-            :label="`T${i + 1} 减仓比例${i === 3 ? '（全平档）' : ''}`"
-            density="compact"
-            variant="outlined"
-            hide-details
-          ></v-text-field>
-        </v-col>
-      </v-row>
-      <v-row dense class="mt-1">
-        <v-col v-for="(_, i) in 4" :key="`confirm-${i}`" cols="6" sm="3" md="3">
-          <v-text-field
-            v-model.number="form.tier_confirm_sec[i]"
-            type="number"
-            step="5"
-            min="0"
-            max="600"
-            :label="`T${i + 1} 持续确认（秒）`"
-            density="compact"
-            variant="outlined"
-            hide-details
-          ></v-text-field>
-        </v-col>
-      </v-row>
-      <v-row dense class="mt-1">
-        <v-col cols="12" sm="6" md="3">
-          <v-text-field
-            v-model.number="form.breakeven_trigger_r"
-            type="number"
-            step="0.1"
-            min="0.1"
-            max="100"
-            label="保本触发（R）"
-            density="compact"
-            variant="outlined"
-            hide-details
-          ></v-text-field>
-        </v-col>
-        <v-col cols="12" sm="6" md="3">
-          <v-text-field
-            v-model.number="form.trailing_atr_mult"
-            type="number"
-            step="0.5"
-            min="0.5"
-            max="20"
-            label="追踪止损（ATR 倍数）"
-            density="compact"
-            variant="outlined"
-            hide-details
-          ></v-text-field>
-        </v-col>
-        <v-col cols="12" sm="6" md="3">
-          <v-text-field
-            v-model.number="form.v2_poll_interval_sec"
-            type="number"
-            step="1"
-            min="1"
-            max="60"
-            label="巡检间隔（秒）"
-            density="compact"
-            variant="outlined"
-            hide-details
-          ></v-text-field>
-        </v-col>
-      </v-row>
-      <v-alert type="info" variant="tonal" density="compact" class="mt-3 text-caption">
-        四档合计应等于 100%：越破越重，T4 为全平档。交易所 STOP 只做兜底（灾难线再往外 1.5 ATR），
-        正常情况由这四档先动作；减一档，止损就推进到下一档。
-      </v-alert>
-    </PageCard>
-
-    <!-- 守卫中的仓位 -->
     <!-- 守卫中的仓位 -->
     <PageCard icon="mdi-shield-account" title="守卫中的仓位" spaced>
       <template #badges>
@@ -369,85 +91,140 @@
           刷新
         </v-btn>
       </template>
-        <v-alert
-          v-if="!status.enabled"
-          type="warning"
-          variant="tonal"
-          density="compact"
-          class="text-caption"
+      <v-alert
+        v-if="!status.enabled"
+        type="warning"
+        variant="tonal"
+        density="compact"
+        class="text-caption"
+      >
+        仓位保护当前未启用：打开上方开关后，引擎才会开始轮询持仓并挂保护单。
+      </v-alert>
+
+      <!-- xs：卡片化。TP1/TP2/躺平 合并成 chip 组（chip 显示触发态），点开看具体价格 -->
+      <div v-else-if="isXs && status.positions.length > 0" class="d-flex flex-column ga-2">
+        <div
+          v-for="row in status.positions"
+          :key="`${row.symbol}-${row.side}`"
+          class="guard-card"
+          @click="toggleGuardRow(row)"
         >
-          仓位保护当前未启用：打开上方开关后，引擎才会开始轮询持仓并挂保护单。
-        </v-alert>
-        <v-table v-else-if="status.positions.length > 0" density="compact">
-          <thead>
-            <tr>
-              <th class="text-left">币种</th>
-              <th class="text-left">方向</th>
-              <th class="text-right">数量</th>
-              <th class="text-right">开仓价</th>
-              <th class="text-right">标记价</th>
-              <th class="text-right">保护止损</th>
-              <th class="text-right">TP1 / TP2 / 躺平</th>
-              <th v-if="isV2" class="text-right">四档减仓线</th>
-              <th v-if="isV2" class="text-right">灾难线</th>
-              <th class="text-left">已触发</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="row in status.positions" :key="`${row.symbol}-${row.side}`">
-              <td class="font-weight-medium">{{ row.symbol }}</td>
-              <td>
-                <span class="dir-badge" :class="`dir-badge--${directionTone(row.side).key}`">
-                  <v-icon>{{ directionTone(row.side).icon }}</v-icon
-                  >{{ directionTone(row.side).label }}
-                </span>
-              </td>
-              <td class="text-right">{{ formatNumber(row.contracts, 4) }}</td>
-              <td class="text-right">{{ formatNumber(row.entry_price) }}</td>
-              <td class="text-right">{{ formatNumber(row.mark_price) }}</td>
-              <td class="text-right">
-                <span v-if="row.protected_stop">{{ formatNumber(row.protected_stop) }}</span>
-                <span v-else-if="row.stop_price">{{ formatNumber(row.stop_price) }}</span>
-                <span v-else class="text-medium-emphasis">—</span>
-              </td>
-              <td class="text-right text-caption">
-                {{ formatNumber(row.tp1_price) }} / {{ formatNumber(row.tp2_price) }} /
-                {{ formatNumber(row.tp3_price) }}
-              </td>
-              <td v-if="isV2" class="text-right text-caption">
-                <span v-if="row.tier_levels?.length">
-                  {{ row.tier_levels.map((v) => formatNumber(v)).join(' / ') }}
-                </span>
-                <span v-else class="text-medium-emphasis">—</span>
-              </td>
-              <td v-if="isV2" class="text-right text-caption">
-                <span v-if="row.disaster_stop">{{ formatNumber(row.disaster_stop) }}</span>
-                <span v-else class="text-medium-emphasis">—</span>
-              </td>
-              <td>
-                <div class="d-flex flex-wrap ga-1">
-                  <v-chip v-if="row.tp1_done" size="x-small" variant="tonal" color="info">TP1</v-chip>
-                  <v-chip v-if="row.tp2_done" size="x-small" variant="tonal" color="info">TP2</v-chip>
-                  <v-chip v-if="row.tp3_done" size="x-small" variant="tonal" color="info">躺平</v-chip>
-                  <v-chip v-if="row.t1_done" size="x-small" variant="tonal" color="warning">T1</v-chip>
-                  <v-chip v-if="row.t2_done" size="x-small" variant="tonal" color="warning">T2</v-chip>
-                  <v-chip v-if="row.t3_done" size="x-small" variant="tonal" color="warning">T3</v-chip>
-                  <v-chip v-if="row.t4_done" size="x-small" variant="tonal" color="error">T4</v-chip>
-                  <span
-                    v-if="!hasTriggered(row)"
-                    class="text-caption text-medium-emphasis"
-                  >等待触发</span>
-                </div>
-              </td>
-            </tr>
-          </tbody>
-        </v-table>
-        <EmptyState
-          v-else
-          icon="mdi-shield-outline"
-          title="当前没有持仓"
-          description="引擎处于待机巡检状态；有持仓后这里会显示每个仓位已挂的保护线与减仓进度。"
-        />
+          <div class="d-flex align-center ga-2">
+            <span class="guard-card__symbol">{{ row.symbol }}</span>
+            <span class="dir-badge" :class="`dir-badge--${directionTone(row.side).key}`">
+              <v-icon>{{ directionTone(row.side).icon }}</v-icon
+              >{{ directionTone(row.side).label }}
+            </span>
+            <v-spacer></v-spacer>
+            <v-icon size="18" class="text-medium-emphasis">
+              {{ isGuardRowExpanded(row) ? 'mdi-chevron-up' : 'mdi-chevron-down' }}
+            </v-icon>
+          </div>
+          <div class="guard-card__grid text-caption">
+            <span>数量 <span class="num">{{ formatNumber(row.contracts, 4) }}</span></span>
+            <span>标记价 <span class="num">{{ formatNumber(row.mark_price) }}</span></span>
+            <span>保护止损 <span class="num">{{ stopText(row) }}</span></span>
+          </div>
+          <div class="d-flex flex-wrap align-center ga-1 mt-1" @click.stop="toggleGuardRow(row)">
+            <v-chip size="x-small" :variant="row.tp1_done ? 'tonal' : 'outlined'" color="info">TP1</v-chip>
+            <v-chip size="x-small" :variant="row.tp2_done ? 'tonal' : 'outlined'" color="info">TP2</v-chip>
+            <v-chip size="x-small" :variant="row.tp3_done ? 'tonal' : 'outlined'" color="info">躺平</v-chip>
+            <v-chip v-if="row.t1_done" size="x-small" variant="tonal" color="warning">T1</v-chip>
+            <v-chip v-if="row.t2_done" size="x-small" variant="tonal" color="warning">T2</v-chip>
+            <v-chip v-if="row.t3_done" size="x-small" variant="tonal" color="warning">T3</v-chip>
+            <v-chip v-if="row.t4_done" size="x-small" variant="tonal" color="error">T4</v-chip>
+            <span v-if="!hasTriggered(row)" class="text-caption text-medium-emphasis">等待触发</span>
+          </div>
+          <div v-if="isGuardRowExpanded(row)" class="text-caption text-medium-emphasis mt-2">
+            <div>
+              开仓价 <span class="num">{{ formatNumber(row.entry_price) }}</span>
+              · TP1 <span class="num">{{ formatNumber(row.tp1_price) }}</span>
+              / TP2 <span class="num">{{ formatNumber(row.tp2_price) }}</span>
+              / 躺平 <span class="num">{{ formatNumber(row.tp3_price) }}</span>
+            </div>
+            <div v-if="isV2" class="mt-1">
+              四档减仓线 <span class="num">{{ tierText(row) }}</span>
+              · 灾难线
+              <span class="num">
+                <template v-if="row.disaster_stop">{{ formatNumber(row.disaster_stop) }}</template>
+                <template v-else>—</template>
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- sm+：表格。md（及 sm）隐藏「开仓价」列避免横滚，lg+ 全列 -->
+      <v-table v-else-if="status.positions.length > 0" density="compact">
+        <thead>
+          <tr>
+            <th class="text-left">币种</th>
+            <th class="text-left">方向</th>
+            <th class="text-right">数量</th>
+            <th v-if="lgAndUp" class="text-right">开仓价</th>
+            <th class="text-right">标记价</th>
+            <th class="text-right">保护止损</th>
+            <th class="text-right">TP1 / TP2 / 躺平</th>
+            <th v-if="isV2" class="text-right">四档减仓线</th>
+            <th v-if="isV2" class="text-right">灾难线</th>
+            <th class="text-left">已触发</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="row in status.positions" :key="`${row.symbol}-${row.side}`">
+            <td class="font-weight-medium">{{ row.symbol }}</td>
+            <td>
+              <span class="dir-badge" :class="`dir-badge--${directionTone(row.side).key}`">
+                <v-icon>{{ directionTone(row.side).icon }}</v-icon
+                >{{ directionTone(row.side).label }}
+              </span>
+            </td>
+            <td class="text-right">{{ formatNumber(row.contracts, 4) }}</td>
+            <td v-if="lgAndUp" class="text-right">{{ formatNumber(row.entry_price) }}</td>
+            <td class="text-right">{{ formatNumber(row.mark_price) }}</td>
+            <td class="text-right">
+              <span v-if="row.protected_stop">{{ formatNumber(row.protected_stop) }}</span>
+              <span v-else-if="row.stop_price">{{ formatNumber(row.stop_price) }}</span>
+              <span v-else class="text-medium-emphasis">—</span>
+            </td>
+            <td class="text-right text-caption">
+              {{ formatNumber(row.tp1_price) }} / {{ formatNumber(row.tp2_price) }} /
+              {{ formatNumber(row.tp3_price) }}
+            </td>
+            <td v-if="isV2" class="text-right text-caption">
+              <span v-if="row.tier_levels?.length">
+                {{ row.tier_levels.map((v) => formatNumber(v)).join(' / ') }}
+              </span>
+              <span v-else class="text-medium-emphasis">—</span>
+            </td>
+            <td v-if="isV2" class="text-right text-caption">
+              <span v-if="row.disaster_stop">{{ formatNumber(row.disaster_stop) }}</span>
+              <span v-else class="text-medium-emphasis">—</span>
+            </td>
+            <td>
+              <div class="d-flex flex-wrap ga-1">
+                <v-chip v-if="row.tp1_done" size="x-small" variant="tonal" color="info">TP1</v-chip>
+                <v-chip v-if="row.tp2_done" size="x-small" variant="tonal" color="info">TP2</v-chip>
+                <v-chip v-if="row.tp3_done" size="x-small" variant="tonal" color="info">躺平</v-chip>
+                <v-chip v-if="row.t1_done" size="x-small" variant="tonal" color="warning">T1</v-chip>
+                <v-chip v-if="row.t2_done" size="x-small" variant="tonal" color="warning">T2</v-chip>
+                <v-chip v-if="row.t3_done" size="x-small" variant="tonal" color="warning">T3</v-chip>
+                <v-chip v-if="row.t4_done" size="x-small" variant="tonal" color="error">T4</v-chip>
+                <span
+                  v-if="!hasTriggered(row)"
+                  class="text-caption text-medium-emphasis"
+                >等待触发</span>
+              </div>
+            </td>
+          </tr>
+        </tbody>
+      </v-table>
+      <EmptyState
+        v-else
+        icon="mdi-shield-outline"
+        title="当前没有持仓"
+        description="引擎处于待机巡检状态；有持仓后这里会显示每个仓位已挂的保护线与减仓进度。"
+      />
     </PageCard>
 
     <!-- v2 动作轨迹：什么时候、因为哪条线、减了多少 -->
@@ -479,11 +256,318 @@
         </v-list-item>
       </v-list>
     </PageCard>
+
+    <!-- 参数设置：40 个控件收进三组折叠面板，标题行带当前值摘要 -->
+    <PageCard icon="mdi-tune" title="参数设置" spaced>
+      <template #badges>
+        <v-btn
+          size="small"
+          color="primary"
+          variant="tonal"
+          prepend-icon="mdi-content-save"
+          :loading="saving"
+          @click="saveConfig"
+        >
+          保存参数
+        </v-btn>
+      </template>
+
+      <v-expansion-panels>
+        <!-- 组 1：核心参数 -->
+        <v-expansion-panel>
+          <v-expansion-panel-title>
+            <div class="d-flex flex-wrap align-baseline ga-2">
+              <span class="text-subtitle-2 font-weight-medium">核心参数</span>
+              <span class="text-caption text-medium-emphasis">{{ coreSummary }}</span>
+            </div>
+          </v-expansion-panel-title>
+          <v-expansion-panel-text>
+            <v-row dense>
+              <v-col cols="12" sm="6" md="3">
+                <SmartSelect
+                  v-model="form.timeframe"
+                  :items="timeframes"
+                  label="结构判定周期"
+                ></SmartSelect>
+              </v-col>
+              <v-col cols="12" sm="6" md="3">
+                <v-text-field
+                  v-model.number="form.tp1_r_multiple"
+                  type="number"
+                  step="0.1"
+                  min="0.1"
+                  label="TP1 (R 倍数)"
+                  density="compact"
+                  variant="outlined"
+                  hide-details
+                ></v-text-field>
+              </v-col>
+              <v-col cols="12" sm="6" md="3">
+                <v-text-field
+                  v-model.number="form.tp2_r_multiple"
+                  type="number"
+                  step="0.1"
+                  min="0.1"
+                  label="TP2 (R 倍数)"
+                  density="compact"
+                  variant="outlined"
+                  hide-details
+                ></v-text-field>
+              </v-col>
+              <v-col cols="12" sm="6" md="3">
+                <v-text-field
+                  v-model.number="form.tp3_r_multiple"
+                  type="number"
+                  step="0.1"
+                  min="0.1"
+                  label="躺平 (R 倍数)"
+                  density="compact"
+                  variant="outlined"
+                  hide-details
+                ></v-text-field>
+              </v-col>
+              <v-col cols="12" sm="6" md="3">
+                <v-text-field
+                  v-model.number="form.t1_structure_lookback"
+                  type="number"
+                  min="2"
+                  label="T1 结构回看(根)"
+                  density="compact"
+                  variant="outlined"
+                  hide-details
+                ></v-text-field>
+              </v-col>
+              <v-col cols="12" sm="6" md="3">
+                <v-text-field
+                  v-model.number="form.t2_structure_lookback"
+                  type="number"
+                  min="2"
+                  label="T2 结构回看(根)"
+                  density="compact"
+                  variant="outlined"
+                  hide-details
+                ></v-text-field>
+              </v-col>
+              <v-col cols="12" sm="6" md="3">
+                <v-text-field
+                  v-model.number="form.t3_structure_lookback"
+                  type="number"
+                  min="2"
+                  label="T3 结构回看(根)"
+                  density="compact"
+                  variant="outlined"
+                  hide-details
+                ></v-text-field>
+              </v-col>
+              <v-col cols="12" sm="6" md="3">
+                <v-text-field
+                  v-model.number="form.structure_buffer_atr"
+                  type="number"
+                  step="0.1"
+                  min="0"
+                  label="结构缓冲 (ATR)"
+                  density="compact"
+                  variant="outlined"
+                  hide-details
+                ></v-text-field>
+              </v-col>
+            </v-row>
+          </v-expansion-panel-text>
+        </v-expansion-panel>
+
+        <!-- 组 2：v2 分档参数（结构 + ATR 四档） -->
+        <v-expansion-panel>
+          <v-expansion-panel-title>
+            <div class="d-flex flex-wrap align-baseline ga-2">
+              <span class="text-subtitle-2 font-weight-medium">v2 分档参数</span>
+              <span class="text-caption text-medium-emphasis">{{ v2Summary }}</span>
+            </div>
+          </v-expansion-panel-title>
+          <v-expansion-panel-text>
+            <v-row dense>
+              <v-col cols="12" sm="6" md="3">
+                <SmartSelect
+                  v-model="form.engine_version"
+                  :items="engineVersions"
+                  label="风控引擎版本"
+                ></SmartSelect>
+              </v-col>
+              <v-col cols="12" sm="6" md="3">
+                <SmartSelect
+                  v-model="form.v2_timeframe"
+                  :items="timeframes"
+                  label="v2 结构判定周期"
+                ></SmartSelect>
+              </v-col>
+              <v-col cols="12" sm="6" md="3">
+                <v-text-field
+                  v-model.number="form.risk_min_pct"
+                  type="number"
+                  step="0.005"
+                  min="0.001"
+                  max="0.5"
+                  label="最小单笔风险（占价格比例）"
+                  density="compact"
+                  variant="outlined"
+                  hide-details
+                ></v-text-field>
+              </v-col>
+              <v-col cols="12" sm="6" md="3">
+                <v-text-field
+                  v-model.number="form.risk_max_pct"
+                  type="number"
+                  step="0.01"
+                  min="0.001"
+                  max="0.5"
+                  label="最大单笔风险（占价格比例）"
+                  density="compact"
+                  variant="outlined"
+                  hide-details
+                ></v-text-field>
+              </v-col>
+            </v-row>
+            <v-row dense class="mt-1">
+              <v-col v-for="(_, i) in 4" :key="`tier-${i}`" cols="6" sm="3" md="3">
+                <v-text-field
+                  v-model.number="form.tier_ratios[i]"
+                  type="number"
+                  step="0.05"
+                  min="0"
+                  max="1"
+                  :label="`T${i + 1} 减仓比例${i === 3 ? '（全平档）' : ''}`"
+                  density="compact"
+                  variant="outlined"
+                  hide-details
+                ></v-text-field>
+              </v-col>
+            </v-row>
+            <v-row dense class="mt-1">
+              <v-col v-for="(_, i) in 4" :key="`confirm-${i}`" cols="6" sm="3" md="3">
+                <v-text-field
+                  v-model.number="form.tier_confirm_sec[i]"
+                  type="number"
+                  step="5"
+                  min="0"
+                  max="600"
+                  :label="`T${i + 1} 持续确认（秒）`"
+                  density="compact"
+                  variant="outlined"
+                  hide-details
+                ></v-text-field>
+              </v-col>
+            </v-row>
+            <v-row dense class="mt-1">
+              <v-col cols="12" sm="6" md="3">
+                <v-text-field
+                  v-model.number="form.breakeven_trigger_r"
+                  type="number"
+                  step="0.1"
+                  min="0.1"
+                  max="100"
+                  label="保本触发（R）"
+                  density="compact"
+                  variant="outlined"
+                  hide-details
+                ></v-text-field>
+              </v-col>
+              <v-col cols="12" sm="6" md="3">
+                <v-text-field
+                  v-model.number="form.trailing_atr_mult"
+                  type="number"
+                  step="0.5"
+                  min="0.5"
+                  max="20"
+                  label="追踪止损（ATR 倍数）"
+                  density="compact"
+                  variant="outlined"
+                  hide-details
+                ></v-text-field>
+              </v-col>
+              <v-col cols="12" sm="6" md="3">
+                <v-text-field
+                  v-model.number="form.v2_poll_interval_sec"
+                  type="number"
+                  step="1"
+                  min="1"
+                  max="60"
+                  label="巡检间隔（秒）"
+                  density="compact"
+                  variant="outlined"
+                  hide-details
+                ></v-text-field>
+              </v-col>
+            </v-row>
+            <v-alert type="info" variant="tonal" density="compact" class="mt-3 text-caption">
+              四档合计应等于 100%：越破越重，T4 为全平档。交易所 STOP 只做兜底（灾难线再往外 1.5 ATR），
+              正常情况由这四档先动作；减一档，止损就推进到下一档。
+            </v-alert>
+          </v-expansion-panel-text>
+        </v-expansion-panel>
+
+        <!-- 组 3：执行开关（浮盈保护 · 紧急止损 · 灾难止损） -->
+        <v-expansion-panel>
+          <v-expansion-panel-title>
+            <div class="d-flex flex-wrap align-baseline ga-2">
+              <span class="text-subtitle-2 font-weight-medium">执行开关</span>
+              <span class="text-caption text-medium-emphasis">{{ switchSummary }}</span>
+            </div>
+          </v-expansion-panel-title>
+          <v-expansion-panel-text>
+            <v-row dense>
+              <v-col cols="12" sm="6" md="3">
+                <v-switch
+                  v-model="form.profit_protection_enabled"
+                  label="浮盈保护（上移止损）"
+                  color="primary"
+                  density="compact"
+                  inset
+                  hide-details
+                ></v-switch>
+              </v-col>
+              <v-col cols="12" sm="6" md="3">
+                <v-switch
+                  v-model="form.emergency_enabled"
+                  label="紧急结构止损"
+                  color="primary"
+                  density="compact"
+                  inset
+                  hide-details
+                ></v-switch>
+              </v-col>
+              <v-col cols="12" sm="6" md="3">
+                <v-switch
+                  v-model="form.exchange_hard_stop_enabled"
+                  label="交易所灾难止损单"
+                  color="primary"
+                  density="compact"
+                  inset
+                  hide-details
+                ></v-switch>
+              </v-col>
+              <v-col cols="12" sm="6" md="3">
+                <v-text-field
+                  v-model.number="form.hard_stop_min_distance_pct"
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  max="1"
+                  label="灾难止损最小距离 (比例)"
+                  density="compact"
+                  variant="outlined"
+                  hide-details
+                ></v-text-field>
+              </v-col>
+            </v-row>
+          </v-expansion-panel-text>
+        </v-expansion-panel>
+      </v-expansion-panels>
+    </PageCard>
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
+import { useDisplay } from 'vuetify'
 import api from '@/services/api'
 import { useSnackbarStore } from '@/stores/snackbar'
 import { getErrorMessage } from '@/utils/errors'
@@ -495,6 +579,7 @@ import { directionTone } from '@/utils/tone'
 import type { ProtectionConfig, ProtectionPositionRow, ProtectionStatus } from '@/models/types'
 
 const snackbarStore = useSnackbarStore()
+const display = useDisplay()
 
 const timeframes = ['15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d']
 
@@ -551,6 +636,49 @@ const form = reactive({
 const isV2 = computed(() =>
   (status.value.engine_version ?? form.engine_version ?? 'v2') === 'v2',
 )
+
+// ---- 断点：xs 卡片化 / sm+ 表格 / lg 才显示「开仓价」列 ----
+const isXs = computed(() => display.xs.value)
+const lgAndUp = computed(() => display.lgAndUp.value)
+
+// ---- 折叠面板标题行的当前值摘要（收起状态也能读到关键值） ----
+const onOff = (value: boolean): string => (value ? '开' : '关')
+const coreSummary = computed(
+  () =>
+    `TP1 ${form.tp1_r_multiple}R / TP2 ${form.tp2_r_multiple}R / 躺平 ${form.tp3_r_multiple}R / 回看 ${form.t1_structure_lookback} 根`,
+)
+const v2Summary = computed(
+  () =>
+    `引擎 ${form.engine_version.toUpperCase()} / 风险 ${form.risk_min_pct}–${form.risk_max_pct} / 追踪 ${form.trailing_atr_mult} ATR / 巡检 ${form.v2_poll_interval_sec}s`,
+)
+const switchSummary = computed(
+  () =>
+    `浮盈保护 ${onOff(form.profit_protection_enabled)} / 紧急止损 ${onOff(form.emergency_enabled)} / 灾难止损 ${onOff(form.exchange_hard_stop_enabled)}`,
+)
+
+// ---- xs 守卫卡片展开态 ----
+const expandedGuardRows = ref<Set<string>>(new Set())
+const guardRowKey = (row: ProtectionPositionRow): string => `${row.symbol}-${row.side}`
+const isGuardRowExpanded = (row: ProtectionPositionRow): boolean =>
+  expandedGuardRows.value.has(guardRowKey(row))
+const toggleGuardRow = (row: ProtectionPositionRow): void => {
+  const key = guardRowKey(row)
+  const next = new Set(expandedGuardRows.value)
+  if (next.has(key)) {
+    next.delete(key)
+  } else {
+    next.add(key)
+  }
+  expandedGuardRows.value = next
+}
+
+const stopText = (row: ProtectionPositionRow): string => {
+  if (row.protected_stop) return formatNumber(row.protected_stop)
+  if (row.stop_price) return formatNumber(row.stop_price)
+  return '—'
+}
+const tierText = (row: ProtectionPositionRow): string =>
+  row.tier_levels?.length ? row.tier_levels.map((v) => formatNumber(v)).join(' / ') : '—'
 
 let pollTimer: number | undefined
 
@@ -675,3 +803,25 @@ onUnmounted(() => {
   }
 })
 </script>
+
+<style scoped>
+/* xs 守卫卡片：只写结构，配色全部走主题令牌 */
+.guard-card {
+  border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+  border-radius: 10px;
+  padding: 10px 12px;
+  cursor: pointer;
+  min-width: 0;
+}
+.guard-card__symbol {
+  font-size: 14px;
+  font-weight: 600;
+}
+.guard-card__grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 4px;
+  margin-top: 6px;
+  color: rgba(var(--v-theme-on-surface), 0.72);
+}
+</style>
