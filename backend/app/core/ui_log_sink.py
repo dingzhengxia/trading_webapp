@@ -47,6 +47,10 @@ def _forward(message) -> None:
     if level is None or "[仓位保护]" in text:
         # notifier 已推送 UI 的告警不重复转发
         return
+    # 仓位保护的 INFO 全是心跳/状态行（每仓每轮一条“巡检中/止盈止损位/黑天鹅监控:正常”），
+    # 几十个仓位下来会把真正的告警淹没。这类只留控制台，UI 只收 SUCCESS/WARNING/ERROR 事件。
+    if record["name"].startswith("app.protection") and level == "info":
+        return
     prefix = next((p for mod, p in _SOURCE_PREFIX if record["name"].startswith(mod)), "")
     try:
         loop = asyncio.get_running_loop()

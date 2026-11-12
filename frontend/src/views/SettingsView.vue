@@ -105,10 +105,11 @@ const coinPoolsManagerRef = ref<InstanceType<typeof CoinPoolsManager> | null>(nu
 const handleSave = async () => {
   if (activeTab.value === 'general') {
     if (settingsStore.settings) {
-      const ok = await settingsStore.saveGeneralSettings(settingsStore.settings)
+      const result = await settingsStore.saveGeneralSettings(settingsStore.settings)
       useSnackbarStore().show({
-        message: ok ? '配置已保存' : '配置保存失败，请查看日志详情',
-        color: ok ? 'success' : 'error',
+        message: result.ok ? '配置已保存' : `保存失败：${result.detail}`,
+        color: result.ok ? 'success' : 'error',
+        timeout: result.ok ? 3000 : 8000,
       })
     }
   } else if (activeTab.value === 'coin_pools') {

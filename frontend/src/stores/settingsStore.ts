@@ -4,6 +4,7 @@ import { ref } from 'vue'
 import type { UserSettings } from '@/models/types'
 import api from '@/services/api'
 import { useUiStore } from './uiStore'
+import { getErrorMessage, getErrorStatus } from '@/utils/errors'
 
 const defaultSettings: UserSettings = {
   api_key: '',
@@ -100,8 +101,10 @@ export const useSettingsStore = defineStore('settings', () => {
     availableShortCoins.value = shortPool
   }
 
-  async function saveGeneralSettings(newSettings: UserSettings | null): Promise<boolean> {
-    if (!newSettings) return false
+  async function saveGeneralSettings(
+    newSettings: UserSettings | null,
+  ): Promise<{ ok: boolean; detail: string }> {
+    if (!newSettings) return { ok: false, detail: '配置尚未加载完成' }
     // 过滤空字符串/NaN：输入框清空时 Vuetify 给出 ''，若原样落库会让杠杆、止损百分比变成非法值
     const payload: Record<string, unknown> = {}
     for (const [key, value] of Object.entries(newSettings)) {
@@ -116,18 +119,18 @@ export const useSettingsStore = defineStore('settings', () => {
         level: 'success',
         timestamp: new Date().toLocaleTimeString(),
       })
-      return true
+      return { ok: true, detail: '' }
     } catch (error) {
       console.error('Failed to save settings:', error)
-      // 把服务端 detail 带出来：400/校验失败时只说“保存失败”无法定位是哪一项
-      const detail =
-        (error as { response?: { data?: { detail?: unknown } } })?.response?.data?.detail
+      // 服务端 detail 必须原样带给用户：只说“保存失败”等于让人去翻日志
+      const status = getErrorStatus(error)
+      const detail = `${getErrorMessage(error)}${status ? `（HTTP ${status}）` : ''}`
       uiStore.logStore.addLog({
-        message: `自动保存配置失败！${detail ? `（${String(detail)}）` : ''}`,
+        message: `配置保存失败：${detail}`,
         level: 'error',
         timestamp: new Date().toLocaleTimeString(),
       })
-      return false
+      return { ok: false, detail }
     }
   }
 
@@ -137,16 +140,25 @@ export const useSettingsStore = defineStore('settings', () => {
    * 直接 POST 而不更新 store 会导致“下次任意页面保存整包设置时把旧值写回”，
    * 因此所有局部设置写入都应走这里。
    */
-  async function patchSettings(partial: Partial<UserSettings>): Promise<boolean> {
+  async function patchSettings(
+    partial: Partial<UserSettings>,
+  ): Promise<{ ok: boolean; detail: string }> {
     if (settings.value) {
       Object.assign(settings.value, partial)
     }
     try {
       await api.post('/api/settings', partial)
-      return true
+      return { ok: true, detail: '' }
     } catch (error) {
       console.error('Failed to patch settings:', error)
-      return false
+      const status = getErrorStatus(error)
+      const detail = `${getErrorMessage(error)}${status ? `（HTTP ${status}）` : ''}`
+      uiStore.logStore.addLog({
+        message: `配置保存失败：${detail}`,
+        level: 'error',
+        timestamp: new Date().toLocaleTimeString(),
+      })
+      return { ok: false, detail }
     }
   }
 

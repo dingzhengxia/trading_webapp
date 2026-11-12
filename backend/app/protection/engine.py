@@ -1418,7 +1418,8 @@ async def watch_symbol_position(exchange, symbol, side):
             key = _state_key(symbol, side)
 
             now_time = time.time()
-            if now_time - last_heartbeat_time > 60:
+            # 心跳降噪：默认 15 分钟一条（44 个仓位每分钟一条会把日志抽屉刷满）
+            if now_time - last_heartbeat_time > float(conf.get("patrol_log_interval_sec", 900.0)):
                 logger.info(f"[{symbol}] 🛡️ 巡检中... 当前{ '做多' if side=='long' else '做空' }仓位: {contracts} | 开仓均价: {entry_price}")
                 last_heartbeat_time = now_time
 
@@ -1651,7 +1652,9 @@ async def watch_symbol_position(exchange, symbol, side):
                 emergency, details = await _emergency_signal(exchange, symbol, side, conf)
 
                 if details:
-                    logger.info(
+                    # 常规状态行属于每轮噪音：正常走 DEBUG（只进控制台），真正触发才升到 INFO
+                    logger.log(
+                        "INFO" if emergency else "DEBUG",
                         f"[{symbol}] 🚨 黑天鹅监控 | 方向:{side} | "
                         f"当前波动:{details.get('move',0):.4f} | "
                         f"触发阈值:{details.get('threshold',0):.4f} | "

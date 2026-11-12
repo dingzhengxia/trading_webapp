@@ -467,22 +467,40 @@ const removeListItemValue = (listType: 'long' | 'short', value: string) => {
 const toList = (value: string | number | (string | number)[] | null | undefined): string[] =>
   Array.isArray(value) ? value.map(String) : []
 
+// 只提交被改动的那几个键：避免某个历史遗留的越界值把整包保存一起拖死
+const persistPartial = async (partial: Record<string, unknown>, label: string) => {
+  const result = await settingsStore.patchSettings(partial)
+  if (result.ok) {
+    lastSavedAt.value = Date.now()
+    lastSavedJson = snapshot()
+  } else {
+    useSnackbarStore().show({
+      message: `${label}保存失败：${result.detail}`,
+      color: 'error',
+      timeout: 8000,
+    })
+  }
+}
+
 const setLongCoinList = (value: string | number | (string | number)[] | null | undefined) => {
   if (!settingsStore.settings) return
-  settingsStore.settings.long_coin_list = toList(value)
-  persistNow() // 选币是点选动作，不能等 1.5s 防抖：用户往往选完就刷新
+  const list = toList(value)
+  settingsStore.settings.long_coin_list = list
+  persistPartial({ long_coin_list: list }, '做多币种')
 }
 
 const setShortCoinList = (value: string | number | (string | number)[] | null | undefined) => {
   if (!settingsStore.settings) return
-  settingsStore.settings.short_coin_list = toList(value)
-  persistNow()
+  const list = toList(value)
+  settingsStore.settings.short_coin_list = list
+  persistPartial({ short_coin_list: list }, '做空币种')
 }
 
 const setBenchmarkCoins = (value: string | number | (string | number)[] | null | undefined) => {
   if (!settingsStore.settings) return
-  settingsStore.settings.rebalance_benchmark_coin = toList(value)
-  persistNow()
+  const list = toList(value)
+  settingsStore.settings.rebalance_benchmark_coin = list
+  persistPartial({ rebalance_benchmark_coin: list }, '基准币种')
 }
 
 const rebalanceMethods = [{ value: 'multi_factor_weakest', text: '多因子弱势策略' }]
@@ -501,13 +519,19 @@ const persistNow = async () => {
   const before = snapshot()
   saveSettingsDebounced.cancel()
   saving.value = true
-  const ok = await settingsStore.saveGeneralSettings(settingsStore.settings)
+  const result = await settingsStore.saveGeneralSettings(settingsStore.settings)
   saving.value = false
-  if (ok) {
+  if (result.ok) {
     lastSavedAt.value = Date.now()
     lastSavedJson = before
   } else {
-    useSnackbarStore().show({ message: '配置保存失败，请查看日志详情', color: 'error' })
+    // 直接把服务端原因贴出来（例如“open_maker_retries 超出允许范围 [0,10]”），
+    // 不要让用户为了看原因再去翻日志抽屉
+    useSnackbarStore().show({
+      message: `保存失败：${result.detail}`,
+      color: 'error',
+      timeout: 8000,
+    })
   }
 }
 

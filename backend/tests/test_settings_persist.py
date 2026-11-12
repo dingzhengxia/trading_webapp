@@ -71,6 +71,25 @@ def test_partial_update_keeps_other_keys(client):
     assert after["total_long_position_value"] == before["total_long_position_value"]
 
 
+def test_retry_counts_above_old_limit_are_accepted(client):
+    """重试次数上限曾是 10，用户已存 15 时整包保存被 400 拒绝，连改币种都存不进去。"""
+    for value in (10, 15, 50):
+        response = client.post(
+            "/api/settings",
+            json={"open_maker_retries": value, "close_maker_retries": value},
+            headers={"X-API-KEY": TEST_KEY},
+        )
+        assert response.status_code == 200, response.text
+        stored = _get_settings(client)
+        assert stored["open_maker_retries"] == value
+
+    # 仍然拦明显离谱的值
+    response = client.post("/api/settings", json={"open_maker_retries": 999},
+                           headers={"X-API-KEY": TEST_KEY})
+    assert response.status_code == 400
+    assert "open_maker_retries" in response.json()["detail"]
+
+
 def test_masked_secret_is_not_overwritten(client):
     """前端回写掩码（含 ****）时不能覆盖真实密钥。"""
     assert client.post("/api/settings", json={"api_key": "real-key-12345678"},

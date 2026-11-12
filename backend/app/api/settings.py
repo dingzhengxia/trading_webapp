@@ -30,8 +30,10 @@ NUMERIC_RANGES: Dict[str, tuple] = {
     'short_take_profit_percentage': (0, 1000, False),
     'long_trailing_stop_callback_rate': (0.1, 20, False),
     'short_trailing_stop_callback_rate': (0.1, 20, False),
-    'open_maker_retries': (0, 10, True),
-    'close_maker_retries': (0, 10, True),
+    # 重试次数的上限按“用户可能已存过更大值”放宽到 50：
+    # 上限卡太死会让整包保存直接 400，连改币种这种无关改动都存不进去。
+    'open_maker_retries': (0, 50, True),
+    'close_maker_retries': (0, 50, True),
     'open_order_fill_timeout_seconds': (1, 600, True),
     'close_order_fill_timeout_seconds': (1, 600, True),
     'signal_auto_trade_value_usd': (1, 1e7, False),
