@@ -103,6 +103,7 @@ class FakeMarket:
 def paper_settings(**overrides):
     settings = {
         'signal_paper_enabled': True,
+        'signal_exit_mode': 'atr',
         'signal_paper_sl_atr': 1.0,
         'signal_paper_tp_r': 2.0,
         'signal_paper_max_bars': 3,
@@ -115,6 +116,14 @@ def paper_settings(**overrides):
         'signal_auto_trade_confirmation_window_seconds': 300,
         'signal_auto_trade_cooldown_seconds': 0,
         'signal_auto_trade_max_positions': 3,
+        # 出场规则（实盘同款）：默认 percent 模式读这些键，atr 模式要求该方向已启用
+        'enable_long_sl_tp': True,
+        'enable_short_sl_tp': True,
+        'long_stop_loss_percentage': 50.0,
+        'long_take_profit_percentage': 100.0,
+        'short_stop_loss_percentage': 80.0,
+        'short_take_profit_percentage': 150.0,
+        'leverage': 20,
     }
     settings.update(overrides)
     return settings

@@ -5,6 +5,7 @@ from typing import Set
 import ccxt.async_support as ccxt
 
 from ..config import constants
+from ..core import exit_rules
 from ..models.schemas import Position
 
 
@@ -189,17 +190,18 @@ async def set_tp_sl_for_position_async(exchange: ccxt.binanceusdm, position: Pos
             return True
         return False
 
-    # 4. 固定止盈止损
-    leverage = float(config.get('leverage', 1) or 1)
-    if leverage <= 0:
-        leverage = 1.0
+    # 4. 固定止盈止损（价格计算统一走 core.exit_rules，与纸面跟踪共用同一份实现）
+    prices = exit_rules.exit_prices(
+        entry_price, constants.SIDE_LONG if is_long else constants.SIDE_SHORT, config,
+        mode=exit_rules.PERCENT_MODE)  # 实盘没有 ATR 数据，固定走百分比口径
+    if prices is None:
+        await async_logger(f"ℹ️ {position.symbol} 止盈止损参数无效或未启用，跳过固定挂单。", "info")
+        return True
 
     success = True
 
-    sl_perc = float(config.get(f'{side_key}_stop_loss_percentage', 0) or 0)
-    if sl_perc > 0:
-        sl_ratio = sl_perc / 100 / leverage
-        sl_trigger = entry_price * (1 - sl_ratio) if is_long else entry_price * (1 + sl_ratio)
+    sl_trigger = prices.get('stop_loss')
+    if sl_trigger is not None:
         res = await _place_conditional_order_async(
             exchange, full_symbol, exit_side, contracts, sl_trigger,
             constants.ORDER_TYPE_STOP_MARKET, async_logger
@@ -210,10 +212,8 @@ async def set_tp_sl_for_position_async(exchange: ccxt.binanceusdm, position: Pos
             await async_logger(f"❌ {position.symbol} 固定止损下单失败", "error")
             success = False
 
-    tp_perc = float(config.get(f'{side_key}_take_profit_percentage', 0) or 0)
-    if tp_perc > 0:
-        tp_ratio = tp_perc / 100 / leverage
-        tp_trigger = entry_price * (1 + tp_ratio) if is_long else entry_price * (1 - tp_ratio)
+    tp_trigger = prices.get('take_profit')
+    if tp_trigger is not None:
         res = await _place_conditional_order_async(
             exchange, full_symbol, exit_side, contracts, tp_trigger,
             constants.ORDER_TYPE_TAKE_PROFIT_MARKET, async_logger

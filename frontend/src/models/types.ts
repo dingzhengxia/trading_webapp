@@ -199,6 +199,7 @@ export interface SignalConfig {
   signal_ohlcv_cache_seconds: number
   signal_dingtalk_enabled: boolean
   signal_paper_enabled: boolean
+  signal_exit_mode: 'percent' | 'atr'
   signal_paper_sl_atr: number
   signal_paper_tp_r: number
   signal_paper_max_bars: number
@@ -245,6 +246,7 @@ export interface ForwardStatRow {
 export interface SignalTracking {
   params: {
     enabled: boolean
+    exit_mode: 'percent' | 'atr'
     sl_atr: number
     tp_r: number
     max_bars: number

@@ -21,7 +21,7 @@ from typing import Any, Dict, List, Optional
 
 from loguru import logger
 
-from ..core import database
+from ..core import database, exit_rules
 from ..core.tasks import cancel_task
 from . import outcomes
 from .analysis.trend import timeframe_to_minutes
@@ -96,6 +96,7 @@ class OutcomeTracker:
                 if isinstance(b, int) or str(b).isdigit()]
         return {
             'enabled': bool(s.get('signal_paper_enabled', False)),
+            'exit_mode': exit_rules.exit_mode(s),
             'sl_atr': float(s.get('signal_paper_sl_atr', 1.5) or 1.5),
             'tp_r': float(s.get('signal_paper_tp_r', 2.0) or 2.0),
             'max_bars': int(s.get('signal_paper_max_bars', 6) or 6),
@@ -174,7 +175,7 @@ class OutcomeTracker:
             stats['keys'] += 1
             stats['forward'] += self._record_forward(items['signals'], df, params)
             stats['closed'] += self._settle_positions(items['positions'], df)
-            stats['opened'] += self._open_pending(items['pending'], df, params)
+            stats['opened'] += self._open_pending(items['pending'], df, params, settings)
 
         if stats['forward'] or stats['closed'] or stats['opened']:
             _save(PAPER_POSITIONS_KEY, self._positions)
@@ -249,7 +250,8 @@ class OutcomeTracker:
         return created - created % step
 
     # ------------------------------------------------------------ 纸面持仓
-    def _open_pending(self, signals: List[Dict[str, Any]], df, params: Dict[str, Any]) -> int:
+    def _open_pending(self, signals: List[Dict[str, Any]], df, params: Dict[str, Any],
+                      settings: Dict[str, Any]) -> int:
         opened = 0
         for signal in signals:
             key = (signal.get('full_symbol') or signal.get('symbol'), signal.get('timeframe'))
@@ -264,8 +266,10 @@ class OutcomeTracker:
                 continue
 
             direction = signal['direction']
-            risk = params['sl_atr'] * atr
-            sign = 1 if direction == 'long' else -1
+            prices = exit_rules.exit_prices(entry, direction, settings, atr=atr)
+            if prices is None:
+                # 该方向未启用止盈止损（或参数无效）：只按时间止损跟踪
+                prices = {'mode': 'none', 'stop_loss': None, 'take_profit': None}
             self._positions.append({
                 'id': uuid.uuid4().hex[:12],
                 'symbol': signal.get('symbol'),
@@ -276,8 +280,9 @@ class OutcomeTracker:
                 'entry_price': round(entry, 8),
                 'entry_ts': int(df['timestamp'].iloc[index]),
                 'atr': round(atr, 8),
-                'stop_loss': round(entry - sign * risk, 8),
-                'take_profit': round(entry + sign * params['tp_r'] * risk, 8),
+                'stop_loss': prices['stop_loss'],
+                'take_profit': prices['take_profit'],
+                'exit_mode': prices['mode'],
                 'max_bars': params['max_bars'],
                 'value_usd': params['value_usd'],
                 'opened_at': _now_iso(),

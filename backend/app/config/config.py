@@ -97,8 +97,11 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     # 推送量能门槛：静态币(signal_scan_static_symbols)实时全推，
     # 其它币要求成交量达到「当前量/动态基准」≥ 该倍数才推送；0 表示不过滤
     'signal_push_volume_multiplier': 2.0,
-    # 纸面跟踪：复用自动开仓过滤链，只记录不下单；出场 = ATR 止损 / R 倍数止盈 / 超时平仓
+    # 纸面跟踪：复用自动开仓过滤链，只记录不下单
     'signal_paper_enabled': False,
+    # 出场规则模式：percent = 与「设置」页的止盈止损百分比一致（÷杠杆折算价格，实盘同款）；
+    # atr = 用下面的 signal_paper_sl_atr / tp_r（研究用）
+    'signal_exit_mode': 'percent',
     'signal_paper_sl_atr': 1.5,
     'signal_paper_tp_r': 2.0,
     'signal_paper_max_bars': 6,

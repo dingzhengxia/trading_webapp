@@ -410,6 +410,29 @@
           验证「这套信号真的能不能赚」。
         </v-alert>
 
+        <v-row dense align="center" class="mb-2">
+          <v-col cols="12" md="4">
+            <v-btn-toggle
+              :model-value="exitMode"
+              mandatory
+              divided
+              density="compact"
+              variant="outlined"
+              @update:model-value="onChangeExitMode"
+            >
+              <v-btn value="percent" size="small">用现有止盈止损</v-btn>
+              <v-btn value="atr" size="small">ATR 研究模式</v-btn>
+            </v-btn-toggle>
+          </v-col>
+          <v-col cols="12" md="8" class="text-caption text-grey">
+            {{
+              exitMode === 'percent'
+                ? '与「设置」页的止盈止损完全一致（保证金百分比 ÷ 杠杆 → 价格距离），实盘挂的是同一套价格。'
+                : '止损 = N × ATR(14)，止盈 = R × 止损距离；只用于研究对比，不影响实盘挂单。'
+            }}
+          </v-col>
+        </v-row>
+
         <v-row dense align="center">
           <v-col cols="12" sm="6" md="3">
             <v-switch
@@ -433,6 +456,9 @@
               density="compact"
               variant="outlined"
               hide-details
+              :disabled="exitMode !== 'atr'"
+              :hint="exitMode === 'atr' ? undefined : '仅在 ATR 模式生效'"
+              persistent-hint
               @update:model-value="paperDirty = true"
             ></v-text-field>
           </v-col>
@@ -447,6 +473,9 @@
               density="compact"
               variant="outlined"
               hide-details
+              :disabled="exitMode !== 'atr'"
+              :hint="exitMode === 'atr' ? undefined : '仅在 ATR 模式生效'"
+              persistent-hint
               @update:model-value="paperDirty = true"
             ></v-text-field>
           </v-col>
@@ -731,6 +760,7 @@ const defaultSignalConfig: SignalConfig = {
   signal_ohlcv_cache_seconds: 300,
   signal_dingtalk_enabled: true,
   signal_paper_enabled: false,
+  signal_exit_mode: 'percent',
   signal_paper_sl_atr: 1.5,
   signal_paper_tp_r: 2,
   signal_paper_max_bars: 6,
@@ -767,7 +797,15 @@ const pushVolumeDirty = ref(false)
 
 // ------------------------------------------------- 纸面跟踪（只记录不下单）
 const emptyTracking = (): SignalTracking => ({
-  params: { enabled: false, sl_atr: 1.5, tp_r: 2, max_bars: 6, value_usd: 100, forward_bars: [4, 12] },
+  params: {
+    enabled: false,
+    exit_mode: 'percent',
+    sl_atr: 1.5,
+    tp_r: 2,
+    max_bars: 6,
+    value_usd: 100,
+    forward_bars: [4, 12],
+  },
   open_positions: [],
   trades: [],
   paper_stats: {
@@ -786,6 +824,7 @@ const savingPaperToggle = ref(false)
 const paperDirty = ref(false)
 const paperForm = ref({ slAtr: 1.5, tpR: 2, maxBars: 6 })
 const paperEnabled = computed(() => tracking.value.params.enabled)
+const exitMode = computed(() => config.value.signal_exit_mode)
 const paperFormValid = computed(
   () =>
     Number(paperForm.value.slAtr) >= 0.2 &&
@@ -982,6 +1021,7 @@ const mergeConfig = (raw: Partial<SignalConfig> | undefined): SignalConfig => {
     ),
     signal_dingtalk_enabled: source.signal_dingtalk_enabled !== false,
     signal_paper_enabled: source.signal_paper_enabled === true,
+    signal_exit_mode: source.signal_exit_mode === 'atr' ? 'atr' : 'percent',
     signal_paper_sl_atr: toNumber(source.signal_paper_sl_atr, fallback.signal_paper_sl_atr),
     signal_paper_tp_r: toNumber(source.signal_paper_tp_r, fallback.signal_paper_tp_r),
     signal_paper_max_bars: toNumber(source.signal_paper_max_bars, fallback.signal_paper_max_bars),
@@ -1038,6 +1078,7 @@ const mergeTracking = (raw: unknown): SignalTracking => {
   return {
     params: {
       enabled: params.enabled === true,
+      exit_mode: params.exit_mode === 'atr' ? 'atr' : 'percent',
       sl_atr: toNumber(params.sl_atr, base.params.sl_atr),
       tp_r: toNumber(params.tp_r, base.params.tp_r),
       max_bars: toNumber(params.max_bars, base.params.max_bars),
@@ -1328,6 +1369,31 @@ const onTogglePaper = async (value: unknown): Promise<void> => {
     })
   } finally {
     savingPaperToggle.value = false
+  }
+}
+
+const onChangeExitMode = async (value: unknown): Promise<void> => {
+  const mode = value === 'atr' ? 'atr' : 'percent'
+  if (savingPaperConfig.value || mode === exitMode.value) return
+  savingPaperConfig.value = true
+  const previous = config.value.signal_exit_mode
+  config.value.signal_exit_mode = mode
+  try {
+    await api.post('/api/signals/config', { signal_exit_mode: mode })
+    snackbarStore.show({
+      message: mode === 'percent' ? '已改用现有止盈止损（实盘同款）。' : '已切换到 ATR 研究模式。',
+      color: 'success',
+    })
+    pushLog('[前端] 出场模式: ' + (mode === 'percent' ? '现有止盈止损' : 'ATR 研究模式'), 'info')
+    await fetchSignals(true)
+  } catch (error: unknown) {
+    config.value.signal_exit_mode = previous
+    snackbarStore.show({
+      message: '切换出场模式失败: ' + getErrorMessage(error),
+      color: 'error',
+    })
+  } finally {
+    savingPaperConfig.value = false
   }
 }
 

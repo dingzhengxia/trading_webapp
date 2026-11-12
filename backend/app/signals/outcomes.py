@@ -60,8 +60,11 @@ def forward_return(df: pd.DataFrame, index: int, bars: int, direction: str) -> O
 
 
 def simulate_exit(df: pd.DataFrame, index: int, direction: str, entry_price: float,
-                  stop_loss: float, take_profit: float, max_bars: int) -> Optional[Dict[str, Any]]:
+                  stop_loss: Optional[float], take_profit: Optional[float],
+                  max_bars: int) -> Optional[Dict[str, Any]]:
     """逐根检查止损/止盈/超时，返回 {exit_price, exit_ts, bars_held, reason}。
+
+    stop_loss / take_profit 允许为 None（该方向只启用了一边，或走纯时间止损）。
 
     - 从信号**次根**开始检查（信号 bar 已收线，不能假装在里面成交）；
     - 同一根内止损与止盈都触及时按**止损优先**（保守，避免回测偏乐观）；
@@ -80,8 +83,8 @@ def simulate_exit(df: pd.DataFrame, index: int, direction: str, entry_price: flo
         high = float(df['high'].iloc[j])
         low = float(df['low'].iloc[j])
         open_px = float(df['open'].iloc[j])
-        hit_stop = low <= stop_loss if is_long else high >= stop_loss
-        hit_target = high >= take_profit if is_long else low <= take_profit
+        hit_stop = stop_loss is not None and (low <= stop_loss if is_long else high >= stop_loss)
+        hit_target = take_profit is not None and (high >= take_profit if is_long else low <= take_profit)
         if hit_stop:
             exit_px = min(stop_loss, open_px) if is_long else max(stop_loss, open_px)
             return _exit(exit_px, df, j, entry_idx, 'stop')

@@ -25,6 +25,7 @@ class Series:
         tr = pd.concat([df["high"] - df["low"],
                         (df["high"] - prev_close).abs(),
                         (df["low"] - prev_close).abs()], axis=1).max(axis=1)
+        self.ts = df["timestamp"].to_numpy()
         self.open = df["open"].to_numpy()
         self.high = df["high"].to_numpy()
         self.low = df["low"].to_numpy()
