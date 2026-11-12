@@ -1,5 +1,6 @@
 # backend/app/core/trading_service.py
 import asyncio
+import inspect
 import threading
 import time
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
@@ -174,11 +175,14 @@ class TradingService:
             raise
         return {"message": f"任务 '{task_name}' 已成功提交到后台。"}
 
-    async def auto_open_from_signal(self, signal: Dict[str, Any], config: Dict[str, Any]) -> bool:
+    async def auto_open_from_signal(self, signal: Dict[str, Any], config: Dict[str, Any],
+                                    on_opened: Optional[Callable[[], Any]] = None) -> bool:
         """信号驱动的自动开仓入口。
 
         复用现有 process_order_with_sl_tp_async（限价 post-only、USDC 优先、开仓后挂 SL/TP）；
         与用户任务互斥：_is_running 时记 warning 并 skip（不打断用户任务）。
+
+        :param on_opened: 真正成交后回调（用于登记实盘出场/超时平仓），失败不影响开仓结果
         """
         if self._is_running:
             await log_message("已有交易任务在运行，跳过本次信号自动开仓。", "warning")
@@ -194,7 +198,7 @@ class TradingService:
         signal_desc = f"{plan['coin']} {direction} ({signal.get('strategy')} @ {signal.get('timeframe')})"
 
         submitted = self.schedule_task(
-            "信号自动开仓", self._auto_open_task(plan, config))
+            "信号自动开仓", self._auto_open_task(plan, config, on_opened))
         if submitted is None:
             await log_message("已有交易任务在运行，跳过本次信号自动开仓。", "warning")
             return False
@@ -202,12 +206,21 @@ class TradingService:
                           f"金额 {plan['value']} USD。", "info")
         return True
 
-    async def _auto_open_task(self, plan: Dict[str, Any], config: Dict[str, Any]):
+    async def _auto_open_task(self, plan: Dict[str, Any], config: Dict[str, Any],
+                              on_opened: Optional[Callable[[], Any]] = None):
         config = dict(config)
         config.setdefault('leverage', 1)
         async with get_exchange_for_task() as exchange:
-            return await process_order_with_sl_tp_async(
+            opened = await process_order_with_sl_tp_async(
                 exchange, plan, config, log_message, self._stop_event)
+        if opened and on_opened is not None:
+            try:
+                result = on_opened()
+                if inspect.isawaitable(result):
+                    await result
+            except Exception as e:  # noqa: BLE001 - 登记失败不应改变开仓结果
+                await log_message(f"⚠️ 开仓后登记出场失败（不影响持仓）: {e}", "warning")
+        return opened
 
     async def _trading_loop_task(self, config: Dict[str, Any]):
         # P1-1 / P1-5：整个任务只创建一个 exchange，worker 共享

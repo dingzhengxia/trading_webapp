@@ -393,11 +393,14 @@
         </div>
     </PageCard>
 
-    <!-- 卡 3：纸面跟踪与结果（只记录不下单，为调参提供反馈闭环） -->
-    <PageCard icon="mdi-chart-timeline-variant" title="纸面跟踪与结果" spaced>
+    <!-- 卡 3：出场层（实盘条件单 + 纸面跟踪共用一套规则） -->
+    <PageCard icon="mdi-chart-timeline-variant" title="出场层（实盘与纸面共用）" spaced>
       <template #badges>
         <v-chip size="small" variant="tonal" :color="paperEnabled ? 'success' : 'grey'">
-          {{ paperEnabled ? '纸面跟踪中' : '未启用' }}
+          {{ paperEnabled ? '纸面跟踪中' : '纸面未启用' }}
+        </v-chip>
+        <v-chip size="small" variant="tonal" :color="liveTimeoutEnabled ? 'warning' : 'grey'">
+          {{ liveTimeoutEnabled ? '实盘超时平仓' : '实盘不超时' }}
         </v-chip>
         <v-chip v-if="tracking.paper_stats.total > 0" size="small" variant="tonal" color="info">
           已平仓 {{ tracking.paper_stats.total }} 笔 / 胜率 {{ tracking.paper_stats.win_rate }}%
@@ -405,9 +408,8 @@
       </template>
 
         <v-alert type="info" variant="tonal" density="compact" class="mb-3 text-caption">
-          纸面跟踪复用自动开仓的过滤链（方向/策略/周期/确认数/冷却/持仓上限），<b>只记录不下单</b>，
-          出场按 ATR 止损 / R 倍数止盈 / 超时平仓模拟。用来在不冒资金风险的前提下，
-          验证「这套信号真的能不能赚」。
+          止盈止损的价格由 <code>core/exit_rules.py</code> <b>统一计算</b>：实盘条件单和纸面模拟读同一份实现，
+          改一个参数两边同时改。<b>ATR 口径会真实改变实盘挂单</b>（拿不到 ATR 时自动回退百分比，绝不裸奔）。
         </v-alert>
 
         <v-row dense align="center" class="mb-2">
@@ -420,15 +422,15 @@
               variant="outlined"
               @update:model-value="onChangeExitMode"
             >
-              <v-btn value="percent" size="small">用现有止盈止损</v-btn>
-              <v-btn value="atr" size="small">ATR 研究模式</v-btn>
+              <v-btn value="percent" size="small">百分比（现设）</v-btn>
+              <v-btn value="atr" size="small">ATR 止损</v-btn>
             </v-btn-toggle>
           </v-col>
           <v-col cols="12" md="8" class="text-caption text-grey">
             {{
               exitMode === 'percent'
-                ? '与「设置」页的止盈止损完全一致（保证金百分比 ÷ 杠杆 → 价格距离），实盘挂的是同一套价格。'
-                : '止损 = N × ATR(14)，止盈 = R × 止损距离；只用于研究对比，不影响实盘挂单。'
+                ? '价格距离 = 设置页的保证金百分比 ÷ 杠杆；实盘条件单与纸面模拟用的是同一套价格。'
+                : '止损 = N × ATR，止盈 = R × 止损距离；实盘条件单也按这个挂（ATR 取下方周期），拿不到 ATR 时回退百分比。'
             }}
           </v-col>
         </v-row>
@@ -503,6 +505,68 @@
             >
               保存参数
             </v-btn>
+          </v-col>
+        </v-row>
+
+        <!-- 实盘侧：ATR 取数周期 + 超时平仓开关（只作用于信号自动开的仓） -->
+        <v-divider class="my-3"></v-divider>
+        <v-row dense align="center">
+          <v-col cols="12" sm="6" md="3">
+            <v-select
+              v-model="paperForm.atrTimeframe"
+              :items="ATR_TIMEFRAMES"
+              label="实盘 ATR 周期"
+              density="compact"
+              variant="outlined"
+              hide-details
+              :disabled="exitMode !== 'atr'"
+              :hint="exitMode === 'atr' ? undefined : '仅 ATR 模式生效'"
+              persistent-hint
+              @update:model-value="paperDirty = true"
+            ></v-select>
+          </v-col>
+          <v-col cols="12" sm="6" md="4">
+            <v-switch
+              :model-value="liveTimeoutEnabled"
+              :loading="savingLiveTimeout"
+              label="实盘超时平仓"
+              color="warning"
+              inset
+              hide-details
+              @update:model-value="onToggleLiveTimeout"
+            ></v-switch>
+          </v-col>
+          <v-col cols="12" md="5" class="text-caption text-grey">
+            持有满「最大持有」根就市价平掉<b>信号自动开</b>的仓；手动仓不动。
+            回测里这是唯一不拖累收益的出场口径，但参数敏感，建议先纸面对照。
+          </v-col>
+        </v-row>
+
+        <v-row v-if="liveExit.positions.length > 0" dense class="mt-2">
+          <v-col cols="12">
+            <div class="text-subtitle-2 mb-1">实盘已登记（{{ liveExit.positions.length }}）</div>
+            <v-table density="compact">
+              <thead>
+                <tr>
+                  <th class="text-left">币种</th>
+                  <th class="text-left">方向</th>
+                  <th class="text-left">周期</th>
+                  <th class="text-left">已持有</th>
+                  <th class="text-left">上限</th>
+                  <th class="text-left">策略</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="row in liveExit.positions" :key="row.full_symbol || row.symbol">
+                  <td>{{ row.symbol }}</td>
+                  <td :class="directionColor(row.side)">{{ directionLabel(row.side) }}</td>
+                  <td>{{ row.timeframe || '—' }}</td>
+                  <td>{{ row.bars_held ?? '—' }} 根</td>
+                  <td>{{ row.max_bars }} 根</td>
+                  <td>{{ row.strategy || '—' }}</td>
+                </tr>
+              </tbody>
+            </v-table>
           </v-col>
         </v-row>
 
@@ -671,6 +735,7 @@ import api from '@/services/api'
 import { useSnackbarStore } from '@/stores/snackbar'
 import { useUiStore } from '@/stores/uiStore'
 import type {
+  LiveExitStatus,
   SignalConfig,
   SignalDirection,
   SignalPushStatus,
@@ -764,6 +829,8 @@ const defaultSignalConfig: SignalConfig = {
   signal_paper_sl_atr: 1.5,
   signal_paper_tp_r: 2,
   signal_paper_max_bars: 6,
+  signal_live_exit_timeframe: '4h',
+  signal_live_exit_timeout_enabled: false,
   signal_forward_bars: [4, 12],
 }
 
@@ -822,8 +889,14 @@ const tracking = ref<SignalTracking>(emptyTracking())
 const savingPaperConfig = ref(false)
 const savingPaperToggle = ref(false)
 const paperDirty = ref(false)
-const paperForm = ref({ slAtr: 1.5, tpR: 2, maxBars: 6 })
+const ATR_TIMEFRAMES = ['15m', '1h', '4h', '1d']
+const paperForm = ref({ slAtr: 1.5, tpR: 2, maxBars: 6, atrTimeframe: '4h' })
 const paperEnabled = computed(() => tracking.value.params.enabled)
+
+// ------------------------------------------------- 实盘出场层（超时平仓 + 登记）
+const liveExit = ref<LiveExitStatus>({ enabled: false, max_bars: 6, positions: [] })
+const savingLiveTimeout = ref(false)
+const liveTimeoutEnabled = computed(() => liveExit.value.enabled)
 const exitMode = computed(() => config.value.signal_exit_mode)
 const paperFormValid = computed(
   () =>
@@ -1025,6 +1098,10 @@ const mergeConfig = (raw: Partial<SignalConfig> | undefined): SignalConfig => {
     signal_paper_sl_atr: toNumber(source.signal_paper_sl_atr, fallback.signal_paper_sl_atr),
     signal_paper_tp_r: toNumber(source.signal_paper_tp_r, fallback.signal_paper_tp_r),
     signal_paper_max_bars: toNumber(source.signal_paper_max_bars, fallback.signal_paper_max_bars),
+    signal_live_exit_timeframe: ATR_TIMEFRAMES.includes(String(source.signal_live_exit_timeframe))
+      ? (source.signal_live_exit_timeframe as SignalConfig['signal_live_exit_timeframe'])
+      : fallback.signal_live_exit_timeframe,
+    signal_live_exit_timeout_enabled: source.signal_live_exit_timeout_enabled === true,
     signal_forward_bars: Array.isArray(source.signal_forward_bars)
       ? (source.signal_forward_bars as unknown[]).map((bar) => toNumber(bar, 4))
       : [...fallback.signal_forward_bars],
@@ -1107,6 +1184,7 @@ const syncPaperForm = (next: SignalTracking): void => {
     slAtr: next.params.sl_atr,
     tpR: next.params.tp_r,
     maxBars: next.params.max_bars,
+    atrTimeframe: config.value.signal_live_exit_timeframe,
   }
 }
 
@@ -1140,6 +1218,7 @@ const fetchSignals = async (silent: boolean): Promise<void> => {
     pushStatus.value = mergePushStatus(data.push)
     if (!pushVolumeDirty.value) pushVolumeInput.value = pushStatus.value.signal_push_volume_multiplier
     tracking.value = mergeTracking(data.tracking)
+    liveExit.value = data.live_exit ?? { enabled: false, max_bars: 6, positions: [] }
     syncPaperForm(tracking.value)
     syncScopeForm(nextConfig)
     syncAutoForm(nextConfig)
@@ -1372,6 +1451,33 @@ const onTogglePaper = async (value: unknown): Promise<void> => {
   }
 }
 
+const onToggleLiveTimeout = async (value: unknown): Promise<void> => {
+  const enabled = Boolean(value)
+  if (savingLiveTimeout.value || enabled === liveTimeoutEnabled.value) return
+  savingLiveTimeout.value = true
+  const previous = liveExit.value.enabled
+  liveExit.value.enabled = enabled
+  try {
+    await api.post('/api/signals/config', { signal_live_exit_timeout_enabled: enabled })
+    snackbarStore.show({
+      message: enabled
+        ? `实盘超时平仓已启用：自动仓持有满 ${liveExit.value.max_bars} 根将市价平掉。`
+        : '实盘超时平仓已关闭（已有登记保留，仅对账）。',
+      color: enabled ? 'warning' : 'success',
+    })
+    pushLog('[前端] 实盘超时平仓已' + (enabled ? '启用' : '关闭') + '。', enabled ? 'warning' : 'info')
+    await fetchSignals(true)
+  } catch (error: unknown) {
+    liveExit.value.enabled = previous
+    snackbarStore.show({
+      message: '切换实盘超时平仓失败: ' + getErrorMessage(error),
+      color: 'error',
+    })
+  } finally {
+    savingLiveTimeout.value = false
+  }
+}
+
 const onChangeExitMode = async (value: unknown): Promise<void> => {
   const mode = value === 'atr' ? 'atr' : 'percent'
   if (savingPaperConfig.value || mode === exitMode.value) return
@@ -1404,13 +1510,14 @@ const savePaperConfig = async (): Promise<void> => {
     signal_paper_sl_atr: Number(paperForm.value.slAtr),
     signal_paper_tp_r: Number(paperForm.value.tpR),
     signal_paper_max_bars: Number(paperForm.value.maxBars),
+    signal_live_exit_timeframe: paperForm.value.atrTimeframe,
   }
   try {
     await api.post('/api/signals/config', payload)
     paperDirty.value = false
-    snackbarStore.show({ message: '纸面出场参数已保存。', color: 'success' })
+    snackbarStore.show({ message: '出场参数已保存（实盘与纸面同时生效）。', color: 'success' })
     pushLog(
-      `[前端] 纸面出场参数: 止损 ${payload.signal_paper_sl_atr} ATR / 止盈 ${payload.signal_paper_tp_r}R / 最多 ${payload.signal_paper_max_bars} 根`,
+      `[前端] 出场参数: 止损 ${payload.signal_paper_sl_atr} ATR / 止盈 ${payload.signal_paper_tp_r}R / 最多 ${payload.signal_paper_max_bars} 根 / ATR 周期 ${payload.signal_live_exit_timeframe}`,
       'success',
     )
     await fetchSignals(true)

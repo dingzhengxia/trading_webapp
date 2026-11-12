@@ -1,21 +1,54 @@
 # backend/app/core/exit_rules.py
-"""出场规则的唯一实现（实盘条件单与纸面跟踪共用）。
+"""出场规则的唯一实现（实盘条件单、超时平仓、纸面跟踪共用）。
 
-两种模式，二选一（`signal_exit_mode`）：
+两种价格口径，由 `signal_exit_mode` 二选一：
 
 - `percent`（默认，与原有止盈止损设置完全一致）：
   止损/止盈按「保证金百分比 ÷ 杠杆」折算成价格距离，读
   `enable_{side}_sl_tp` / `{side}_stop_loss_percentage` / `{side}_take_profit_percentage`。
   例：20 倍杠杆、long 止损 50% → 价格 -2.5%；止盈 100% → 价格 +5%。
 - `atr`：止损 = `signal_paper_sl_atr × ATR`，止盈 = `signal_paper_tp_r × 止损距离`。
+  实盘的 ATR 由 `signals.market_data.atr_at()` 取（周期 = `signal_live_exit_timeframe`），
+  取不到时调用方回退 percent。
 
-调用方：`logic/sl_tp_logic_async.set_tp_sl_for_position_async`（真实挂单）与
-`signals/tracker.OutcomeTracker`（纸面出场）。两者用同一份计算，纸面结果才代表实盘。
+另有「时间出场」：`bars_held()` 给出持仓已走的完整根数，实盘
+（`signals/exit_executor.py`）与纸面（`signals/tracker.py`）都用它判断是否该按
+`signal_paper_max_bars` 超时平仓。
+
+调用方：
+- `logic/sl_tp_logic_async.set_tp_sl_for_position_async` —— 真实条件单挂单；
+- `signals/exit_executor.LiveExitExecutor` —— 实盘超时平仓；
+- `signals/tracker.OutcomeTracker` —— 纸面模拟出场。
+三处用同一份计算，纸面结果才代表实盘。
 """
+import time
 from typing import Any, Dict, Optional
 
 PERCENT_MODE = 'percent'
 ATR_MODE = 'atr'
+
+#: 周期 -> 毫秒（超时平仓按"持有多少根"判定，实盘与纸面用同一张表）
+TIMEFRAME_MS = {
+    '1m': 60_000, '3m': 180_000, '5m': 300_000, '15m': 900_000,
+    '30m': 1_800_000, '1h': 3_600_000, '2h': 7_200_000,
+    '4h': 14_400_000, '6h': 21_600_000, '12h': 43_200_000, '1d': 86_400_000,
+}
+
+
+def timeframe_ms(timeframe: str) -> Optional[int]:
+    """周期字符串 -> 毫秒；未知周期返回 None（调用方应跳过超时判定而不是猜）。"""
+    return TIMEFRAME_MS.get(str(timeframe or '').lower())
+
+
+def bars_held(entry_ts_ms: Optional[int], timeframe: str, now_ms: Optional[int] = None) -> Optional[int]:
+    """已持有的完整 K 线根数；参数缺失时返回 None。"""
+    if entry_ts_ms is None:
+        return None
+    span = timeframe_ms(timeframe)
+    if not span:
+        return None
+    now_ms = now_ms if now_ms is not None else int(time.time() * 1000)
+    return max(0, int((int(now_ms) - int(entry_ts_ms)) // span))
 
 
 def exit_mode(config: Dict[str, Any]) -> str:

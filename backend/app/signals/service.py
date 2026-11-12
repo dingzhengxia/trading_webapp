@@ -1,9 +1,10 @@
 # backend/app/signals/service.py
 """信号引擎组装与生命周期管理（main.py lifespan 与 API 路由共用）。
 
-- store / market_data / auto_trader / scanner 全部为模块级单例，惰性创建；
+- store / market_data / auto_trader / scanner / tracker / exit_executor 全部惰性单例；
 - 共享 exchange 通过 get_shared_exchange 懒加载，扫描未启用时不会触达交易所；
-- start/stop 供 lifespan 与 POST /api/signals/config 热应用调用。
+- start/stop 供 lifespan 与 POST /api/signals/config 热应用调用；
+- 行情单例由 `market_data.shared_market_data()` 持有，实盘 ATR 挂单也读这一份缓存。
 """
 import asyncio
 from typing import Any, Dict, Optional
@@ -12,50 +13,30 @@ from loguru import logger
 
 from ..config.config import load_settings
 from ..core.exchange_manager import get_shared_exchange
-from ..core.rest_guardian import RestGuardian
 from ..core.trading_service import trading_service
 from ..logic.exchange_logic_async import fetch_positions_with_pnl_async
 from .auto_trader import SignalAutoTrader
 from .dispatcher import SignalDispatcher
-from .market_data import MarketDataService
+from .exit_executor import LiveExitExecutor
+from .market_data import MarketDataService, shared_market_data
 from .runtime import emit_signal  # noqa: F401  供外部统一导入
 from .scanner import SignalScanner
-from .config_store import load_signal_config
 from .signal_store import SignalStore
 from .tracker import OutcomeTracker
 
 store = SignalStore()
 auto_trader: Optional[SignalAutoTrader] = None
 scanner: Optional[SignalScanner] = None
-market_data: Optional[MarketDataService] = None
 tracker: Optional[OutcomeTracker] = None
-
-
-def _build_rest_guardian() -> RestGuardian:
-    """用策略配置（DB 优先，见 config_store）的 market_settings.api_limit 初始化 RestGuardian。"""
-    try:
-        api_limit = load_signal_config().get('market_settings', {}).get('api_limit', {})
-    except Exception:
-        api_limit = {}
-    return RestGuardian(api_limit)
-
-
-def _get_market_data() -> MarketDataService:
-    global market_data
-    if market_data is None:
-        settings = load_settings()
-        market_data = MarketDataService(
-            get_shared_exchange,
-            guardian=_build_rest_guardian(),
-            ticker_ttl=float(settings.get('signal_ticker_cache_seconds', 30) or 30),
-            ohlcv_ttl=float(settings.get('signal_ohlcv_cache_seconds', 30) or 30),
-        )
-    return market_data
+exit_executor: Optional[LiveExitExecutor] = None
 
 
 def get_market_data() -> MarketDataService:
-    """对外暴露行情服务单例（周期报告等模块复用同一缓存与限流器）。"""
-    return _get_market_data()
+    """对外暴露行情服务单例（周期报告 / 实盘 ATR 止损复用同一缓存与限流器）。
+
+    单例由 `market_data.shared_market_data()` 管理，本函数只是稳定入口。
+    """
+    return shared_market_data()
 
 
 def _get_auto_trader() -> SignalAutoTrader:
@@ -75,7 +56,7 @@ def _get_tracker() -> OutcomeTracker:
     if tracker is None:
         tracker = OutcomeTracker(
             settings_loader=load_settings,
-            market_data=_get_market_data(),
+            market_data=get_market_data(),
             store=store,
         )
     return tracker
@@ -87,7 +68,7 @@ def _get_scanner() -> SignalScanner:
         scanner = SignalScanner(
             settings_loader=load_settings,
             store=store,
-            market_data=_get_market_data(),
+            market_data=get_market_data(),
             exchange_provider=get_shared_exchange,
         )
     return scanner
@@ -100,10 +81,32 @@ async def _fetch_positions() -> list:
     return await fetch_positions_with_pnl_async(exchange, settings.get('leverage', 1))
 
 
+async def _close_position(full_symbol: str) -> bool:
+    """实盘超时平仓：市价全平指定交易对（只对登记过的自动仓调用）。"""
+    from ..core.websocket_manager import log_message
+    from ..logic.exchange_logic_async import close_position_async
+
+    exchange = await get_shared_exchange()
+    return await close_position_async(exchange, full_symbol, 1.0, log_message, asyncio.Event())
+
+
+def _get_exit_executor() -> LiveExitExecutor:
+    global exit_executor
+    if exit_executor is None:
+        exit_executor = LiveExitExecutor(
+            settings_loader=load_settings,
+            position_provider=_fetch_positions,
+            close_callback=_close_position,
+        )
+    return exit_executor
+
+
 async def _open_from_signal(signal: Dict[str, Any]) -> bool:
-    """open_callback：委托 TradingService.auto_open_from_signal。"""
+    """open_callback：委托 TradingService.auto_open_from_signal，成交后登记实盘出场。"""
     config = load_settings()
-    return await trading_service.auto_open_from_signal(signal, config)
+    return await trading_service.auto_open_from_signal(
+        signal, config,
+        on_opened=lambda: _get_exit_executor().register(signal))
 
 
 # ------------------------------------------------------------------ 消费循环
@@ -134,6 +137,7 @@ async def startup_signals() -> None:
     _runtime.load_alert_states()
     await start_consumer()
     _get_tracker().start()
+    _get_exit_executor().start()
     settings = load_settings()
     store.update_auto_status(auto_trade_enabled=bool(settings.get('signal_auto_trade_enabled', False)))
     if settings.get('signal_scan_enabled', False):
@@ -148,6 +152,8 @@ async def shutdown_signals() -> None:
         await scanner.stop()
     if tracker is not None:
         await tracker.stop()
+    if exit_executor is not None:
+        await exit_executor.stop()
     await stop_consumer()
 
 

@@ -62,9 +62,16 @@ def test_get_signals_structure(client, api_key):
     response = client.get("/api/signals", headers={"X-API-KEY": api_key})
     assert response.status_code == 200
     data = response.json()
-    assert set(data) == {"status", "signals", "config", "strategy", "push", "tracking"}
+    assert set(data) == {"status", "signals", "config", "strategy", "push", "tracking", "live_exit"}
     assert set(data["tracking"]) == {"params", "open_positions", "trades", "paper_stats", "forward_stats"}
     assert data["tracking"]["params"]["sl_atr"] > 0
+    # 实盘出场层：默认不超时平仓，登记表可为空
+    assert set(data["live_exit"]) == {"enabled", "max_bars", "positions"}
+    assert data["live_exit"]["enabled"] is False
+    assert data["live_exit"]["positions"] == []
+    # 统一出场层：ATR 取数周期有默认值，实盘挂单与纸面共用该配置
+    assert data["config"]["signal_live_exit_timeframe"] in ("15m", "1h", "4h", "1d")
+    assert data["config"]["signal_live_exit_timeout_enabled"] is False
     # 策略参数持久化：来源标记 + 至少含策略表
     assert data["strategy"]["source"] in ("db", "file")
     assert "strategy_params" in data["strategy"]["config"]
@@ -263,3 +270,22 @@ def test_paper_config_bounds(client, api_key):
     assert config["signal_paper_enabled"] is True
     assert config["signal_paper_sl_atr"] == 1.2
     assert config["signal_paper_max_bars"] == 8
+
+
+def test_live_exit_config_bounds(client, api_key):
+    """实盘出场层：ATR 周期必须是已知周期，超时开关是布尔。"""
+    assert client.post("/api/signals/config", json={"signal_live_exit_timeframe": "3d"},
+                       headers={"X-API-KEY": api_key}).status_code == 400
+    ok = client.post("/api/signals/config",
+                     json={"signal_live_exit_timeframe": "1h",
+                           "signal_live_exit_timeout_enabled": True},
+                     headers={"X-API-KEY": api_key})
+    assert ok.status_code == 200
+    config = ok.json()["config"]
+    assert config["signal_live_exit_timeframe"] == "1h"
+    assert config["signal_live_exit_timeout_enabled"] is True
+    # 测试间共享 settings，恢复默认值避免污染结构断言
+    client.post("/api/signals/config",
+                json={"signal_live_exit_timeframe": "4h",
+                      "signal_live_exit_timeout_enabled": False},
+                headers={"X-API-KEY": api_key})

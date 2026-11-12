@@ -98,6 +98,7 @@ async def get_signals() -> Dict[str, Any]:
             "source": config_store.config_source(),
         },
         "tracking": tracker.snapshot(),
+        "live_exit": signal_service._get_exit_executor().snapshot(),
         "push": {
             "dingtalk_configured": dingtalk.is_configured(),
             "dingtalk_enabled": bool(settings.get('dingtalk_enabled', False)),

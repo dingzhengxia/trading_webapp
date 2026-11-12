@@ -133,14 +133,25 @@ async def _place_conditional_order_async(
     return False
 
 
+async def _resolve_atr(full_symbol: str, config: dict, async_logger) -> float | None:
+    """取实盘 ATR（走共享行情服务，带缓存与限流）。失败返回 None，由调用方回退百分比口径。"""
+    timeframe = str(config.get('signal_live_exit_timeframe') or '4h')
+    try:
+        from ..signals.market_data import shared_market_data
+        return await shared_market_data().atr_at(full_symbol, timeframe)
+    except Exception as e:  # noqa: BLE001 - 行情失败不能影响挂单主流程
+        await async_logger(f"⚠️ {full_symbol} 获取 ATR({timeframe}) 失败: {e}", "warning")
+        return None
+
+
 async def set_tp_sl_for_position_async(exchange: ccxt.binanceusdm, position: Position, config: dict, async_logger,
                                        stop_event: asyncio.Event) -> bool:
-    """为一个仓位设置止盈止损。
+    """为一个仓位设置止盈止损（统一走 `core.exit_rules`，与纸面跟踪同一份实现）。
 
-    固定模式：同时挂 STOP_MARKET（止损）与 TAKE_PROFIT_MARKET（止盈），
-    均为 reduceOnly 条件单，trigger 价格按 leverage 换算百分比：
-      long  止损 entry*(1-sl%/100/lev)  止盈 entry*(1+tp%/100/lev)
-      short 止损 entry*(1+sl%/100/lev)  止盈 entry*(1-tp%/100/lev)
+    口径由 `signal_exit_mode` 决定：
+    - `percent`：long 止损 entry*(1-sl%/100/lev)，止盈 entry*(1+tp%/100/lev)；short 反向；
+    - `atr`：止损 = N×ATR，止盈 = R×止损距离（ATR 取 `signal_live_exit_timeframe` 周期）。
+      **ATR 拿不到时自动回退 percent**——绝不因为行情缺失而裸奔不挂止损。
     移动止盈模式：只挂 TRAILING_STOP_MARKET（保持原行为）。
     """
     full_symbol = position.full_symbol
@@ -190,10 +201,18 @@ async def set_tp_sl_for_position_async(exchange: ccxt.binanceusdm, position: Pos
             return True
         return False
 
-    # 4. 固定止盈止损（价格计算统一走 core.exit_rules，与纸面跟踪共用同一份实现）
+    # 4. 固定止盈止损：价格计算统一走 core.exit_rules（与纸面跟踪共用同一份实现）
+    mode = exit_rules.exit_mode(config)
+    atr = await _resolve_atr(full_symbol, config, async_logger) if mode == exit_rules.ATR_MODE else None
     prices = exit_rules.exit_prices(
-        entry_price, constants.SIDE_LONG if is_long else constants.SIDE_SHORT, config,
-        mode=exit_rules.PERCENT_MODE)  # 实盘没有 ATR 数据，固定走百分比口径
+        entry_price, constants.SIDE_LONG if is_long else constants.SIDE_SHORT, config, atr=atr)
+    if prices is None and mode == exit_rules.ATR_MODE and atr is None:
+        # ATR 口径但行情不可用：回退百分比，宁可按老设置挂上，也不裸奔
+        await async_logger(
+            f"⚠️ {position.symbol} ATR 不可用，已回退百分比口径挂止损（避免无保护）。", "warning")
+        prices = exit_rules.exit_prices(
+            entry_price, constants.SIDE_LONG if is_long else constants.SIDE_SHORT, config,
+            mode=exit_rules.PERCENT_MODE)
     if prices is None:
         await async_logger(f"ℹ️ {position.symbol} 止盈止损参数无效或未启用，跳过固定挂单。", "info")
         return True

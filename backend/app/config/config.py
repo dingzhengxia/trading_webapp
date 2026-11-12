@@ -99,12 +99,18 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     'signal_push_volume_multiplier': 2.0,
     # 纸面跟踪：复用自动开仓过滤链，只记录不下单
     'signal_paper_enabled': False,
-    # 出场规则模式：percent = 与「设置」页的止盈止损百分比一致（÷杠杆折算价格，实盘同款）；
-    # atr = 用下面的 signal_paper_sl_atr / tp_r（研究用）
+    # ---- 统一出场层（实盘挂单 + 纸面跟踪共用 core/exit_rules.py 的同一份实现）----
+    # percent = 设置页的 {side}_stop_loss/take_profit_percentage ÷ leverage 折算价格距离；
+    # atr     = N×ATR 止损 + R 倍数止盈（实盘取 signal_live_exit_timeframe 周期的 ATR，
+    #           拿不到时自动回退 percent，绝不裸奔）
     'signal_exit_mode': 'percent',
     'signal_paper_sl_atr': 1.5,
     'signal_paper_tp_r': 2.0,
     'signal_paper_max_bars': 6,
+    # 实盘 ATR 口径使用的周期（ATR 只影响「价格距离多大」，与持仓周期无关）
+    'signal_live_exit_timeframe': '4h',
+    # 实盘超时平仓：持有满 signal_paper_max_bars 根就市价平掉「信号自动开」的仓；默认关闭
+    'signal_live_exit_timeout_enabled': False,
     # 信号前视收益的持有期（单位：根 K 线），用于「信号发出后到底赚不赚」的统计
     'signal_forward_bars': [4, 12],
 

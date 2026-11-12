@@ -430,3 +430,61 @@ ATR 口径同理：2ATR -10.1%、3ATR +1.7%、4ATR -0.4%，全都劣于不挂单
 
 > **复现**：`cd tools/strategy_probe && python exit_pnl.py`（收益表 + 曲线 + 稳定性）、`python exit_sweep.py`（出场参数扫描）。
 
+
+---
+
+## 10. 合并落地：一套出场层，实盘与纸面同源（2026-11-12 第四轮）
+
+### 10.1 合并后长什么样
+
+```
+                    ┌─────────────────────────────┐
+    设置页参数 ────► │  core/exit_rules.py         │ ◄──── signal_exit_mode
+    (百分比/杠杆)    │  · exit_prices()  价格口径   │       signal_paper_sl_atr
+    ATR 行情  ─────► │  · bars_held()    时间口径   │       signal_paper_tp_r
+                    └──────────┬──────────────────┘       signal_paper_max_bars
+                               │                          signal_live_exit_timeframe
+        ┌──────────────────────┼──────────────────────┐
+        ▼                      ▼                      ▼
+  实盘条件单              实盘超时平仓            纸面跟踪
+  sl_tp_logic_async      exit_executor          tracker
+  (STOP/TP_MARKET)       (满 N 根市价平)        (模拟出场)
+```
+
+三处执行器、一份规则。改 `signal_exit_mode` 或任一参数，实盘与纸面同时变。
+
+### 10.2 具体改了什么
+
+| 位置 | 改动 |
+|---|---|
+| `app/core/exit_rules.py` | 新增 `timeframe_ms()` / `bars_held()`；docstring 明确三处调用方 |
+| `app/signals/market_data.py` | 新增 `atr_at()`（复用 TTL 缓存 + RestGuardian + in-flight 去重）、`shared_market_data()` 进程级单例 |
+| `app/logic/sl_tp_logic_async.py` | **去掉"实盘强制 percent"**：`atr` 模式下按 `signal_live_exit_timeframe` 取 ATR；取不到时告警并回退 percent（绝不裸奔） |
+| `app/signals/exit_executor.py` | 新建：超时平仓执行器，60s 一轮，只处理登记过的自动仓 |
+| `app/core/trading_service.py` | `auto_open_from_signal` 增加 `on_opened` 回调，成交后登记实盘持仓 |
+| `app/signals/service.py` | 装配/启停 `LiveExitExecutor`；行情单例改为委托 `shared_market_data()` |
+| `app/api/signals.py` | `GET /api/signals` 增加 `live_exit`（开关 + 登记表 + 已持有根数） |
+| `frontend` | 卡片改名「出场层（实盘与纸面共用）」；新增 ATR 周期选择、实盘超时开关、实盘登记表 |
+
+### 10.3 新增配置
+
+| 键 | 默认 | 说明 |
+|---|---|---|
+| `signal_live_exit_timeframe` | `4h` | 实盘 ATR 用哪个周期算（只影响价格距离，与持仓周期无关） |
+| `signal_live_exit_timeout_enabled` | `false` | 实盘超时平仓总开关 |
+
+`signal_paper_sl_atr` / `tp_r` / `max_bars` 现在是**实盘与纸面共用**的出场参数（键名保留 `paper` 只为兼容已落库的配置）。
+
+### 10.4 三条安全护栏
+
+1. **ATR 拿不到 → 回退 percent**，绝不出现"因为行情接口抖动所以没挂止损"；
+2. **超时平仓只动登记过的自动仓**：登记发生在 `auto_open_from_signal` 真正成交之后
+   （`on_opened` 回调），手动开的仓不在表里，永远被跳过；
+3. **默认全关**：`signal_live_exit_timeout_enabled=false`，部署不会突然改变实盘行为；
+   关掉时执行器只做对账（清理已平仓的登记），不发任何平仓指令。
+
+### 10.5 验收
+
+- 单元测试 `tests/test_live_exit.py`（10 例）：ATR 挂单价格、ATR 缺失回退、超时判定、
+  仓位消失对账、开关关闭不平仓、平仓失败保留登记；
+- 全量 **253 passed**；前端 `vue-tsc` + `vite build` 通过。

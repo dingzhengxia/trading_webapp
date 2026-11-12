@@ -12,6 +12,7 @@ import time
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from ..core.rest_guardian import RestGuardian
+from . import outcomes
 
 # 稳定币基础币种黑名单（从 monitor market_settings.dynamic_scan.exclude_symbols 提取）
 STABLE_BASES = {
@@ -85,6 +86,31 @@ class MarketDataService:
         finally:
             self._ohlcv_inflight.pop(key, None)
 
+    # ------------------------------------------------------------------ ATR
+    async def atr_at(self, symbol: str, timeframe: str, period: int = 14) -> Optional[float]:
+        """取最近一根已收线 K 线的 ATR（简单移动平均 TR），供实盘 ATR 止损使用。
+
+        复用 get_ohlcv 的 TTL 缓存与 in-flight 去重；数据不足或异常时返回 None，
+        调用方必须回退到百分比口径——**绝不能因为拿不到 ATR 就不挂止损**。
+        """
+        try:
+            rows = await self.get_ohlcv(symbol, timeframe, limit=max(int(period) * 3, 100))
+        except Exception:
+            return None
+        if not rows or len(rows) < period + 1:
+            return None
+        try:
+            df = outcomes.to_frame([list(r)[:6] for r in rows])
+        except Exception:
+            return None
+        # 最后一根可能未收线：优先用倒数第二根
+        for idx in (len(df) - 2, len(df) - 1):
+            if 0 <= idx < len(df):
+                value = outcomes.atr_at(df, idx)
+                if value:
+                    return value
+        return None
+
     # ------------------------------------------------------------------ TopN
     async def get_top_symbols_by_volume(self, top_n: int = 100,
                                         exclude: Optional[Sequence[str]] = None) -> List[str]:
@@ -124,3 +150,33 @@ class MarketDataService:
 
         ranked.sort(key=lambda item: item[2], reverse=True)
         return [full_symbol for _, full_symbol, _ in ranked[:max(0, int(top_n))]]
+
+
+# ---------------------------------------------------------------------- 共享单例
+_shared: Optional['MarketDataService'] = None
+
+
+def shared_market_data() -> 'MarketDataService':
+    """进程级共享行情服务（扫描、实盘 ATR 止损、报告共用同一份缓存与限流器）。
+
+    放在本模块而不是 service.py，是为了让 `logic/sl_tp_logic_async` 这种底层模块
+    也能拿到 ATR，而不用反向依赖 `signals.service`（那会形成导入环）。
+    """
+    global _shared
+    if _shared is None:
+        from ..config.config import load_settings
+        from ..core.exchange_manager import get_shared_exchange
+
+        settings = load_settings()
+        try:
+            from .config_store import load_signal_config
+            api_limit = load_signal_config().get('market_settings', {}).get('api_limit', {})
+        except Exception:
+            api_limit = {}
+        _shared = MarketDataService(
+            get_shared_exchange,
+            guardian=RestGuardian(api_limit),
+            ticker_ttl=float(settings.get('signal_ticker_cache_seconds', 30) or 30),
+            ohlcv_ttl=float(settings.get('signal_ohlcv_cache_seconds', 30) or 30),
+        )
+    return _shared

@@ -203,6 +203,8 @@ export interface SignalConfig {
   signal_paper_sl_atr: number
   signal_paper_tp_r: number
   signal_paper_max_bars: number
+  signal_live_exit_timeframe: '15m' | '1h' | '4h' | '1d'
+  signal_live_exit_timeout_enabled: boolean
   signal_forward_bars: number[]
 }
 
@@ -259,12 +261,30 @@ export interface SignalTracking {
   forward_stats: ForwardStatRow[]
 }
 
+export interface LiveExitPosition {
+  symbol: string
+  full_symbol: string
+  side: SignalDirection
+  timeframe: string
+  strategy: string
+  entry_ts: number
+  bars_held: number | null
+  max_bars: number
+}
+
+export interface LiveExitStatus {
+  enabled: boolean
+  max_bars: number
+  positions: LiveExitPosition[]
+}
+
 export interface SignalsResponse {
   status: SignalStatus
   signals: SignalRecord[]
   config: Partial<SignalConfig>
   push?: SignalPushStatus
   tracking?: SignalTracking
+  live_exit?: LiveExitStatus
 }
 // ------------------------------------------------
 
