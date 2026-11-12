@@ -30,7 +30,21 @@
                   @update:model-value="onToggleScan"
                 ></v-switch>
               </v-col>
-              <v-col cols="12" md="9">
+              <v-col cols="12" sm="6" md="3">
+                <v-switch
+                  :model-value="pushStatus.signal_dingtalk_enabled"
+                  :loading="savingDingtalkPush"
+                  :disabled="!pushStatus.dingtalk_configured || !pushStatus.dingtalk_enabled"
+                  label="币种钉钉推送"
+                  color="primary"
+                  inset
+                  hide-details
+                  :hint="pushHint"
+                  persistent-hint
+                  @update:model-value="onToggleDingtalkPush"
+                ></v-switch>
+              </v-col>
+              <v-col cols="12" md="6">
                 <div class="d-flex flex-wrap ga-2">
                   <v-chip size="small" variant="tonal" prepend-icon="mdi-clock-outline">
                     上次扫描: {{ formatTime(status.last_scan_at) }}
@@ -353,6 +367,7 @@ import { useUiStore } from '@/stores/uiStore'
 import type {
   SignalConfig,
   SignalDirection,
+  SignalPushStatus,
   SignalRecord,
   SignalsResponse,
   SignalStatus,
@@ -435,6 +450,7 @@ const defaultSignalConfig: SignalConfig = {
   signal_auto_trade_value_usd: 100,
   signal_ticker_cache_seconds: 30,
   signal_ohlcv_cache_seconds: 300,
+  signal_dingtalk_enabled: true,
 }
 
 const DIRECTION_FILTERS = ['all', 'long', 'short', 'neutral'] as const
@@ -453,6 +469,12 @@ const savingScan = ref(false)
 const savingAutoTrade = ref(false)
 const savingAuto = ref(false)
 const directionFilter = ref<DirectionFilter>('all')
+const savingDingtalkPush = ref(false)
+const pushStatus = ref<SignalPushStatus>({
+  dingtalk_configured: false,
+  dingtalk_enabled: false,
+  signal_dingtalk_enabled: true,
+})
 
 const autoForm = ref<AutoTradeForm>({
   directions: [...defaultSignalConfig.signal_auto_trade_directions],
@@ -470,6 +492,12 @@ const autoFormDirty = ref(false)
 let pollTimer: number | undefined
 
 const autoTradeEnabled = computed(() => config.value.signal_auto_trade_enabled)
+
+const pushHint = computed(() => {
+  if (!pushStatus.value.dingtalk_configured) return '未配置 DINGTALK_WEBHOOK_URL，无法推送'
+  if (!pushStatus.value.dingtalk_enabled) return '需先在「周期报告」页开启钉钉推送总开关'
+  return '同批信号合并为一条消息推送'
+})
 
 const autoFormValid = computed(() => {
   const form = autoForm.value
@@ -525,6 +553,18 @@ const normalizeLastAutoOpen = (value: unknown): string | Record<string, unknown>
   if (typeof value === 'string') return value
   if (value !== null && typeof value === 'object') return value as Record<string, unknown>
   return null
+}
+
+const mergePushStatus = (raw: unknown): SignalPushStatus => {
+  if (raw === null || typeof raw !== 'object') {
+    return { dingtalk_configured: false, dingtalk_enabled: false, signal_dingtalk_enabled: true }
+  }
+  const source = raw as Partial<Record<keyof SignalPushStatus, unknown>>
+  return {
+    dingtalk_configured: source.dingtalk_configured === true,
+    dingtalk_enabled: source.dingtalk_enabled === true,
+    signal_dingtalk_enabled: source.signal_dingtalk_enabled !== false,
+  }
 }
 
 const mergeStatus = (raw: unknown): SignalStatus => {
@@ -603,6 +643,7 @@ const mergeConfig = (raw: Partial<SignalConfig> | undefined): SignalConfig => {
       source.signal_ohlcv_cache_seconds,
       fallback.signal_ohlcv_cache_seconds,
     ),
+    signal_dingtalk_enabled: source.signal_dingtalk_enabled !== false,
   }
 }
 
@@ -660,6 +701,7 @@ const fetchSignals = async (silent: boolean): Promise<void> => {
     signals.value = normalizeSignals(data.signals)
     const nextConfig = mergeConfig(data.config)
     config.value = nextConfig
+    pushStatus.value = mergePushStatus(data.push)
     syncAutoForm(nextConfig)
   } catch (error: unknown) {
     if (!silent) {
@@ -747,6 +789,33 @@ const onToggleScan = async (value: unknown): Promise<void> => {
     })
   } finally {
     savingScan.value = false
+  }
+}
+
+const onToggleDingtalkPush = async (value: unknown): Promise<void> => {
+  const enabled = Boolean(value)
+  if (savingDingtalkPush.value || enabled === pushStatus.value.signal_dingtalk_enabled) return
+  savingDingtalkPush.value = true
+  const previous = pushStatus.value.signal_dingtalk_enabled
+  pushStatus.value.signal_dingtalk_enabled = enabled
+  config.value.signal_dingtalk_enabled = enabled
+  try {
+    await api.post('/api/signals/config', { signal_dingtalk_enabled: enabled })
+    snackbarStore.show({
+      message: enabled ? '币种信号钉钉推送已启用。' : '币种信号钉钉推送已停用。',
+      color: 'success',
+    })
+    pushLog('[前端] 币种信号钉钉推送已' + (enabled ? '启用' : '停用') + '。', 'info')
+    await fetchSignals(true)
+  } catch (error: unknown) {
+    pushStatus.value.signal_dingtalk_enabled = previous
+    config.value.signal_dingtalk_enabled = previous
+    snackbarStore.show({
+      message: '切换钉钉推送开关失败: ' + getErrorMessage(error),
+      color: 'error',
+    })
+  } finally {
+    savingDingtalkPush.value = false
   }
 }
 

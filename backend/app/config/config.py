@@ -92,6 +92,8 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     'signal_auto_trade_cooldown_seconds': 900,
     'signal_auto_trade_max_positions': 5,
     'signal_auto_trade_value_usd': 100.0,
+    # 币种信号的钉钉推送子开关（总开关仍是 dingtalk_enabled；默认开启）
+    'signal_dingtalk_enabled': True,
 
     # 手动交易页持久化预设（选中币种/每行动作与价值/默认价值），随 settings 存入 SQLite
     'manual_trade_preset': {},

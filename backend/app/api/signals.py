@@ -55,16 +55,25 @@ def _validate_enum_fields(update: Dict[str, Any]) -> None:
 
 @router.get("")
 async def get_signals() -> Dict[str, Any]:
-    """扫描状态 + 最近信号 + signal_* 配置。"""
+    """扫描状态 + 最近信号 + signal_* 配置 + 钉钉推送状态。"""
+    from ..config.config import load_settings
+    from ..reports import dingtalk
+
     scanner: Optional[signal_service.SignalScanner] = signal_service.scanner
     if scanner is None:
         status = signal_service.store.snapshot()
     else:
         status = scanner.status()
+    settings = load_settings()
     return {
         "status": status,
         "signals": signal_service.store.recent(200),
         "config": _signal_config_view(),
+        "push": {
+            "dingtalk_configured": dingtalk.is_configured(),
+            "dingtalk_enabled": bool(settings.get('dingtalk_enabled', False)),
+            "signal_dingtalk_enabled": bool(settings.get('signal_dingtalk_enabled', True)),
+        },
     }
 
 

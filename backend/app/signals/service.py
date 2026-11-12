@@ -16,6 +16,7 @@ from ..core.rest_guardian import RestGuardian
 from ..core.tasks import cancel_task
 from ..core.trading_service import trading_service
 from ..logic.exchange_logic_async import fetch_positions_with_pnl_async
+from . import notifier
 from .auto_trader import SignalAutoTrader
 from .market_data import MarketDataService
 from .runtime import emit_signal  # noqa: F401  供外部统一导入
@@ -97,8 +98,15 @@ _consumer_task: Optional[asyncio.Task] = None
 
 
 async def _consume_loop() -> None:
-    """SignalStore 的异步消费 task：runtime.emit_signal 队列 -> 落库 + 自动开仓。"""
+    """SignalStore 的异步消费 task：runtime.emit_signal 队列 -> 落库 + 推送 + 自动开仓。
+
+    同一批（同一次队列排空）的信号合并成一条钉钉消息推送，避免刷屏与机器人限流；
+    推送用独立 task 执行，不阻塞自动开仓。
+    """
     import queue as _queue
+
+    from . import runtime as _runtime
+
     while True:
         try:
             record = await asyncio.to_thread(runtime_queue_get)
@@ -107,14 +115,29 @@ async def _consume_loop() -> None:
             continue
         except asyncio.CancelledError:
             raise
-        store.add(record)
-        try:
-            result = await _get_auto_trader().on_signal(record)
-            if result.get('action') != 'skip':
-                logger.info(f"信号 {record.get('symbol')} {record.get('strategy')} -> "
-                            f"{result.get('action')}: {result.get('reason')}")
-        except Exception as e:
-            logger.error(f"处理信号时异常: {e}")
+
+        # 把队列里已排队的信号一并取出，形成一次合并推送
+        batch = [record]
+        while len(batch) < notifier.MAX_BATCH:
+            try:
+                batch.append(_runtime.signal_queue.get_nowait())
+            except _queue.Empty:
+                break
+
+        for rec in batch:
+            store.add(rec)
+
+        # 通知独立执行：钉钉超时/失败不影响开仓链路
+        asyncio.create_task(notifier.push_signal_batch(batch))
+
+        for rec in batch:
+            try:
+                result = await _get_auto_trader().on_signal(rec)
+                if result.get('action') != 'skip':
+                    logger.info(f"信号 {rec.get('symbol')} {rec.get('strategy')} -> "
+                                f"{result.get('action')}: {result.get('reason')}")
+            except Exception as e:
+                logger.error(f"处理信号时异常: {e}")
 
 
 def runtime_queue_get(timeout: float = 0.5):

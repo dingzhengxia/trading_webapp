@@ -62,16 +62,20 @@ def test_get_signals_structure(client, api_key):
     response = client.get("/api/signals", headers={"X-API-KEY": api_key})
     assert response.status_code == 200
     data = response.json()
-    assert set(data) == {"status", "signals", "config"}
+    assert set(data) == {"status", "signals", "config", "push"}
     # status 结构（MERGE_PLAN §6）
     status = data["status"]
     for key in ("last_scan_at", "next_scan_at", "scanned_symbols", "emitted_count",
                 "error_count", "last_error", "running",
                 "auto_trade_enabled", "last_auto_open"):
         assert key in status
-    # 默认配置：扫描与自动开仓均关闭
+    # 默认配置：扫描与自动开仓均关闭；信号钉钉推送子开关默认开启
     assert data["config"]["signal_scan_enabled"] is False
     assert data["config"]["signal_auto_trade_enabled"] is False
+    assert data["config"]["signal_dingtalk_enabled"] is True
+    # 推送状态：未配置 webhook 时 mock 环境下也不应抛错
+    assert set(data["push"]) == {"dingtalk_configured", "dingtalk_enabled",
+                                 "signal_dingtalk_enabled"}
 
 
 def test_config_rejects_unknown_key(client, api_key):

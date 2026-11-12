@@ -195,12 +195,20 @@ export interface SignalConfig {
   signal_auto_trade_value_usd: number
   signal_ticker_cache_seconds: number
   signal_ohlcv_cache_seconds: number
+  signal_dingtalk_enabled: boolean
+}
+
+export interface SignalPushStatus {
+  dingtalk_configured: boolean
+  dingtalk_enabled: boolean
+  signal_dingtalk_enabled: boolean
 }
 
 export interface SignalsResponse {
   status: SignalStatus
   signals: SignalRecord[]
   config: Partial<SignalConfig>
+  push?: SignalPushStatus
 }
 // ------------------------------------------------
 

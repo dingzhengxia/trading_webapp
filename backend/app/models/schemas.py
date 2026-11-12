@@ -195,3 +195,4 @@ class SignalConfigUpdate(BaseModel):
     signal_auto_trade_cooldown_seconds: Optional[int] = Field(None, ge=0, le=86400 * 7)
     signal_auto_trade_max_positions: Optional[int] = Field(None, ge=1, le=50)
     signal_auto_trade_value_usd: Optional[float] = Field(None, gt=0, le=1_000_000)
+    signal_dingtalk_enabled: Optional[bool] = None
