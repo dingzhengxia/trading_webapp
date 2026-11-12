@@ -204,4 +204,5 @@ class SignalConfigUpdate(BaseModel):
     signal_paper_max_bars: Optional[int] = Field(None, ge=1, le=100)
     signal_live_exit_timeframe: Optional[Literal['15m', '1h', '4h', '1d']] = None
     signal_live_exit_timeout_enabled: Optional[bool] = None
+    signal_live_sltp_guard_enabled: Optional[bool] = None
     signal_forward_bars: Optional[List[int]] = Field(None, min_length=1, max_length=5)

@@ -681,3 +681,49 @@ curl -s -X POST "$HOST/api/settings" -H "X-API-KEY: $KEY" -H "Content-Type: appl
 3. **杠杆与并发**：5x 杠杆 + 并发上限（≤2 时 +29.7bp/笔）比任何出场规则省下的钱都多。
 
 模拟器验证：基线复现第 5 轮结果（1931 笔 / +21.4bp / +50.5% / Sharpe 6.09，逐位一致）。
+
+---
+
+## 13. 手动与自动的统一止盈止损：从"开仓时挂一次"到"持续保证有止损"（2026-11-12 第七轮）
+
+### 13.1 五种开仓入口已经是同一套
+
+手动做多/做空/反手、自动交易任务、仓位再平衡、信号自动开仓、「同步所有止盈止损」按钮，
+全部收敛到 `process_order_with_sl_tp_async → set_tp_sl_for_position_async → core.exit_rules`。
+所以 `signal_exit_mode=atr` 一改，手动单与信号单同时改用 ATR 口径。
+
+差异只有两处，都是刻意的：
+1. **ATR 周期来源**：信号单跟随信号自身周期（`_signal_timeframe`）；手动单没有信号，
+   回退全局 `signal_live_exit_timeframe`（默认 4h）。
+2. **超时平仓只管自动仓**：`exit_executor` 只处理登记过的信号仓，手动仓永不被自动平掉。
+
+### 13.2 真实缺口：挂单失败＝裸奔，只有按钮没有守护
+
+开仓时 `set_tp_sl_for_position_async` 可能因为撤单失败、交易所拒绝、网络抖动而没挂上止损；
+此前系统只会打一条错误日志，仓位就裸奔，直到用户手动点「同步所有止盈止损」。
+这不叫"系统自动"。
+
+### 13.3 落地：止损巡检（sltp_guard）
+
+| 位置 | 改动 |
+|---|---|
+| `logic/sl_tp_logic_async.py` | 新增 `has_protective_order()`（只认 STOP/移动止损类，**止盈单不算保护**）、`ensure_positions_sltp_async()`（缺止损才补挂） |
+| `signals/exit_executor.py` | 新增 `sltp_guard` 注入 + `guard_seconds`（默认 300s）节流；`tick()` 先巡检再对账/平仓，返回值加 `guarded` |
+| `signals/service.py` | 装配 `_guard_sltp()`：共享交易所 + 全量持仓 + 配置开关 |
+| `config.py` / `schemas.py` | 新增 `signal_live_sltp_guard_enabled`，**默认开启** |
+| `api/signals.py` | `live_exit` 增加 `guard_enabled` |
+| 前端 | 出场层卡片新增「止损巡检（缺单自动补挂）」开关 + 说明 |
+
+三条安全约束：
+1. **只补挂、不平仓**：巡检不调用任何平仓接口；
+2. **已有止损跳过**：`has_protective_order` 命中即跳过，不会撤单重挂、不会叠加条件单；
+3. **尊重方向开关**：该方向 `enable_{side}_sl_tp` 与 `enable_{side}_trailing_stop` 都为关闭时，
+   巡检不补挂——用户主动关掉保护的选择不被覆盖。
+
+频率：与超时平仓的 60s tick 解耦，每 300s 一次（一次 `fetch_open_orders`，可忽略的限流占用）。
+
+### 13.4 验收
+
+`tests/test_live_exit.py` 新增 5 例：止盈单不算保护、缺止损补挂（价格为 percent 97.5）、
+已有止损跳过、方向开关关闭不补挂、巡检节流（60s 不重复、300s 再跑）。
+全量 **259 passed**，前端 `vue-tsc` + `vite build` 通过。

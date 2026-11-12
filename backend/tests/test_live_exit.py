@@ -184,7 +184,7 @@ def test_registers_and_keeps_before_deadline(executor_env):
     now['ms'] = 5 * 14_400_000  # 持有 5 根，未满 6
 
     stats = _run(ex.tick())
-    assert stats == {'closed': 0, 'dropped': 0, 'kept': 1}
+    assert stats == {'closed': 0, 'dropped': 0, 'kept': 1, 'guarded': 0}
     assert closed == []
 
 
@@ -207,7 +207,7 @@ def test_drops_register_when_position_gone(executor_env):
     now['ms'] = 99 * 14_400_000
 
     stats = _run(ex.tick())
-    assert stats == {'closed': 0, 'dropped': 1, 'kept': 0}
+    assert stats == {'closed': 0, 'dropped': 1, 'kept': 0, 'guarded': 0}
     assert closed == []
 
 
@@ -219,7 +219,7 @@ def test_disabled_only_reconciles(executor_env):
     now['ms'] = 99 * 14_400_000
 
     stats = _run(ex.tick())
-    assert stats == {'closed': 0, 'dropped': 0, 'kept': 1}
+    assert stats == {'closed': 0, 'dropped': 0, 'kept': 1, 'guarded': 0}
     assert closed == []
 
 
@@ -233,3 +233,89 @@ def test_close_failure_keeps_register(monkeypatch, executor_env):
     stats = _run(ex.tick())
     assert stats['closed'] == 0 and stats['kept'] == 1
     assert len(ex.snapshot()['positions']) == 1
+
+
+# ---------------------------------------------------------------- 止盈止损巡检
+def test_has_protective_order_ignores_take_profit():
+    """止盈单不提供下行保护，不能算已挂止损。"""
+    tp_only = [{'symbol': 'BTC/USDC:USDC', 'type': 'TAKE_PROFIT_MARKET',
+                'side': 'sell', 'reduceOnly': True, 'info': {}}]
+    assert sl_tp_logic_async.has_protective_order(tp_only, 'BTC/USDC:USDC', True) is False
+
+    stop = [{'symbol': 'BTC/USDC:USDC', 'type': 'STOP_MARKET',
+             'side': 'sell', 'reduceOnly': True, 'info': {}}]
+    assert sl_tp_logic_async.has_protective_order(stop, 'BTC/USDC:USDC', True) is True
+    # 方向不对（买单不是多头的止损）
+    assert sl_tp_logic_async.has_protective_order(stop, 'BTC/USDC:USDC', False) is False
+    # 别的币
+    assert sl_tp_logic_async.has_protective_order(stop, 'ETH/USDC:USDC', True) is False
+
+
+def test_guard_places_missing_stop(
+    fake_exchange, async_logger, stop_event, position_factory, fast_sleep,
+):
+    position = position_factory('BTC', 'BTC/USDC:USDC', 'long', contracts=1.0, entry_price=100.0)
+    fake_exchange._open_orders = []
+
+    stats = _run(sl_tp_logic_async.ensure_positions_sltp_async(
+        fake_exchange, [position], dict(BASE), async_logger, stop_event))
+
+    assert stats == {'checked': 1, 'guarded': 1, 'skipped': 0, 'failed': 0}
+    assert _stops(fake_exchange.create_order_calls) == [pytest.approx(97.5)]
+
+
+def test_guard_skips_position_with_stop(
+    fake_exchange, async_logger, stop_event, position_factory,
+):
+    position = position_factory('BTC', 'BTC/USDC:USDC', 'long', contracts=1.0, entry_price=100.0)
+    fake_exchange._open_orders = [{
+        'symbol': 'BTC/USDC:USDC', 'type': 'STOP_MARKET', 'side': 'sell',
+        'reduceOnly': True, 'info': {'type': 'STOP_MARKET', 'reduceOnly': 'true'},
+    }]
+
+    stats = _run(sl_tp_logic_async.ensure_positions_sltp_async(
+        fake_exchange, [position], dict(BASE), async_logger, stop_event))
+
+    assert stats == {'checked': 1, 'guarded': 0, 'skipped': 1, 'failed': 0}
+    assert fake_exchange.create_order_calls == []
+
+
+def test_guard_respects_side_switch(
+    fake_exchange, async_logger, stop_event, position_factory,
+):
+    """该方向未启用止盈止损时巡检不补挂（尊重用户设置，不擅自动仓）。"""
+    position = position_factory('BTC', 'BTC/USDC:USDC', 'long', contracts=1.0, entry_price=100.0)
+    config = dict(BASE, enable_long_sl_tp=False, enable_long_trailing_stop=False)
+
+    stats = _run(sl_tp_logic_async.ensure_positions_sltp_async(
+        fake_exchange, [position], config, async_logger, stop_event))
+
+    assert stats == {'checked': 1, 'guarded': 0, 'skipped': 1, 'failed': 0}
+    assert fake_exchange.create_order_calls == []
+
+
+def test_guard_throttled_by_cooldown(monkeypatch):
+    state = {'positions': {}}
+    monkeypatch.setattr(ee.database, 'get_value', lambda t, k, d=None: state.get(k, d))
+    monkeypatch.setattr(ee.database, 'set_value', lambda t, k, v: state.__setitem__(k, v))
+    now = {'ms': 0}
+    monkeypatch.setattr(ee, '_timestamp_ms', lambda: now['ms'])
+    calls = []
+
+    async def guard():
+        calls.append(now['ms'])
+        return {'guarded': 1}
+
+    async def provider():
+        return []
+
+    async def close(_):
+        return True
+
+    ex = ee.LiveExitExecutor(lambda: {}, provider, close, sltp_guard=guard, guard_seconds=300)
+    assert _run(ex.tick())['guarded'] == 1
+    now['ms'] = 60_000
+    assert _run(ex.tick())['guarded'] == 0
+    now['ms'] = 300_000
+    assert _run(ex.tick())['guarded'] == 1
+    assert len(calls) == 2

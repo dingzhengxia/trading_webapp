@@ -1,15 +1,17 @@
 # backend/app/signals/exit_executor.py
-"""实盘出场执行器：把「超时平仓」这一层从纸面搬到实盘。
+"""实盘出场执行器：止盈止损巡检 + 超时平仓。
 
-职责边界（很重要）：
-- **只管止盈止损之外的"时间出场"**。价格止损/止盈由交易所条件单负责
-  （`logic/sl_tp_logic_async`，价格同样来自 `core/exit_rules`），这里不重复挂单，
-  否则两套逻辑会互相撤单；
-- **只处理"信号自动开仓"的仓位**。手动开的仓不登记、不动，避免误平；
-- 默认关闭（`signal_live_exit_timeout_enabled=false`），开启后按
-  `signal_paper_max_bars` 根 K 线强制平仓——回测显示这是唯一不拖累收益的出场口径；
-- 只做对账：登记表里已不存在的仓位（被手动平掉/止盈止损触发）自动清理。
+两个职责，边界不同（很重要）：
 
+1. **止盈止损巡检**（`sltp_guard`，手动/自动仓一视同仁）：每 `guard_seconds` 拉一次
+   全量挂单，对**完全没有止损**的仓位重新执行 `set_tp_sl_for_position_async` 补挂。
+   开关 `signal_live_sltp_guard_enabled`（默认开）。它只补挂、不平仓，已有止损的仓位跳过。
+2. **超时平仓**（只处理"信号自动开仓"的仓位）：手动开的仓不登记、不动，避免误平。
+   默认关闭（`signal_live_exit_timeout_enabled=false`），开启后按 `signal_paper_max_bars`
+   根 K 线强制平仓——回测显示这是唯一不拖累收益的出场口径。
+
+价格止损/止盈的价格由交易所条件单负责（`logic/sl_tp_logic_async`，价格来自
+`core/exit_rules`），这里不重复计算价格，避免两套逻辑互相撤单。
 状态落 `signal_state` 表的 `live_exit_state` 键，重启不丢。
 """
 import asyncio
@@ -22,6 +24,7 @@ from ..core import database, exit_rules
 
 STATE_KEY = 'live_exit_state'
 TICK_SECONDS = 60.0
+GUARD_SECONDS = 300.0
 
 
 def _timestamp_ms() -> int:
@@ -34,16 +37,23 @@ class LiveExitExecutor:
     def __init__(self, settings_loader: Callable[[], Dict[str, Any]],
                  position_provider: Callable[[], Awaitable[Any]],
                  close_callback: Callable[[str], Awaitable[bool]],
-                 tick_seconds: float = TICK_SECONDS):
+                 tick_seconds: float = TICK_SECONDS,
+                 sltp_guard: Optional[Callable[[], Awaitable[Dict[str, int]]]] = None,
+                 guard_seconds: float = GUARD_SECONDS):
         """
         :param settings_loader: 返回 user settings（含 signal_* 键）
         :param position_provider: 异步 callable，返回当前持仓（Position 列表）
         :param close_callback: 异步 callable(full_symbol) -> bool，执行市价全平
+        :param sltp_guard: 异步 callable() -> dict，巡检所有持仓的止盈止损（缺止损补挂）
+        :param guard_seconds: 巡检间隔（秒），与超时平仓的 60s tick 解耦，避免频繁拉挂单
         """
         self._settings_loader = settings_loader
         self._position_provider = position_provider
         self._close_callback = close_callback
         self._tick_seconds = max(10.0, float(tick_seconds))
+        self._sltp_guard = sltp_guard
+        self._guard_seconds = max(30.0, float(guard_seconds))
+        self._last_guard_ms: Optional[int] = None
         self._task: Optional[asyncio.Task] = None
         self._positions: Dict[str, Dict[str, Any]] = {}
         self._load_state()
@@ -93,6 +103,7 @@ class LiveExitExecutor:
             held = exit_rules.bars_held(rec.get('entry_ts'), rec.get('timeframe'), now_ms=_timestamp_ms())
             rows.append({**rec, 'bars_held': held, 'max_bars': max_bars})
         return {'enabled': bool(settings.get('signal_live_exit_timeout_enabled', False)),
+                'guard_enabled': bool(settings.get('signal_live_sltp_guard_enabled', True)),
                 'max_bars': max_bars, 'positions': rows}
 
     # ------------------------------------------------------------ 循环
@@ -121,21 +132,40 @@ class LiveExitExecutor:
                 logger.warning(f'实盘出场执行器本轮异常: {e}')
             await asyncio.sleep(self._tick_seconds)
 
+    async def _run_guard(self) -> int:
+        """按 `guard_seconds` 节流执行止盈止损巡检，返回本轮补挂数量。"""
+        if self._sltp_guard is None:
+            return 0
+        now = _timestamp_ms()
+        if self._last_guard_ms is not None and now - self._last_guard_ms < self._guard_seconds * 1000:
+            return 0
+        self._last_guard_ms = now
+        try:
+            result = await self._sltp_guard() or {}
+            return int(result.get('guarded', 0) or 0)
+        except Exception as e:  # noqa: BLE001 - 巡检失败不能中断超时平仓
+            logger.warning(f'止盈止损巡检失败（不影响超时平仓）: {e}')
+            return 0
+
     async def tick(self) -> Dict[str, int]:
-        """跑一轮：对账 + 到期平仓。返回 {'closed': n, 'dropped': n, 'kept': n}。"""
+        """跑一轮：止盈止损巡检 + 对账 + 到期平仓。
+
+        返回 {'closed': n, 'dropped': n, 'kept': n, 'guarded': n}。
+        """
+        guarded = await self._run_guard()
         if not self._positions:
-            return {'closed': 0, 'dropped': 0, 'kept': 0}
+            return {'closed': 0, 'dropped': 0, 'kept': 0, 'guarded': guarded}
         settings = self._settings_loader() or {}
         try:
             positions = await self._position_provider() or []
         except Exception as e:  # noqa: BLE001
             logger.warning(f'实盘出场执行器获取持仓失败，本轮跳过: {e}')
-            return {'closed': 0, 'dropped': 0, 'kept': 0}
+            return {'closed': 0, 'dropped': 0, 'kept': 0, 'guarded': guarded}
 
         live = {str(getattr(p, 'symbol', '') or '').upper(): p for p in positions}
         enabled = bool(settings.get('signal_live_exit_timeout_enabled', False))
         max_bars = int(settings.get('signal_paper_max_bars', 6) or 6)
-        stats = {'closed': 0, 'dropped': 0, 'kept': 0}
+        stats = {'closed': 0, 'dropped': 0, 'kept': 0, 'guarded': guarded}
 
         for symbol, rec in list(self._positions.items()):
             pos = live.get(symbol)

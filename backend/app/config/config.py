@@ -118,6 +118,9 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     # 实盘超时平仓：持有满 signal_paper_max_bars 根就市价平掉「信号自动开」的仓；
     # 回测里 19% 的交易靠超时退出，不开就少了这半边收益
     'signal_live_exit_timeout_enabled': True,
+    # 止盈止损巡检：每 5 分钟核对所有持仓（手动+自动），缺止损单自动补挂。
+    # 开仓时已挂过一次，这里兜住「挂单失败/人为撤单」导致的裸奔仓；只补挂、不平仓
+    'signal_live_sltp_guard_enabled': True,
     # 信号前视收益的持有期（单位：根 K 线），用于「信号发出后到底赚不赚」的统计
     'signal_forward_bars': [4, 12],
 

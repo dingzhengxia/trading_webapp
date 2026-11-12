@@ -253,6 +253,79 @@ async def set_tp_sl_for_position_async(exchange: ccxt.binanceusdm, position: Pos
     return success
 
 
+# 能兜住反向风险的条件单类型（止盈单不算保护，不能替代止损）
+PROTECTIVE_ORDER_TYPES = {'STOP_MARKET', 'STOP', 'TRAILING_STOP_MARKET', 'TRAILING_STOP'}
+
+
+def has_protective_order(orders: list, full_symbol: str, is_long: bool) -> bool:
+    """判断某交易对是否已有 reduce-only 的止损/移动止损挂单。
+
+    只认止损类：止盈单（TAKE_PROFIT_MARKET）不提供下行保护，不能算已挂保护。
+    字段兼容 ccxt 统一结构（order['type']/['side']/['reduceOnly']）与交易所原始
+    `info`（`type`/`side`/`reduceOnly`），两者任一命中即可。
+    """
+    target = str(full_symbol or '').upper()
+    want_side = constants.ORDER_SIDE_SELL if is_long else constants.ORDER_SIDE_BUY
+    for order in orders or []:
+        if not isinstance(order, dict):
+            continue
+        if str(order.get('symbol') or '').upper() != target:
+            continue
+        info = order.get('info') or {}
+        order_type = str(order.get('type') or info.get('type') or '').upper()
+        if order_type not in PROTECTIVE_ORDER_TYPES:
+            continue
+        side = str(order.get('side') or info.get('side') or '').lower()
+        if side and side != want_side:
+            continue
+        reduce_only = order.get('reduceOnly')
+        if reduce_only is None:
+            reduce_only = info.get('reduceOnly')
+        if str(reduce_only).lower() in ('false', '0', 'no'):
+            continue
+        return True
+    return False
+
+
+async def ensure_positions_sltp_async(exchange: ccxt.binanceusdm, positions: list, config: dict,
+                                      async_logger, stop_event: asyncio.Event) -> dict:
+    """巡检所有持仓的止盈止损，缺止损的自动补挂（手动/自动开仓一视同仁）。
+
+    这是「挂单失败」与「人为撤单」的兜底：开仓时 `process_order_with_sl_tp_async`
+    已经挂过一次，但网络抖动、交易所拒绝或撤单冲突都可能让仓位裸奔；本函数每轮
+    拉一次全量挂单，只对**完全没有止损**的仓位重新执行 `set_tp_sl_for_position_async`
+    （它内部会先撤后挂，已有止损的仓位被跳过，不会重复叠加）。
+
+    返回 {'checked': n, 'guarded': n, 'skipped': n, 'failed': n}。
+    """
+    stats = {'checked': 0, 'guarded': 0, 'skipped': 0, 'failed': 0}
+    live = [p for p in (positions or []) if float(getattr(p, 'contracts', 0) or 0) > 0]
+    if not live:
+        return stats
+    try:
+        orders = await exchange.fetch_open_orders()
+    except Exception as e:  # noqa: BLE001 - 查询失败不能影响主流程
+        await async_logger(f"⚠️ 止盈止损巡检获取挂单失败，本轮跳过: {e}", "warning")
+        return stats
+
+    for pos in live:
+        stats['checked'] += 1
+        is_long = str(getattr(pos, 'side', '')).lower() == constants.SIDE_LONG
+        side_key = constants.SIDE_LONG if is_long else constants.SIDE_SHORT
+        if not bool(config.get(f'enable_{side_key}_sl_tp', False)) and \
+                not bool(config.get(f'enable_{side_key}_trailing_stop', False)):
+            stats['skipped'] += 1
+            continue
+        if has_protective_order(orders, getattr(pos, 'full_symbol', ''), is_long):
+            stats['skipped'] += 1
+            continue
+        await async_logger(
+            f"🛡️ {getattr(pos, 'symbol', '')} 未检测到止损单，自动补挂止盈止损。", "warning")
+        ok = await set_tp_sl_for_position_async(exchange, pos, config, async_logger, stop_event)
+        stats['guarded' if ok else 'failed'] += 1
+    return stats
+
+
 async def cleanup_orphan_sltp_orders_async(exchange: ccxt.binanceusdm, active_symbols: Set[str], async_logger) -> int:
     """清理"已无持仓的交易对"上残留的条件单/挂单。
 

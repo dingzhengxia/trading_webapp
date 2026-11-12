@@ -205,6 +205,7 @@ export interface SignalConfig {
   signal_paper_max_bars: number
   signal_live_exit_timeframe: '15m' | '1h' | '4h' | '1d'
   signal_live_exit_timeout_enabled: boolean
+  signal_live_sltp_guard_enabled: boolean
   signal_forward_bars: number[]
 }
 
@@ -274,6 +275,7 @@ export interface LiveExitPosition {
 
 export interface LiveExitStatus {
   enabled: boolean
+  guard_enabled: boolean
   max_bars: number
   positions: LiveExitPosition[]
 }

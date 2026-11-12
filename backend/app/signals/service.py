@@ -90,6 +90,30 @@ async def _close_position(full_symbol: str) -> bool:
     return await close_position_async(exchange, full_symbol, 1.0, log_message, asyncio.Event())
 
 
+# 巡检期间的占位事件：止盈止损补挂不接受外部中断，但 set_tp_sl 的接口需要一个 Event
+_GUARD_STOP = asyncio.Event()
+
+
+async def _guard_sltp() -> Dict[str, int]:
+    """止盈止损巡检：手动与自动开仓的仓位一视同仁，缺止损就自动补挂。
+
+    只补挂、不平仓；开关为 `signal_live_sltp_guard_enabled`（默认开）。
+    行情/挂单查询失败只跳过本轮，绝不影响开仓与超时平仓。
+    """
+    from ..core.websocket_manager import log_message
+    from ..logic.sl_tp_logic_async import ensure_positions_sltp_async
+
+    settings = load_settings()
+    if not bool(settings.get('signal_live_sltp_guard_enabled', True)):
+        return {'checked': 0, 'guarded': 0, 'skipped': 0, 'failed': 0}
+    exchange = await get_shared_exchange()
+    positions = await fetch_positions_with_pnl_async(exchange, settings.get('leverage', 1))
+    result = await ensure_positions_sltp_async(exchange, positions, settings, log_message, _GUARD_STOP)
+    if result.get('guarded') or result.get('failed'):
+        logger.warning(f"🛡️ 止盈止损巡检: {result}")
+    return result
+
+
 def _get_exit_executor() -> LiveExitExecutor:
     global exit_executor
     if exit_executor is None:
@@ -97,6 +121,7 @@ def _get_exit_executor() -> LiveExitExecutor:
             settings_loader=load_settings,
             position_provider=_fetch_positions,
             close_callback=_close_position,
+            sltp_guard=_guard_sltp,
         )
     return exit_executor
 

@@ -542,6 +542,25 @@
           </v-col>
         </v-row>
 
+        <!-- 止盈止损巡检：手动仓 + 自动仓一视同仁，缺止损自动补挂 -->
+        <v-row dense align="center" class="mt-1">
+          <v-col cols="12" sm="6" md="4">
+            <v-switch
+              :model-value="sltpGuardEnabled"
+              :loading="savingSltpGuard"
+              label="止损巡检（缺单自动补挂）"
+              color="success"
+              inset
+              hide-details
+              @update:model-value="onToggleSltpGuard"
+            ></v-switch>
+          </v-col>
+          <v-col cols="12" md="8" class="text-caption text-grey">
+            每 5 分钟核对所有持仓（<b>手动与自动开仓都算</b>）：发现某仓没有止损单就按当前口径自动补挂。
+            只补挂、不平仓；已有止损的仓位跳过，不会重复下单。
+          </v-col>
+        </v-row>
+
         <v-row v-if="liveExit.positions.length > 0" dense class="mt-2">
           <v-col cols="12">
             <div class="text-subtitle-2 mb-1">实盘已登记（{{ liveExit.positions.length }}）</div>
@@ -831,6 +850,7 @@ const defaultSignalConfig: SignalConfig = {
   signal_paper_max_bars: 6,
   signal_live_exit_timeframe: '4h',
   signal_live_exit_timeout_enabled: false,
+  signal_live_sltp_guard_enabled: true,
   signal_forward_bars: [4, 12],
 }
 
@@ -894,9 +914,11 @@ const paperForm = ref({ slAtr: 1.5, tpR: 2, maxBars: 6, atrTimeframe: '4h' })
 const paperEnabled = computed(() => tracking.value.params.enabled)
 
 // ------------------------------------------------- 实盘出场层（超时平仓 + 登记）
-const liveExit = ref<LiveExitStatus>({ enabled: false, max_bars: 6, positions: [] })
+const liveExit = ref<LiveExitStatus>({ enabled: false, guard_enabled: true, max_bars: 6, positions: [] })
 const savingLiveTimeout = ref(false)
+const savingSltpGuard = ref(false)
 const liveTimeoutEnabled = computed(() => liveExit.value.enabled)
+const sltpGuardEnabled = computed(() => liveExit.value.guard_enabled)
 const exitMode = computed(() => config.value.signal_exit_mode)
 const paperFormValid = computed(
   () =>
@@ -1102,6 +1124,7 @@ const mergeConfig = (raw: Partial<SignalConfig> | undefined): SignalConfig => {
       ? (source.signal_live_exit_timeframe as SignalConfig['signal_live_exit_timeframe'])
       : fallback.signal_live_exit_timeframe,
     signal_live_exit_timeout_enabled: source.signal_live_exit_timeout_enabled === true,
+    signal_live_sltp_guard_enabled: source.signal_live_sltp_guard_enabled !== false,
     signal_forward_bars: Array.isArray(source.signal_forward_bars)
       ? (source.signal_forward_bars as unknown[]).map((bar) => toNumber(bar, 4))
       : [...fallback.signal_forward_bars],
@@ -1218,7 +1241,7 @@ const fetchSignals = async (silent: boolean): Promise<void> => {
     pushStatus.value = mergePushStatus(data.push)
     if (!pushVolumeDirty.value) pushVolumeInput.value = pushStatus.value.signal_push_volume_multiplier
     tracking.value = mergeTracking(data.tracking)
-    liveExit.value = data.live_exit ?? { enabled: false, max_bars: 6, positions: [] }
+    liveExit.value = data.live_exit ?? { enabled: false, guard_enabled: true, max_bars: 6, positions: [] }
     syncPaperForm(tracking.value)
     syncScopeForm(nextConfig)
     syncAutoForm(nextConfig)
@@ -1475,6 +1498,33 @@ const onToggleLiveTimeout = async (value: unknown): Promise<void> => {
     })
   } finally {
     savingLiveTimeout.value = false
+  }
+}
+
+const onToggleSltpGuard = async (value: unknown): Promise<void> => {
+  const enabled = Boolean(value)
+  if (savingSltpGuard.value || enabled === sltpGuardEnabled.value) return
+  savingSltpGuard.value = true
+  const previous = liveExit.value.guard_enabled
+  liveExit.value.guard_enabled = enabled
+  try {
+    await api.post('/api/signals/config', { signal_live_sltp_guard_enabled: enabled })
+    snackbarStore.show({
+      message: enabled
+        ? '止损巡检已启用：手动与自动仓位缺少止损时会自动补挂。'
+        : '止损巡检已关闭：挂单失败或人为撤单后将不再自动补挂。',
+      color: enabled ? 'success' : 'warning',
+    })
+    pushLog('[前端] 止损巡检已' + (enabled ? '启用' : '关闭') + '。', enabled ? 'success' : 'warning')
+    await fetchSignals(true)
+  } catch (error: unknown) {
+    liveExit.value.guard_enabled = previous
+    snackbarStore.show({
+      message: '切换止损巡检失败: ' + getErrorMessage(error),
+      color: 'error',
+    })
+  } finally {
+    savingSltpGuard.value = false
   }
 }
 
