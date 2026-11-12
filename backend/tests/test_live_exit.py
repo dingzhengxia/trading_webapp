@@ -81,6 +81,32 @@ def test_atr_at_returns_value_and_none():
 
 
 # ---------------------------------------------------------------- 实盘挂单口径
+def test_resolve_atr_follows_signal_timeframe(monkeypatch, async_logger):
+    """ATR 周期跟随信号自身周期；缺失或非法时才退回全局 signal_live_exit_timeframe。"""
+    used = []
+
+    class FakeMarket:
+        async def atr_at(self, symbol, timeframe):
+            used.append(timeframe)
+            return 1.0
+
+    import app.signals.market_data as market_data
+    monkeypatch.setattr(market_data, 'shared_market_data', lambda: FakeMarket())
+
+    async def run():
+        await sl_tp_logic_async._resolve_atr(
+            'BTC/USDT:USDT',
+            {'_signal_timeframe': '1h', 'signal_live_exit_timeframe': '4h'}, async_logger)
+        await sl_tp_logic_async._resolve_atr(
+            'BTC/USDT:USDT', {'signal_live_exit_timeframe': '4h'}, async_logger)
+        await sl_tp_logic_async._resolve_atr(
+            'BTC/USDT:USDT',
+            {'_signal_timeframe': 'bogus', 'signal_live_exit_timeframe': '4h'}, async_logger)
+
+    _run(run())
+    assert used == ['1h', '4h', '4h']
+
+
 def test_live_stop_uses_atr_when_mode_atr(
     fake_exchange, async_logger, stop_event, position_factory, fast_sleep, monkeypatch,
 ):

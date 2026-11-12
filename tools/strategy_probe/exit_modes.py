@@ -80,6 +80,7 @@ def collect(sig, tf, offset, max_bars, config, dedupe=True):
             continue
         sign = 1 if r.direction == 'long' else -1
         ret = sign * (float(result['exit_price']) / entry - 1)
+        atr = _atr(s, i)
         rows.append({
             'symbol': r.symbol, 'tf': r.tf, 'strategy': r.strategy, 'direction': r.direction,
             'entry_ts': int(s.ts[i + offset]), 'exit_ts': int(result['exit_ts']),
@@ -87,9 +88,12 @@ def collect(sig, tf, offset, max_bars, config, dedupe=True):
             'bars': int(result['bars_held']), 'reason': result['reason'],
             'ret': ret, 'drift': s.drift(sign, offset, int(result['bars_held'])),
             'ex': ret - s.drift(sign, offset, int(result['bars_held'])),
+            # 信号 bar 的波动率（占价格比例），用于「按波动率分层」这类优化实验
+            'atr_pct': (atr / entry) if atr else np.nan,
         })
     df = pd.DataFrame(rows, columns=['symbol', 'tf', 'strategy', 'direction', 'entry_ts', 'exit_ts',
-                                     'entry', 'exit_price', 'bars', 'reason', 'ret', 'drift', 'ex'])
+                                     'entry', 'exit_price', 'bars', 'reason', 'ret', 'drift', 'ex',
+                                     'atr_pct'])
     if dedupe and len(df):
         df = df.sort_values('entry_ts')
         occupied, keep = {}, []

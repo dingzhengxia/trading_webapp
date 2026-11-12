@@ -134,8 +134,15 @@ async def _place_conditional_order_async(
 
 
 async def _resolve_atr(full_symbol: str, config: dict, async_logger) -> float | None:
-    """取实盘 ATR（走共享行情服务，带缓存与限流）。失败返回 None，由调用方回退百分比口径。"""
-    timeframe = str(config.get('signal_live_exit_timeframe') or '4h')
+    """取实盘 ATR（走共享行情服务，带缓存与限流）。失败返回 None，由调用方回退百分比口径。
+
+    周期优先跟随**信号自身周期**（`_signal_timeframe`，由 auto_open_from_signal 透传），
+    其次才是全局 `signal_live_exit_timeframe`。两者不一致会让 1h 信号用 4h 的 ATR，
+    止损宽一倍、单笔风险翻倍。
+    """
+    signal_tf = str(config.get('_signal_timeframe') or '').lower()
+    timeframe = signal_tf if exit_rules.timeframe_ms(signal_tf) else \
+        str(config.get('signal_live_exit_timeframe') or '4h')
     try:
         from ..signals.market_data import shared_market_data
         return await shared_market_data().atr_at(full_symbol, timeframe)

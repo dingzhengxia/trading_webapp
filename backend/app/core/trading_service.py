@@ -194,6 +194,8 @@ class TradingService:
             'coin': str(signal.get('symbol') or '').upper(),
             'value': float(config.get('signal_auto_trade_value_usd', 100.0) or 100.0),
             'side': side,
+            # 信号自身周期：ATR 出场必须按它取，否则 1h 信号会错用 4h 的 ATR（止损宽一倍）
+            'timeframe': str(signal.get('timeframe') or ''),
         }
         signal_desc = f"{plan['coin']} {direction} ({signal.get('strategy')} @ {signal.get('timeframe')})"
 
@@ -210,6 +212,9 @@ class TradingService:
                               on_opened: Optional[Callable[[], Any]] = None):
         config = dict(config)
         config.setdefault('leverage', 1)
+        if plan.get('timeframe'):
+            # 供 sl_tp_logic 取 ATR 用（跟随信号周期，而不是全局 signal_live_exit_timeframe）
+            config['_signal_timeframe'] = plan['timeframe']
         async with get_exchange_for_task() as exchange:
             opened = await process_order_with_sl_tp_async(
                 exchange, plan, config, log_message, self._stop_event)
