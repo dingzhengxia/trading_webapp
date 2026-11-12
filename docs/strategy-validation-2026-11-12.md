@@ -594,3 +594,37 @@ TP=2R 始终 -3~-9bp，TP=3R 始终 -10~-22bp。这批信号是"走到约 1 倍�
 实盘若开 atr 口径、同时还有 1h 信号，会拿 4h 的 ATR 去挂 1h 的仓——止损宽一倍、单笔风险翻倍。
 已改为：`auto_open_from_signal` 把信号周期透传为 `_signal_timeframe`，`_resolve_atr` 优先用它，
 缺失或非法时才回退全局设置。新增测试 `test_resolve_atr_follows_signal_timeframe`，全量 **254 passed**。
+
+### 11.7 落地执行（2026-11-12）
+
+仓库默认值已切到上述组合（提交 4a87592）：`signal_exit_mode=atr`、`signal_paper_tp_r=1.0`、
+`signal_live_exit_timeout_enabled=true`、`leverage=5`、percent 兜底 40/40（5x 下价格 -8%/+8%）、
+自动开仓白名单去掉 `trend_channel_breakout`、周期只剩 4h。
+
+**注意**：线上服务器在部署当天仍跑旧代码（GET /api/signals 无 `tracking` 字段），
+且 `user_settings`/SQLite 里存过旧值会覆盖仓库默认值。所以必须：
+
+1. 服务器重跑 `./deploy.sh`（拉到 4a87592 之后）；
+2. 部署完把下面两组值 POST 进去（存过的旧值不会自动被默认值替换）：
+
+```bash
+KEY=Qq523065106; HOST=http://43.167.206.29:8000
+# 出场层 + 自动开仓范围
+curl -s -X POST "$HOST/api/signals/config" -H "X-API-KEY: $KEY" -H "Content-Type: application/json" -d '{
+  "signal_exit_mode": "atr",
+  "signal_paper_sl_atr": 1.5,
+  "signal_paper_tp_r": 1.0,
+  "signal_paper_max_bars": 6,
+  "signal_live_exit_timeout_enabled": true,
+  "signal_auto_trade_timeframes": ["4h"],
+  "signal_auto_trade_strategies": ["ema_cross","ma_breakout","kdj_cross","level_breakout","rsi_divergence","ob_luxalgo","ob_fluxcharts"]
+}'
+# 杠杆 + percent 兜底（ATR 拿不到时的保险单）
+curl -s -X POST "$HOST/api/settings" -H "X-API-KEY: $KEY" -H "Content-Type: application/json" -d '{
+  "leverage": 5,
+  "long_stop_loss_percentage": 40, "long_take_profit_percentage": 40,
+  "short_stop_loss_percentage": 40, "short_take_profit_percentage": 40
+}'
+```
+
+3. 用 `GET /api/signals` 确认 `config.exit_mode == "atr"`、`tracking.params.tp_r == 1.0`。
