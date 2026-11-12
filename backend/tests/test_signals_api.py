@@ -132,6 +132,23 @@ def test_config_accepts_valid_partial_update(client, api_key, no_real_save):
     assert no_real_save, "配置应经过 save_settings 持久化"
 
 
+def test_static_symbols_are_normalized(client, api_key, no_real_save):
+    """静态币种入库前统一 base 大写去重：' sol '、'SOL'、'BTC/USDT:USDT' -> SOL / BTC。"""
+    response = client.post("/api/signals/config",
+                           json={"signal_scan_static_symbols":
+                                 [" sol ", "SOL", "btc/usdt:usdt", ""]},
+                           headers={"X-API-KEY": api_key})
+    assert response.status_code == 200
+    assert response.json()["config"]["signal_scan_static_symbols"] == ["SOL", "BTC"]
+
+
+def test_static_symbols_reject_invalid_chars(client, api_key, no_real_save):
+    response = client.post("/api/signals/config",
+                           json={"signal_scan_static_symbols": ["BT C"]},
+                           headers={"X-API-KEY": api_key})
+    assert response.status_code == 400
+
+
 def test_auto_trade_toggle_roundtrip(client, api_key, no_real_save):
     response = client.post("/api/signals/auto-trade",
                            json={"enabled": True}, headers={"X-API-KEY": api_key})

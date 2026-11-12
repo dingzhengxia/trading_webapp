@@ -85,6 +85,93 @@
           刷新
         </v-btn>
       </div>
+
+      <v-divider class="my-4"></v-divider>
+
+      <!-- 扫描范围：静态币 + Top N + 周期 -->
+      <div class="d-flex align-center flex-wrap ga-2 mb-3">
+        <v-icon size="18" color="primary">mdi-format-list-checks</v-icon>
+        <span class="text-subtitle-1 font-weight-medium">扫描范围</span>
+        <span class="text-caption text-grey">
+          静态币始终扫描并在钉钉实时推送，其余按成交额补足 Top N
+        </span>
+      </div>
+
+      <v-row dense>
+        <v-col cols="12" md="5">
+          <div class="text-caption text-grey mb-1">静态币种（{{ scanStaticSymbols.length }} 个）</div>
+          <div class="d-flex flex-wrap align-center ga-1 mb-2 static-symbol-chips">
+            <v-chip
+              v-for="symbol in scanStaticSymbols"
+              :key="symbol"
+              size="small"
+              variant="tonal"
+              closable
+              @click:close="removeStaticSymbol(symbol)"
+            >
+              {{ symbol }}
+            </v-chip>
+            <span v-if="scanStaticSymbols.length === 0" class="text-caption text-grey">
+              未设置，仅按成交额 Top N 扫描
+            </span>
+          </div>
+          <div class="d-flex ga-2">
+            <v-text-field
+              v-model="staticSymbolInput"
+              density="compact"
+              variant="outlined"
+              hide-details
+              placeholder="输入币种（如 SOL），回车添加"
+              @keydown.enter.prevent="addStaticSymbol"
+            ></v-text-field>
+            <v-btn
+              color="primary"
+              variant="tonal"
+              height="40"
+              :disabled="!staticSymbolInput.trim()"
+              @click="addStaticSymbol"
+            >
+              添加
+            </v-btn>
+          </div>
+        </v-col>
+        <v-col cols="12" sm="6" md="2">
+          <v-text-field
+            v-model.number="scopeTopN"
+            label="Top N 补足"
+            type="number"
+            min="1"
+            max="500"
+            density="compact"
+            variant="outlined"
+            hide-details
+            hint="按成交额排名补足"
+            persistent-hint
+            @update:model-value="scopeDirty = true"
+          ></v-text-field>
+        </v-col>
+        <v-col cols="12" sm="6" md="3">
+          <SmartSelect
+            v-model="scopeTimeframes"
+            :items="timeframeOptions"
+            label="扫描周期"
+            multiple
+            @update:model-value="scopeDirty = true"
+          ></SmartSelect>
+        </v-col>
+        <v-col cols="12" md="2" class="d-flex justify-end align-center">
+          <v-btn
+            color="primary"
+            variant="tonal"
+            prepend-icon="mdi-content-save"
+            :loading="savingScope"
+            :disabled="!scopeValid || savingScope"
+            @click="saveScanScope"
+          >
+            保存范围
+          </v-btn>
+        </v-col>
+      </v-row>
     </PageCard>
 
     <!-- 卡 2：推送与开仓（统一编排：先推送后开仓） -->
@@ -492,6 +579,14 @@ const savingPushConfig = ref(false)
 const pushVolumeInput = ref<number>(2)
 const pushVolumeDirty = ref(false)
 
+// ------------------------------------------------- 扫描范围（静态币 / TopN / 周期）
+const savingScope = ref(false)
+const scopeDirty = ref(false)
+const staticSymbolInput = ref('')
+const scanStaticSymbols = ref<string[]>([...defaultSignalConfig.signal_scan_static_symbols])
+const scopeTopN = ref<number>(defaultSignalConfig.signal_scan_top_n)
+const scopeTimeframes = ref<string[]>([...defaultSignalConfig.signal_scan_timeframes])
+
 const autoForm = ref<AutoTradeForm>({
   directions: [...defaultSignalConfig.signal_auto_trade_directions],
   strategies: [...defaultSignalConfig.signal_auto_trade_strategies],
@@ -508,6 +603,13 @@ const autoFormDirty = ref(false)
 let pollTimer: number | undefined
 
 const autoTradeEnabled = computed(() => config.value.signal_auto_trade_enabled)
+
+const scopeValid = computed(
+  () =>
+    scopeTimeframes.value.length > 0 &&
+    Number(scopeTopN.value) >= 1 &&
+    Number(scopeTopN.value) <= 500,
+)
 
 const autoFormValid = computed(() => {
   const form = autoForm.value
@@ -721,6 +823,7 @@ const fetchSignals = async (silent: boolean): Promise<void> => {
     config.value = nextConfig
     pushStatus.value = mergePushStatus(data.push)
     if (!pushVolumeDirty.value) pushVolumeInput.value = pushStatus.value.signal_push_volume_multiplier
+    syncScopeForm(nextConfig)
     syncAutoForm(nextConfig)
   } catch (error: unknown) {
     if (!silent) {
@@ -822,6 +925,70 @@ const onToggleScan = async (value: unknown): Promise<void> => {
   }
 }
 
+const syncScopeForm = (nextConfig: SignalConfig): void => {
+  // 有未保存的编辑时不回填，避免 10 秒轮询覆盖用户输入
+  if (scopeDirty.value) return
+  scanStaticSymbols.value = [...nextConfig.signal_scan_static_symbols]
+  scopeTopN.value = nextConfig.signal_scan_top_n
+  scopeTimeframes.value = [...nextConfig.signal_scan_timeframes]
+}
+
+const normalizeSymbolInput = (value: string): string =>
+  value.trim().toUpperCase().split('/')[0].split(':')[0]
+
+const addStaticSymbol = (): void => {
+  const symbol = normalizeSymbolInput(staticSymbolInput.value)
+  if (!symbol) return
+  if (!scanStaticSymbols.value.includes(symbol)) {
+    scanStaticSymbols.value = [...scanStaticSymbols.value, symbol]
+    scopeDirty.value = true
+  }
+  staticSymbolInput.value = ''
+}
+
+const removeStaticSymbol = (symbol: string): void => {
+  scanStaticSymbols.value = scanStaticSymbols.value.filter((item) => item !== symbol)
+  scopeDirty.value = true
+}
+
+const saveScanScope = async (): Promise<void> => {
+  if (!scopeValid.value || savingScope.value) return
+  savingScope.value = true
+  try {
+    const payload = {
+      signal_scan_static_symbols: [...scanStaticSymbols.value],
+      signal_scan_top_n: Number(scopeTopN.value),
+      signal_scan_timeframes: [...scopeTimeframes.value],
+    }
+    const response = await api.post<{ config?: Partial<SignalConfig> }>(
+      '/api/signals/config',
+      payload,
+    )
+    if (response.data.config) {
+      config.value = mergeConfig({ ...config.value, ...response.data.config })
+    }
+    scopeDirty.value = false
+    snackbarStore.show({
+      message: `扫描范围已保存（静态币 ${scanStaticSymbols.value.length} 个 / Top ${scopeTopN.value}）。`,
+      color: 'success',
+    })
+    pushLog(
+      '[前端] 扫描范围已保存：静态币 ' +
+        (scanStaticSymbols.value.join(',') || '无') +
+        `；Top ${scopeTopN.value}；周期 ${scopeTimeframes.value.join('/')}`,
+      'success',
+    )
+    await fetchSignals(true)
+  } catch (error: unknown) {
+    snackbarStore.show({
+      message: '保存扫描范围失败: ' + getErrorMessage(error),
+      color: 'error',
+    })
+  } finally {
+    savingScope.value = false
+  }
+}
+
 const savePushVolume = async (): Promise<void> => {
   if (savingPushConfig.value) return
   const raw = Number(pushVolumeInput.value)
@@ -847,7 +1014,8 @@ const savePushVolume = async (): Promise<void> => {
   }
 }
 
-const onToggleDingtalkPush = async (value: unknown): Promise<void> => {  const enabled = Boolean(value)
+const onToggleDingtalkPush = async (value: unknown): Promise<void> => {
+  const enabled = Boolean(value)
   if (savingDingtalkPush.value || enabled === pushStatus.value.signal_dingtalk_enabled) return
   savingDingtalkPush.value = true
   const previous = pushStatus.value.signal_dingtalk_enabled
@@ -1032,5 +1200,9 @@ onUnmounted(() => {
   -webkit-box-orient: vertical;
   overflow: hidden;
   white-space: pre-line;
+}
+/* 静态币 chips 区固定最小高度，避免空/非空切换时行高跳动 */
+.static-symbol-chips {
+  min-height: 26px;
 }
 </style>

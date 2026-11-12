@@ -53,6 +53,26 @@ def _validate_enum_fields(update: Dict[str, Any]) -> None:
                                 detail=f"{field} 含非法值: {', '.join(map(str, invalid))}")
 
 
+def _normalize_static_symbols(update: Dict[str, Any]) -> None:
+    """静态币种规范化：去空白、转大写、只取 base 币（SOL/USDT -> SOL）、去重。
+
+    非法字符直接 400，避免脏值进到扫描循环里变成无效请求。
+    """
+    values = update.get('signal_scan_static_symbols')
+    if values is None:
+        return
+    normalized: list[str] = []
+    for raw in values:
+        base = str(raw).strip().upper().split('/')[0].split(':')[0]
+        if not base:
+            continue
+        if not base.replace('-', '').isalnum():
+            raise HTTPException(status_code=400, detail=f"静态币种含非法字符: {raw}")
+        if base not in normalized:
+            normalized.append(base)
+    update['signal_scan_static_symbols'] = normalized
+
+
 @router.get("")
 async def get_signals() -> Dict[str, Any]:
     """扫描状态 + 最近信号 + signal_* 配置 + 钉钉推送状态。"""
@@ -97,6 +117,7 @@ async def update_signal_config(payload: Dict[str, Any]) -> Dict[str, Any]:
     from ..config.config import load_settings, save_settings
     update = _parse_signal_config(payload)
     _validate_enum_fields(update)
+    _normalize_static_symbols(update)
 
     settings = load_settings()
     settings.update(update)
