@@ -208,13 +208,13 @@ def check_level_breakout(symbol, timeframe, config, df, breakout_params, config_
                     'cooldown_mult': 1
                 }
                 _prepare_and_send_notification(config, symbol, timeframe, df, signal_info)
-            elif is_testing_res:
+            elif is_testing_res and breakout_params.get('alert_on_test', True):
                 signal_info = {
                     'log_name': 'Level Testing Res',
                     'strategy_name': 'level_breakout', 'strategy_index': config_index,
                     'direction': 'neutral',  # 测试阻力 -> neutral
                     'alert_key': f"{symbol}_{timeframe}_testing_res_{config_index}_{current['timestamp']}",
-                    'volume_must_confirm': False, 'title_template': test_title,
+                    'volume_must_confirm': breakout_params.get('volume_confirm', True), 'title_template': test_title,
                     'message_template': (
                         "{trend_message}**信号**: **价格正在摸顶/插针试探上方阻力**。\n\n**形态学**: 价格最高点触及了 `{original_type}`。\n> **阻力价位**: `{closest_res[level]:.4f}`\n> **当前最高价**: `{current[high]:.4f}`\n请留意是否形成受阻回落，或蓄力完成突破。\n\n{vol_text}"),
                     'template_data': {'original_type': original_type, 'closest_res': closest_res,
@@ -253,13 +253,13 @@ def check_level_breakout(symbol, timeframe, config, df, breakout_params, config_
                     'cooldown_mult': 1
                 }
                 _prepare_and_send_notification(config, symbol, timeframe, df, signal_info)
-            elif is_testing_sup:
+            elif is_testing_sup and breakout_params.get('alert_on_test', True):
                 signal_info = {
                     'log_name': 'Level Testing Sup',
                     'strategy_name': 'level_breakout', 'strategy_index': config_index,
                     'direction': 'neutral',  # 测试支撑 -> neutral
                     'alert_key': f"{symbol}_{timeframe}_testing_sup_{config_index}_{current['timestamp']}",
-                    'volume_must_confirm': False, 'title_template': test_title,
+                    'volume_must_confirm': breakout_params.get('volume_confirm', True), 'title_template': test_title,
                     'message_template': (
                         "{trend_message}**信号**: **价格插针/试探关键支撑**。\n\n**形态学**: 价格最低点触及了 `{original_type}`。\n> **支撑价位**: `{closest_sup[level]:.4f}`\n> **当前最低价**: `{current[low]:.4f}`\n请留意是否企稳反弹，或无力防守破位下行。\n\n{vol_text}"),
                     'template_data': {'original_type': original_type, 'closest_sup': closest_sup,
@@ -455,7 +455,8 @@ def check_ema_signals(symbol, timeframe, config, df, ema_params, config_index=0)
                 'log_name': 'EMA Cross',
                 'strategy_name': 'ema_cross', 'strategy_index': config_index,
                 'direction': 'long' if bullish else 'short',  # 向上突破 -> long；向下跌破 -> short
-                'alert_key': f"{symbol}_{timeframe}_EMACROSS_{config_index}",
+                # 冷却键必须带方向：否则多头信号占掉同币同周期的冷却，反向（做空）突破会被吞掉
+                'alert_key': f"{symbol}_{timeframe}_EMACROSS_{'UP' if bullish else 'DOWN'}_{config_index}",
                 'volume_must_confirm': ema_params.get('volume_confirm', False),
                 'fallback_multiplier': ema_params.get('volume_multiplier', 1.5),
                 'title_template': f"🚀 EMA {{vol_label}}{action}: {symbol} ({timeframe})",
@@ -547,16 +548,60 @@ def check_volatility_breakout(symbol, timeframe, config, df, vol_params, config_
         logger.error(f"❌ 波动率信号错: {e}")
 
 
+def detect_rsi_divergence(df, lookback=60, pivot_window=5, min_rsi_gap=5.0):
+    """真背离判定：当前收盘 vs「最近一个已确认摆动点」。
+
+    - 顶背离：收盘价创该摆动高点之上的新高，但 RSI 比该点低至少 min_rsi_gap；
+    - 底背离：对称。
+    要求摆动点已被右侧 pivot_window 根 K 线确认，避免把正在形成的 K 线当枢轴。
+    :param df: 含 high/low/close/rsi 列且已 reset_index 的 DataFrame
+    :return: 'top' / 'bottom' / None
+    """
+    n = len(df)
+    span = pivot_window * 2 + 1
+    if n < span + 2:
+        return None
+
+    high, low, rsi = df['high'], df['low'], df['rsi']
+    win_high = high.rolling(span, center=True).max()
+    win_low = low.rolling(span, center=True).min()
+    start = max(0, n - 1 - lookback)
+    end = n - 1 - pivot_window  # 右侧未确认的 K 线不能当枢轴
+
+    prev_high_idx = prev_low_idx = None
+    for i in range(end - 1, start - 1, -1):
+        if prev_high_idx is None and high.iloc[i] == win_high.iloc[i]:
+            prev_high_idx = i
+        if prev_low_idx is None and low.iloc[i] == win_low.iloc[i]:
+            prev_low_idx = i
+        if prev_high_idx is not None and prev_low_idx is not None:
+            break
+
+    current = df.iloc[-1]
+    if prev_high_idx is not None:
+        if current['close'] > high.iloc[prev_high_idx] and \
+                current['rsi'] <= rsi.iloc[prev_high_idx] - min_rsi_gap:
+            return 'top'
+    if prev_low_idx is not None:
+        if current['close'] < low.iloc[prev_low_idx] and \
+                current['rsi'] >= rsi.iloc[prev_low_idx] + min_rsi_gap:
+            return 'bottom'
+    return None
+
+
 def check_rsi_divergence(symbol, timeframe, config, df, rsi_params, config_index=0):
     try:
         indicator_result = pta.rsi(df['close'], length=rsi_params.get('rsi_period', 14))
         if indicator_result is None or indicator_result.empty: return
         df['rsi'] = indicator_result
         df_cleaned = df.dropna(subset=['rsi']).reset_index(drop=True)
-        lookback = rsi_params.get('lookback_period', 60)
-        if len(df_cleaned) < lookback + 1: return
-        recent_df, current = df_cleaned.iloc[-lookback - 1:-1], df_cleaned.iloc[-1]
-        if current['close'] > recent_df['close'].max() and current['rsi'] < recent_df['rsi'].max():
+        divergence = detect_rsi_divergence(
+            df_cleaned,
+            lookback=int(rsi_params.get('lookback_period', 60)),
+            pivot_window=int(rsi_params.get('pivot_window', 5)),
+            min_rsi_gap=float(rsi_params.get('min_rsi_gap', 5.0)),
+        )
+        if divergence == 'top':
             signal_info = {'log_name': 'RSI Top Div',
                            'strategy_name': 'rsi_divergence', 'strategy_index': config_index,
                            'direction': 'short',  # 顶背离 -> short
@@ -565,7 +610,7 @@ def check_rsi_divergence(symbol, timeframe, config, df, rsi_params, config_index
                            'message_template': "{trend_message}**信号**: 价格创近期新高，但RSI指标衰弱。\n\n{vol_text}",
                            'template_data': {}, 'cooldown_mult': 2, 'always_show_volume': True}
             _prepare_and_send_notification(config, symbol, timeframe, df, signal_info)
-        if current['close'] < recent_df['close'].min() and current['rsi'] > recent_df['rsi'].min():
+        elif divergence == 'bottom':
             signal_info = {'log_name': 'RSI Bottom Div',
                            'strategy_name': 'rsi_divergence', 'strategy_index': config_index,
                            'direction': 'long',  # 底背离 -> long

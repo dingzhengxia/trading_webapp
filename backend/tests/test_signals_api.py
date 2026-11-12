@@ -62,7 +62,10 @@ def test_get_signals_structure(client, api_key):
     response = client.get("/api/signals", headers={"X-API-KEY": api_key})
     assert response.status_code == 200
     data = response.json()
-    assert set(data) == {"status", "signals", "config", "push"}
+    assert set(data) == {"status", "signals", "config", "strategy", "push"}
+    # 策略参数持久化：来源标记 + 至少含策略表
+    assert data["strategy"]["source"] in ("db", "file")
+    assert "strategy_params" in data["strategy"]["config"]
     # status 结构（MERGE_PLAN §6）
     status = data["status"]
     for key in ("enabled", "last_scan_at", "next_scan_at", "scanned_symbols", "emitted_count",
@@ -195,3 +198,49 @@ def test_scan_endpoint_offline(client, api_key, monkeypatch):
     response = client.post("/api/signals/scan", headers={"X-API-KEY": api_key})
     assert response.status_code == 200
     assert response.json() == {"message": "扫描任务已提交"}
+
+
+@pytest.fixture
+def tmp_strategy_db(tmp_path, monkeypatch):
+    """策略配置落库的隔离 DB，避免污染真实 data/app.db。"""
+    from app.core import database
+    monkeypatch.setattr(database, "DB_PATH", tmp_path / "app.db")
+    database.init_db()
+    return tmp_path
+
+
+def test_strategy_config_roundtrip(client, api_key, tmp_strategy_db):
+    """POST 局部更新 -> 落库 -> GET 回读一致（下一轮扫描即生效）。"""
+    response = client.post("/api/signals/strategy-config",
+                           json={"strategy_params": {"ma_breakout": {"enabled": False}}},
+                           headers={"X-API-KEY": api_key})
+    assert response.status_code == 200
+    config = response.json()["strategy"]["config"]
+    assert config["strategy_params"]["ma_breakout"]["enabled"] is False
+    assert isinstance(config["strategy_params"]["ma_breakout"]["ma_periods"], list)  # 深合并保留兄弟键
+
+    data = client.get("/api/signals", headers={"X-API-KEY": api_key}).json()
+    assert data["strategy"]["source"] == "db"
+    assert data["strategy"]["config"]["strategy_params"]["ma_breakout"]["enabled"] is False
+
+
+def test_strategy_config_reset(client, api_key, tmp_strategy_db):
+    client.post("/api/signals/strategy-config",
+                json={"strategy_params": {"ma_breakout": {"enabled": False}}},
+                headers={"X-API-KEY": api_key})
+    response = client.post("/api/signals/strategy-config", json={"reset": True},
+                           headers={"X-API-KEY": api_key})
+    assert response.status_code == 200
+    assert response.json()["strategy"]["config"]["strategy_params"]["ma_breakout"]["enabled"] is True
+
+
+def test_strategy_config_rejects_unknown(client, api_key, tmp_strategy_db):
+    response = client.post("/api/signals/strategy-config",
+                           json={"strategy_params": {"no_such_strategy": {"enabled": True}}},
+                           headers={"X-API-KEY": api_key})
+    assert response.status_code == 400
+
+
+def test_strategy_config_requires_api_key(client):
+    assert client.post("/api/signals/strategy-config",
+                       json={"strategy_params": {"ma_breakout": {"enabled": False}}}).status_code == 403

@@ -10,8 +10,6 @@
 4. 每轮结束更新 status；异常记录 last_error。
 """
 import asyncio
-import json
-import os
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Dict, List, Optional
@@ -19,7 +17,6 @@ from typing import Any, Callable, Dict, List, Optional
 import pandas as pd
 from loguru import logger
 
-from ..core.paths import PROJECT_ROOT
 from ..core.tasks import cancel_task
 from . import runtime
 from .analysis.strategies import (
@@ -29,19 +26,9 @@ from .analysis.strategies import (
     check_ma_breakout, _get_params_for_timeframe,
 )
 from .market_data import STABLE_BASES
-
-SIGNAL_CONFIG_FILE = os.path.join(str(PROJECT_ROOT), 'signal_config.json')
-
-# signal_config.json 缺失时的兜底配置（策略全部关闭，保证可运行）
-FALLBACK_SIGNAL_CONFIG: Dict[str, Any] = {
-    'app_settings': {'exchange': 'binance', 'default_market_type': 'swap', 'check_interval_minutes': 5},
-    'market_settings': {
-        'timeframes': ['1h', '4h'],
-        'static_symbols': ['BTC', 'ETH', 'BNB'],
-        'dynamic_scan': {'enabled': False, 'top_n_for_signals': 100, 'exclude_symbols': []},
-    },
-    'strategy_params': {},
-}
+from .config_store import (  # noqa: F401  (load_signal_config 保持旧导入路径可用)
+    FALLBACK_SIGNAL_CONFIG, SIGNAL_CONFIG_FILE, load_signal_config,
+)
 
 # 策略注册表：name -> (函数, K线数量 limit)（与 monitor signal_scanner.py 一致）
 STRATEGY_MAP: Dict[str, Dict[str, Any]] = {
@@ -60,23 +47,8 @@ STRATEGY_MAP: Dict[str, Dict[str, Any]] = {
 MIN_SCAN_INTERVAL_SEC = 30
 
 
-def load_signal_config() -> Dict[str, Any]:
-    """加载项目根 signal_config.json（app_settings/market_settings/strategy_params）。
-
-    文件缺失/损坏时安全降级为兜底配置。
-    """
-    try:
-        with open(SIGNAL_CONFIG_FILE, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-        if isinstance(data, dict) and data.get('strategy_params'):
-            return data
-    except (OSError, json.JSONDecodeError) as e:
-        logger.warning(f"signal_config.json 加载失败，使用兜底配置: {e}")
-    return json.loads(json.dumps(FALLBACK_SIGNAL_CONFIG))
-
-
 def build_scan_config(settings: Dict[str, Any]) -> Dict[str, Any]:
-    """合并 signal_config.json 与 user_settings 中的 signal_* 覆盖项。"""
+    """合并策略配置（DB 优先，见 config_store）与 user_settings 中的 signal_* 覆盖项。"""
     config = load_signal_config()
     market_settings = config.setdefault('market_settings', {})
     # 静态币种与时间框架以 user_settings 的 signal_* 键为准

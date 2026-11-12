@@ -4,6 +4,8 @@
 - 信号方向配色：**红跌绿涨**（做多🟢绿、做空🔴红），不是中国传统的红涨绿跌。前端 directionColor 和钉钉推送 _DIRECTION_LABEL 都要用这套。
 - 钉钉推送策略：静态币（BTC/ETH/BNB）实时全推；其它币成交量达到量能倍数（signal_push_volume_multiplier）才推送。
 - 信号扫描范围 Top 30（signal_scan_top_n=30），用户说 Top 多少无所谓。
+- **硬性要求：不允许存在 ≥10 行的重复代码段没合并**；重构优先，能复用必须复用（PageCard/PositionsPanel/AppDockFooter 等共享组件已建立，改动页面时优先复用）。
+- 关注性能与 Binance API 限流合规：所有信号扫描 REST 必须经 RestGuardian；扫描已并发化。
 
 ## 项目结构要点
 - 信号链路统一入口：backend/app/signals/dispatcher.py（展示 → 钉钉推送独立task → 自动开仓）。

@@ -19,7 +19,8 @@ from .auto_trader import SignalAutoTrader
 from .dispatcher import SignalDispatcher
 from .market_data import MarketDataService
 from .runtime import emit_signal  # noqa: F401  供外部统一导入
-from .scanner import SignalScanner, load_signal_config
+from .scanner import SignalScanner
+from .config_store import load_signal_config
 from .signal_store import SignalStore
 
 store = SignalStore()
@@ -29,7 +30,7 @@ market_data: Optional[MarketDataService] = None
 
 
 def _build_rest_guardian() -> RestGuardian:
-    """用 signal_config.json 的 market_settings.api_limit 初始化 RestGuardian。"""
+    """用策略配置（DB 优先，见 config_store）的 market_settings.api_limit 初始化 RestGuardian。"""
     try:
         api_limit = load_signal_config().get('market_settings', {}).get('api_limit', {})
     except Exception:

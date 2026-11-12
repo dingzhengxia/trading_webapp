@@ -14,6 +14,7 @@ from pydantic import ValidationError
 
 from ..core.security import verify_api_key
 from ..models.schemas import SignalConfigUpdate
+from ..signals import config_store
 from ..signals import service as signal_service
 
 router = APIRouter(prefix="/api/signals", tags=["Signals"], dependencies=[Depends(verify_api_key)])
@@ -90,6 +91,10 @@ async def get_signals() -> Dict[str, Any]:
         "status": status,
         "signals": signal_service.store.recent(200),
         "config": _signal_config_view(),
+        "strategy": {
+            "config": config_store.load_signal_config(),
+            "source": config_store.config_source(),
+        },
         "push": {
             "dingtalk_configured": dingtalk.is_configured(),
             "dingtalk_enabled": bool(settings.get('dingtalk_enabled', False)),
@@ -126,6 +131,31 @@ async def update_signal_config(payload: Dict[str, Any]) -> Dict[str, Any]:
     # 热应用（返回值以本次合并结果为准，避免依赖持久化层回读时序）
     await signal_service.apply_signal_config(settings)
     return {"config": {k: v for k, v in settings.items() if str(k).startswith('signal_')}}
+
+
+@router.post("/strategy-config")
+async def update_strategy_config(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """更新策略参数（signal_params.*，深合并后落库）。
+
+    - 请求体 `{"strategy_params": {...}}`：局部更新，只允许已存在的策略名；
+    - 请求体 `{"reset": true}`：丢弃数据库内容，用仓库内 signal_config.json 重新播种；
+    - 落库后下一轮扫描自动生效（扫描器每轮重新读取配置），无需重启。
+    """
+    if not isinstance(payload, dict) or len(payload) != 1:
+        raise HTTPException(status_code=400, detail='请求体必须为 {"strategy_params": {...}} 或 {"reset": true}。')
+
+    if payload.get("reset") is True:
+        config = config_store.reset_signal_config()
+    else:
+        try:
+            config = config_store.update_signal_config(payload)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        except RuntimeError as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
+    return {"strategy": {"config": config, "source": config_store.config_source()},
+            "message": "已保存到数据库，下一轮扫描生效"}
 
 
 @router.post("/auto-trade")

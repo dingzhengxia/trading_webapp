@@ -22,7 +22,8 @@ ENV IS_DOCKER=1
 
 WORKDIR /app
 
-# 信号策略配置（/app/signal_config.json，signals/scanner.py 读取；缺失时自动用兜底配置）
+# 信号策略配置（/app/signal_config.json）：仅作首次播种的默认值，
+# 运行时以 SQLite（signal_state.strategy_config）为准，重建镜像不会回滚线上参数；缺失时自动用兜底配置
 COPY signal_config.json .
 
 # SQLite 数据目录（config.py / database.py 运行时写入 /app/data/app.db，建议运行时挂载卷持久化）
