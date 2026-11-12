@@ -17,6 +17,8 @@ from typing import Any, Dict, List
 
 from loguru import logger
 
+from ..core.guarded_exchange import raw_rest_method
+
 _ALGO_METHODS = (
     "fapiPrivateGetOpenAlgoOrders",
     "fapiPrivatePostAlgoOrder",
@@ -62,7 +64,7 @@ async def fetch_open_algo_orders(exchange: Any, symbol: str, conf: Dict[str, Any
     if supports_algo(exchange):
         market_id = exchange.market(symbol)["id"]
         response = await rest.call(
-            exchange.fapiPrivateGetOpenAlgoOrders, {"symbol": market_id},
+            raw_rest_method(exchange, 'fapiPrivateGetOpenAlgoOrders'), {"symbol": market_id},
             priority="NORMAL", conf=conf)
         if isinstance(response, dict):
             return response.get("orders") or response.get("data") or []
@@ -70,7 +72,7 @@ async def fetch_open_algo_orders(exchange: Any, symbol: str, conf: Dict[str, Any
 
     _warn_once()
     orders = await rest.call(
-        exchange.fetch_open_orders, symbol, None, None, {"stop": True},
+        raw_rest_method(exchange, 'fetch_open_orders'), symbol, None, None, {"stop": True},
         priority="NORMAL", conf=conf)
     return [_normalize_legacy_order(o) for o in (orders or [])]
 
@@ -92,7 +94,7 @@ async def create_close_position_stop(exchange: Any, symbol: str, side: str,
             "workingType": "MARK_PRICE", "closePosition": "true",
             "clientAlgoId": client_id,
         }
-        return await rest.call(exchange.fapiPrivatePostAlgoOrder, params,
+        return await rest.call(raw_rest_method(exchange, 'fapiPrivatePostAlgoOrder'), params,
                                priority="HIGH", conf=conf)
 
     _warn_once()
@@ -105,7 +107,7 @@ async def create_close_position_stop(exchange: Any, symbol: str, side: str,
     if position_side and position_side != "BOTH":
         params["positionSide"] = position_side
     return await rest.call(
-        exchange.create_order, symbol, "STOP_MARKET",
+        raw_rest_method(exchange, 'create_order'), symbol, "STOP_MARKET",
         "sell" if side == "long" else "buy", None, None, params,
         priority="HIGH", conf=conf)
 
@@ -116,10 +118,10 @@ async def cancel_algo_order(exchange: Any, symbol: str, algo_id: Any,
     if supports_algo(exchange):
         market_id = exchange.market(symbol)["id"]
         return await rest.call(
-            exchange.fapiPrivateDeleteAlgoOrder,
+            raw_rest_method(exchange, 'fapiPrivateDeleteAlgoOrder'),
             {"symbol": market_id, "algoId": str(algo_id)},
             priority="HIGH", conf=conf)
 
     _warn_once()
-    return await rest.call(exchange.cancel_order, str(algo_id), symbol,
+    return await rest.call(raw_rest_method(exchange, 'cancel_order'), str(algo_id), symbol,
                            priority="HIGH", conf=conf)

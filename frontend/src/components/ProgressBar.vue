@@ -71,6 +71,7 @@ import { computed } from 'vue'
 import { useRoute } from 'vue-router'
 import { useUiStore } from '@/stores/uiStore'
 import api from '@/services/api'
+import { ENDPOINTS } from '@/services/endpoints'
 
 const uiStore = useUiStore()
 const route = useRoute()
@@ -88,7 +89,7 @@ const progressPercentage = computed(() => {
 
 const stopTrading = () => {
   uiStore.initiateStop()
-  api.post('/api/trading/stop').catch((e) => {
+  api.post(ENDPOINTS.tradingStop).catch((e) => {
     uiStore.logStore.addLog({
       message: `发送停止指令失败: ${e.message}`,
       level: 'error',

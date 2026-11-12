@@ -1,0 +1,44 @@
+sequenceDiagram
+    participant TS as TradingService
+    participant EM as ExchangeManager
+    participant GE as GuardedExchange
+    participant RG as RestGuardian(共享)
+    participant FX as ccxt/FakeExchange
+    participant L as exchange_logic_async
+    participant S as sl_tp_logic
+    participant P as protection.service
+
+    TS->>EM: get_exchange_for_task()
+    EM->>FX: initialize_exchange_async(建实例+load_markets)
+    L->>GE: detect_position_mode_async() [fetch_position_mode→HIGH]
+    GE->>RG: call(fetch_position_mode, HIGH)
+    RG->>FX: 请求（限流并发/间隔约束）
+    Note over FX: hedge 结果缓存 exchange._twa_hedge_mode
+    loop 每个币种 plan
+        TS->>L: process_order_with_sl_tp_async(plan)
+        L->>L: position_side_for(buy→LONG)
+        L->>L: coid=make_client_order_id('O',symbol,seq)
+        L->>GE: create_order(limit,postOnly,newClientOrderId,positionSide)[HIGH]
+        GE->>RG: call(create_order, HIGH)→FX
+        alt RequestTimeout/NetworkError
+            L->>GE: recover_order_by_client_id_async(coid)
+            alt 查到订单
+                Note over L: 接管原单，进入等待成交循环（不重下）
+            else 查不到
+                Note over L: 下一轮 attempt 重下（新 coid）
+            end
+        end
+        L->>GE: fetch_order(等待成交)[HIGH]
+        L->>S: set_tp_sl_for_position_async(positionSide=LONG)
+        S->>GE: create_order(STOP_MARKET/TP,coid='SL/TP…')[HIGH]
+        alt SL/TP 失败
+            L->>P: protection_active_for(full_symbol,side)
+            alt protection 已接管
+                Note over L: error 强提示，跳过自动平仓（单一处置权）
+            else 未接管 且 unprotected_position_action=auto_close
+                L->>L: close_position_async(1.0)（reduceOnly 限价+全平复核）
+            else keep_alert
+                Note over L: 危险态标记，不触碰仓位
+            end
+        end
+    end

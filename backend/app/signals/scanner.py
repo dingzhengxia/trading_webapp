@@ -228,6 +228,19 @@ class SignalScanner:
 
         # 3. K 线扫描：同周期内并发拉取（REST 速率由 RestGuardian 统一限制：
         #    并发 3 + 80ms 最小间隔 + 429/418 退避），每个 (symbol, timeframe) 只发一次请求
+        def _run_strategies(full_symbol: str, timeframe: str, df, enabled_sets) -> List[str]:
+            """线程内顺序跑该 (symbol, timeframe) 的全部启用策略（R-P1-3 合并派发）。"""
+            thread_errors: List[str] = []
+            for name, func, _limit, params, index in enabled_sets:
+                if self._stop_event.is_set():
+                    break
+                try:
+                    # 策略会往 df 写指标列，逐策略拷贝隔离
+                    func(full_symbol, timeframe, config, df.copy(), params, index)
+                except Exception as e:
+                    thread_errors.append(f"策略 {name} @ {full_symbol} {timeframe}: {e}")
+            return thread_errors
+
         async def _scan_one(timeframe: str, full_symbol: str) -> List[str]:
             """单个 (symbol, timeframe) 的拉取 + 全部策略计算；返回错误列表。"""
             errors: List[str] = []
@@ -242,14 +255,9 @@ class SignalScanner:
             df = pd.DataFrame(raw_ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
             if df.empty:
                 return errors
-            for name, func, _limit, params, index in enabled:
-                if self._stop_event.is_set():
-                    break
-                try:
-                    # 策略会往 df 写指标列，逐策略拷贝隔离
-                    await asyncio.to_thread(func, full_symbol, timeframe, config, df.copy(), params, index)
-                except Exception as e:
-                    errors.append(f"策略 {name} @ {full_symbol} {timeframe}: {e}")
+            # 一次 to_thread 顺序跑该组合全部策略：派发次数 O(策略数) → O(symbol×timeframe)
+            errors.extend(await asyncio.to_thread(
+                _run_strategies, full_symbol, timeframe, df, enabled))
             return errors
 
         for timeframe in timeframes:
@@ -272,6 +280,19 @@ class SignalScanner:
         return {'scanned_symbols': len(symbols), 'error_count': error_count, 'last_error': last_error}
 
     # -------------------------------------------------------------- 后台循环
+    def _current_interval(self) -> int:
+        """每轮重读 signal_scan_interval_seconds（R-P1-2 配置热更新）。
+
+        设置页改完间隔后下一轮生效，无需重启扫描循环；非法值回退当前值。
+        """
+        try:
+            settings = self._settings_loader()
+            raw = int(settings.get('signal_scan_interval_seconds',
+                                   self._interval_seconds))
+        except (TypeError, ValueError, AttributeError):
+            return self._interval_seconds
+        return max(MIN_SCAN_INTERVAL_SEC, raw)
+
     async def _run_loop(self) -> None:
         while not self._stop_event.is_set():
             start = time.monotonic()
@@ -279,6 +300,7 @@ class SignalScanner:
                 await self.scan_once()
             except Exception as e:
                 logger.error(f"扫描循环异常（指数退避后重试）: {e}")
+            self._interval_seconds = self._current_interval()
             elapsed = time.monotonic() - start
             delay = max(self._interval_seconds, MIN_SCAN_INTERVAL_SEC)
             if self._store.snapshot().get('last_error'):

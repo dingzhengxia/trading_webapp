@@ -104,6 +104,19 @@ export interface UserSettings {
   open_order_fill_timeout_seconds: number
   close_maker_retries: number
   close_order_fill_timeout_seconds: number
+  // R-P0-2 裸仓回收：SL/TP 注入失败后的兜底动作
+  unprotected_position_action: 'auto_close' | 'keep_alert'
+  // R-P1-5 平仓让价兜底（0=关闭）
+  close_price_chase_ticks: number
+  // R-P1-2 api_* 限流参数（RestGuardian 热更新）
+  api_max_concurrency: number
+  api_min_interval_sec: number
+  api_max_retries: number
+  api_failure_threshold: number
+  api_circuit_breaker_cooldown_sec: number
+  api_418_cooldown_sec: number
+  api_429_base_backoff_sec: number
+  api_429_max_backoff_sec: number
   // 后端仅实现了 multi_factor_weakest 策略，前端不再暴露未实现的策略
   rebalance_method: 'multi_factor_weakest'
   rebalance_top_n: number

@@ -3,7 +3,7 @@
   <v-dialog v-model="uiStore.showRebalanceDialog" max-width="600px" persistent>
     <v-card v-if="internalPlan">
       <v-card-title class="text-h5">
-        再平衡计划 (目标比例: {{ manualRatio.toFixed(1) }}%)
+        再平衡计划 (目标比例: {{ formatFixed(manualRatio, 1) }}%)
       </v-card-title>
       <v-card-text>
         <!-- 核心修改：新增显示预计总仓位价值的区域 -->
@@ -11,10 +11,7 @@
           <div class="text-caption text-medium-emphasis">预计空头总价值</div>
           <div class="text-h4 font-weight-bold text-amber-accent-3 my-1">
             ${{
-              targetShortValue.toLocaleString('en-US', {
-                minimumFractionDigits: 2,
-                maximumFractionDigits: 2,
-              })
+              formatAmount(targetShortValue)
             }}
           </div>
         </div>
@@ -33,7 +30,7 @@
             max="150"
           >
             <template v-slot:thumb-label="{ modelValue }">
-              <span class="font-weight-bold">{{ modelValue.toFixed(1) }}%</span>
+              <span class="font-weight-bold">{{ formatFixed(modelValue, 1) }}%</span>
             </template>
           </v-slider>
         </div>
@@ -44,8 +41,8 @@
             <p class="font-weight-bold">将要平仓/减仓:</p>
             <v-list density="compact">
               <v-list-item v-for="p in internalPlan.positions_to_close" :key="p.symbol">
-                {{ p.symbol }} (-${{ p.close_value.toFixed(2) }},
-                {{ p.close_ratio_perc.toFixed(0) }}%)
+                {{ p.symbol }} (-${{ formatFixed(p.close_value, 2) }},
+                {{ formatFixed(p.close_ratio_perc, 0) }}%)
               </v-list-item>
             </v-list>
           </div>
@@ -53,7 +50,7 @@
             <p class="font-weight-bold">将要开仓/加仓:</p>
             <v-list density="compact">
               <v-list-item v-for="p in internalPlan.positions_to_open" :key="p.symbol">
-                {{ p.symbol }} (+${{ p.open_value.toFixed(2) }}, {{ p.percentage.toFixed(0) }}%)
+                {{ p.symbol }} (+${{ formatFixed(p.open_value, 2) }}, {{ formatFixed(p.percentage, 0) }}%)
               </v-list-item>
             </v-list>
           </div>
@@ -81,6 +78,8 @@ import { useUiStore } from '@/stores/uiStore'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { usePositionStore } from '@/stores/positionStore'
 import type { RebalancePlan } from '@/models/types'
+import { ENDPOINTS } from '@/services/endpoints'
+import { formatAmount, formatFixed } from '@/utils/format'
 
 const uiStore = useUiStore()
 const settingsStore = useSettingsStore()
@@ -238,6 +237,6 @@ const executePlan = async () => {
   const taskName = '执行再平衡'
   const totalTasks = executionOrders.length
 
-  uiStore.launchTask('/api/rebalance/execute', { orders: executionOrders }, taskName, totalTasks)
+  uiStore.launchTask(ENDPOINTS.rebalanceExecute, { orders: executionOrders }, taskName, totalTasks)
 }
 </script>

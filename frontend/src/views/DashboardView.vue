@@ -146,6 +146,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import api from '@/services/api'
+import { ENDPOINTS } from '@/services/endpoints'
 import MetricCard from '@/components/MetricCard.vue'
 import SystemStatusStrip from '@/components/overview/SystemStatusStrip.vue'
 import PositionSideSummary from '@/components/overview/PositionSideSummary.vue'
@@ -200,7 +201,7 @@ const recentActions = computed<ProtectionActionRow[]>(
 
 const fetchOverview = async (): Promise<void> => {
   try {
-    const response = await api.get<SignalsResponse>('/api/signals')
+    const response = await api.get<SignalsResponse>(ENDPOINTS.signals)
     if (response.data?.status) {
       signalStatus.value = response.data.status
     }
@@ -211,7 +212,7 @@ const fetchOverview = async (): Promise<void> => {
     console.warn('总览页获取信号状态失败:', error)
   }
   try {
-    const response = await api.get<ProtectionStatus>('/api/protection')
+    const response = await api.get<ProtectionStatus>(ENDPOINTS.protection)
     protectionStatus.value = response.data
   } catch (error: unknown) {
     console.warn('总览页获取风控状态失败:', error)

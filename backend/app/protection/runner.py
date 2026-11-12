@@ -22,6 +22,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 from loguru import logger
 
 from . import engine, ledger, risk_model
+from .config import load_protection_config
 from .notifier import send_alert
 
 Key = Tuple[str, str]
@@ -53,7 +54,7 @@ V2 = _Runtime()
 
 def load_config() -> Dict[str, Any]:
     """v2 参数 = V2_DEFAULTS ∪ 用户覆盖（用户没写的字段一律用默认值）。"""
-    raw = engine._load_config().get('position_protection', {}) or {}
+    raw = load_protection_config().get('position_protection', {}) or {}
     conf = dict(risk_model.V2_DEFAULTS)
     for key, value in raw.items():
         if value is not None:

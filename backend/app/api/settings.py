@@ -40,12 +40,35 @@ NUMERIC_RANGES: Dict[str, tuple] = {
     'signal_auto_trade_confirmations': (1, 10, True),
     'signal_auto_trade_max_positions': (1, 100, True),
     'signal_auto_trade_cooldown_seconds': (0, 86400, True),
+    'signal_scan_interval_seconds': (30, 86400, True),
+    # R-P0-2 / R-P1-5 / R-P1-2 新配置范围（越界 400）
+    'close_price_chase_ticks': (0, 10, True),
+    # --- api_* 限流参数（RestGuardian 热更新）---
+    'api_max_concurrency': (1, 20, True),
+    'api_min_interval_sec': (0, 5, False),
+    'api_max_retries': (1, 10, True),
+    'api_failure_threshold': (1, 50, True),
+    'api_circuit_breaker_cooldown_sec': (1, 3600, True),
+    'api_418_cooldown_sec': (1, 3600, True),
+    'api_429_base_backoff_sec': (0.2, 60, False),
+    'api_429_max_backoff_sec': (0.2, 600, False),
+}
+
+# 枚举型配置的合法取值（非法值 400）
+CHOICE_SETTINGS: Dict[str, tuple] = {
+    'unprotected_position_action': ('auto_close', 'keep_alert'),
 }
 
 
 def _validate_numeric_settings(updated: Dict[str, Any]) -> None:
     """校验交易安全相关数值；非法值返回 400，避免 "" / 0 杠杆等写入数据库。"""
     validate_numbers(updated, NUMERIC_RANGES)
+    for field, allowed in CHOICE_SETTINGS.items():
+        if field in updated and str(updated[field]) not in allowed:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"{field} 必须是 {allowed} 之一。",
+            )
 
 
 def _mask_secret(value: Any) -> str:
@@ -96,6 +119,15 @@ def update_settings(
 
     current_settings.update(updated_settings)
     if app_config.save_settings(current_settings):
+        # R-P1-2 配置热更新：api_* 限流参数保存后立即生效，无需重启
+        try:
+            from ..core.rest_guardian import DEFAULT_API_LIMIT, shared_guardian
+
+            api_conf = {k: current_settings[k] for k in DEFAULT_API_LIMIT
+                        if k in current_settings}
+            shared_guardian().configure(api_conf)
+        except Exception:  # noqa: BLE001 - 热更新失败不影响保存结果（下次重启生效）
+            pass
         return {"message": "Settings saved successfully"}
     raise HTTPException(status_code=500, detail="保存配置失败，请查看服务器日志。")
 

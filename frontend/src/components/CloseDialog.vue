@@ -12,10 +12,7 @@
           <div class="text-caption text-medium-emphasis">预计平仓价值</div>
           <div class="text-h4 font-weight-bold num text-warning my-1">
             ${{
-              closeValue.toLocaleString('en-US', {
-                minimumFractionDigits: 2,
-                maximumFractionDigits: 2,
-              })
+              formatAmount(closeValue)
             }}
           </div>
         </div>
@@ -67,6 +64,9 @@ import { ref, computed, watch } from 'vue'
 import { useUiStore } from '@/stores/uiStore'
 import { usePositionStore } from '@/stores/positionStore'
 import type { CloseTarget } from '@/stores/uiStore'
+import { ENDPOINTS } from '@/services/endpoints'
+import type { EndpointPath } from '@/services/endpoints'
+import { formatAmount } from '@/utils/format'
 
 const uiStore = useUiStore()
 const positionStore = usePositionStore()
@@ -141,12 +141,12 @@ const executeClose = () => {
   let totalTasks = 0
 
   if (target.type === 'single') {
-    endpoint = '/api/positions/close'
+    endpoint = ENDPOINTS.positionsClose
     payload = { full_symbol: target.position.full_symbol, ratio }
     taskName = `平仓 ${target.position.symbol}`
     totalTasks = 1
   } else if (target.type === 'by_side') {
-    endpoint = '/api/positions/close-by-side'
+    endpoint = ENDPOINTS.positionsCloseBySide
     payload = { side: target.side, ratio }
     taskName = `批量平仓-${target.side}`
     if (target.side === 'long') totalTasks = positionStore.longPositions.length
@@ -154,13 +154,13 @@ const executeClose = () => {
     else totalTasks = positionStore.positions.length
   } else if (target.type === 'selected') {
     const fullSymbols = target.positions.map((p) => p.full_symbol)
-    endpoint = '/api/positions/close-multiple'
+    endpoint = ENDPOINTS.positionsCloseMultiple
     payload = { full_symbols: fullSymbols, ratio }
     taskName = '平掉选中'
     totalTasks = fullSymbols.length
   }
 
   closeDialog()
-  uiStore.launchTask(endpoint, payload, taskName, totalTasks)
+  uiStore.launchTask(endpoint as EndpointPath, payload, taskName, totalTasks)
 }
 </script>

@@ -45,6 +45,10 @@
 import { computed, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useDisplay } from 'vuetify'
+// 按需引入（T12）：外壳组件经 <component :is> 动态渲染且 vite-plugin-vuetify
+// 无法静态分析字符串派发，必须显式 import 并直接传组件对象（传字符串
+// 'v-dialog' 在按需引入下查不到全局注册会退化为原生元素）
+import { VDialog, VNavigationDrawer } from 'vuetify/components'
 
 export interface ConfigTab {
   key: string
@@ -66,9 +70,11 @@ const show = defineModel<boolean>({ default: false })
 
 const { mdAndUp } = useDisplay()
 
-const overlayComponent = computed(() => (mdAndUp.value ? 'v-navigation-drawer' : 'v-dialog'))
+const overlayComponent = computed(() => (mdAndUp.value ? VNavigationDrawer : VDialog))
 const overlayProps = computed(() =>
-  mdAndUp.value ? { location: 'right', temporary: true, width: 520 } : { fullscreen: true },
+  mdAndUp.value
+    ? { location: 'right' as const, temporary: true, width: 520 }
+    : { fullscreen: true },
 )
 
 const route = useRoute()

@@ -16,6 +16,7 @@ from loguru import logger
 from ..core.exchange_manager import get_shared_exchange
 from ..core.tasks import cancel_task, cancel_tasks
 from . import engine
+from .config import load_protection_config
 
 _supervisor_task: Optional[asyncio.Task] = None
 _engine_task: Optional[asyncio.Task] = None
@@ -28,7 +29,7 @@ async def _run_engine() -> None:
     global _started_at
     exchange = await get_shared_exchange()
     _started_at = time.time()
-    conf = engine._load_config().get("position_protection", {})
+    conf = load_protection_config().get("position_protection", {})
     version = str(conf.get("engine_version") or "v2").lower()
     if version == "v1":
         logger.info("🛡️ 使用 v1 仓位保护引擎（engine_version=v1）")
@@ -45,7 +46,7 @@ async def _supervisor() -> None:
     global _engine_task, _last_error
     while True:
         try:
-            conf = engine._load_config().get("position_protection", {})
+            conf = load_protection_config().get("position_protection", {})
             enabled = bool(conf.get("enabled", False))
             running = _engine_task is not None and not _engine_task.done()
 
@@ -96,6 +97,37 @@ async def restart_protection() -> None:
     _engine_task = None
 
 
+def protection_active_for(full_symbol: str, side: str) -> bool:
+    """查询仓位保护引擎是否已接管指定 (symbol, side) 仓位（只读，零请求）。
+
+    R-P0-2 裸仓回收协调：交易主链路在 SL/TP 注入失败时调用本函数判断处置权——
+    引擎已接管（enabled=True 且引擎状态中存在该仓位）则跳过自动平仓，避免
+    两边同时发单互相顶单；未接管时主链路按 unprotected_position_action 兜底。
+    """
+    side = str(side or '').lower()
+    if side not in ('long', 'short') or not full_symbol:
+        return False
+    try:
+        conf = load_protection_config().get("position_protection", {})
+        if not bool(conf.get("enabled", False)):
+            return False
+        version = str(conf.get("engine_version") or "v2").lower()
+        if version == "v1":
+            return engine._state_key(full_symbol, side) in engine._load_state()
+    except Exception as exc:  # noqa: BLE001 - 查询失败按"未接管"处理（主链路兜底）
+        logger.warning(f"查询仓位保护接管状态失败（按未接管处理）: {exc}")
+        return False
+    # v2：运行时活跃集合 或 一仓一行账本中已有该仓位
+    from . import runner
+    if (full_symbol, side) in getattr(runner.V2, 'active', set()):
+        return True
+    try:
+        from . import ledger
+        return ledger.load(full_symbol, side) is not None
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def _position_row(symbol: str, side: str, position: Dict[str, Any]) -> Dict[str, Any]:
     """把交易所仓位 + 引擎运行时状态整理成给前端的行。"""
     key = engine._state_key(symbol, side)
@@ -124,7 +156,7 @@ def _position_row(symbol: str, side: str, position: Dict[str, Any]) -> Dict[str,
 
 def get_protection_status() -> Dict[str, Any]:
     """返回仓位保护运行状态（供 /api/protection 使用），不发起任何交易所请求。"""
-    conf = engine._load_config().get("position_protection", {})
+    conf = load_protection_config().get("position_protection", {})
     version = str(conf.get("engine_version") or "v2").lower()
     running = _engine_task is not None and not _engine_task.done()
 

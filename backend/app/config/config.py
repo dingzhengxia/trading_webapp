@@ -4,6 +4,8 @@ import os
 from typing import List, Dict, Any
 from threading import RLock
 
+from loguru import logger
+
 from ..core.paths import PROJECT_ROOT
 
 # --- 路径定义 ---
@@ -14,10 +16,11 @@ COIN_LISTS_FILE = PROJECT_ROOT / 'coin_lists.json'
 
 from ..core import database  # noqa: E402  SQLite 存储层（任务 A）
 
-# 注入迁移源路径（与本项目根一致），并初始化数据库（幂等：建表 + 一次性迁移）
+# 注入迁移源路径（与本项目根一致）。
+# T13（P2-5）：建库不再在 import 时进行——database.init_db() 已移至
+# app.main.lifespan 的 init_app_storage()，import 本模块不会创建 data/app.db。
 database.USER_SETTINGS_FILE = USER_SETTINGS_FILE
 database.COIN_LISTS_FILE = COIN_LISTS_FILE
-database.init_db()
 
 STABLECOIN_PREFERENCE = ['USDC', 'USDT']
 
@@ -50,6 +53,23 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     'open_order_fill_timeout_seconds': 60,
     'close_maker_retries': 3,
     'close_order_fill_timeout_seconds': 12,
+    # R-P0-2 裸仓回收：SL/TP 注入失败时的兜底动作
+    # auto_close = 立即全平（复用 close_position_async，reduceOnly 限价 + 全平复核）；
+    # keep_alert = 只标记危险态，不触碰仓位
+    'unprotected_position_action': 'auto_close',
+    # R-P1-5 平仓让价兜底：reduceOnly 平仓单连续 2 轮 0 成交后按 tick 让价重挂（0=关闭）
+    'close_price_chase_ticks': 1,
+
+    # --- R-P1-2 api_* 限流参数（RestGuardian 运行时热更新，设置页可改）---
+    'api_max_concurrency': 3,
+    'api_min_interval_sec': 0.08,
+    'api_max_retries': 3,
+    'api_failure_threshold': 5,
+    'api_circuit_breaker_cooldown_sec': 30,
+    'api_418_cooldown_sec': 60,
+    'api_429_base_backoff_sec': 2,
+    'api_429_max_backoff_sec': 30,
+
     'rebalance_method': 'multi_factor_weakest',
     'rebalance_top_n': 10,
     'rebalance_min_volume_usd': 5000000.0,
@@ -184,9 +204,9 @@ def load_coin_lists() -> None:
         AVAILABLE_COINS = list(pools.get('coins_pool', []))
         AVAILABLE_LONG_COINS = list(pools.get('long_coins_pool', []))
         AVAILABLE_SHORT_COINS = list(pools.get('short_coins_pool', []))
-        print(
-            f"--- [INFO] Loaded coin pools from SQLite. Total: {len(AVAILABLE_COINS)}, "
-            f"Long: {len(AVAILABLE_LONG_COINS)}, Short: {len(AVAILABLE_SHORT_COINS)} ---")
+        logger.info(
+            "Loaded coin pools from SQLite. Total: {}, Long: {}, Short: {}",
+            len(AVAILABLE_COINS), len(AVAILABLE_LONG_COINS), len(AVAILABLE_SHORT_COINS))
 
 
 def load_settings() -> Dict[str, Any]:
@@ -223,13 +243,13 @@ def save_settings(current_config: Dict[str, Any]) -> bool:
         # 单事务批量写入：避免逐键 commit 导致“杠杆已改、止损未改”的半套配置
         database.set_many('settings', settings_to_write)
 
-        print("--- [INFO] User settings successfully saved to SQLite. ---")
+        logger.info("User settings successfully saved to SQLite.")
 
         with _settings_lock:
             _cached_settings = None
         return True
     except Exception as e:
-        print(f"--- [ERROR] Failed to save user settings: {e} ---")
+        logger.error("Failed to save user settings: {}", e)
         return False
 
 
@@ -255,7 +275,7 @@ def add_coin_to_pool(coin_symbol: str) -> List[str]:
         database.set_value('coin_pools', 'coins_pool', new_pool)
 
         AVAILABLE_COINS = new_pool
-        print(f"--- [INFO] Added '{symbol_upper}' to coin pool. Total now: {len(AVAILABLE_COINS)} ---")
+        logger.info("Added '{}' to coin pool. Total now: {}", symbol_upper, len(AVAILABLE_COINS))
         return AVAILABLE_COINS
 
 
@@ -289,8 +309,9 @@ def save_coin_pools(long_coins_pool: List[str], short_coins_pool: List[str]) -> 
 
         AVAILABLE_LONG_COINS = long_pool
         AVAILABLE_SHORT_COINS = short_pool
-        print(
-            f"--- [INFO] Coin pools saved successfully. Long: {len(AVAILABLE_LONG_COINS)}, Short: {len(AVAILABLE_SHORT_COINS)} ---")
+        logger.info(
+            "Coin pools saved successfully. Long: {}, Short: {}",
+            len(AVAILABLE_LONG_COINS), len(AVAILABLE_SHORT_COINS))
 
     return {
         "coins_pool": list(AVAILABLE_COINS),
@@ -299,5 +320,6 @@ def save_coin_pools(long_coins_pool: List[str], short_coins_pool: List[str]) -> 
     }
 
 
-# 首次加载
-load_coin_lists()
+# T13（P2-5）：首次加载不再在 import 时进行（原先模块级 load_coin_lists()
+# 会在导入阶段读 SQLite 并顺带创建空库文件）。币种池加载已并入
+# app.main.init_app_storage()，随应用生命周期显式执行。

@@ -13,6 +13,8 @@
 """
 import time
 import uuid
+
+from loguru import logger
 from typing import Any, Dict, List, Optional
 
 from .database import get_value, set_value
@@ -79,7 +81,7 @@ def record_batch(source: str, trigger: str, items: List[Dict[str, Any]],
         set_value('open_history', HISTORY_KEY, batches)
         return record
     except Exception as e:  # noqa: BLE001 - 记录失败绝不影响交易主流程
-        print(f"--- [ERROR] 写入开仓记录失败: {e} ---")
+        logger.error("写入开仓记录失败: {}", e)
         return None
 
 

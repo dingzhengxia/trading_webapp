@@ -32,7 +32,7 @@
         <div class="d-flex justify-space-between">
           <span class="font-weight-bold">总权重:</span>
           <span :class="Math.abs(totalWeight - 100) < 0.001 ? 'text-success' : 'text-error'">
-            {{ totalWeight.toFixed(2) }} %
+            {{ formatFixed(totalWeight, 2) }} %
           </span>
         </div>
       </v-card-text>
@@ -55,6 +55,7 @@
 <script setup lang="ts">
 import { ref, watch, computed, nextTick } from 'vue'
 import { useSettingsStore } from '@/stores/settingsStore'
+import { formatFixed, roundTo } from '@/utils/format'
 
 const props = defineProps<{
   modelValue: boolean
@@ -99,7 +100,7 @@ const recalculateWeights = (editedSymbol: string) => {
       localWeights.value.find((item) => item.symbol !== editedSymbol) || localWeights.value[0]
     if (lastItem) {
       const diff = 100 - totalWeight.value
-      lastItem.weight = parseFloat(((Number(lastItem.weight) || 0) + diff).toFixed(2))
+      lastItem.weight = roundTo((Number(lastItem.weight) || 0) + diff, 2)
     }
   }
 
@@ -118,9 +119,9 @@ const distribute = (total: number, items: { symbol: string; weight: number }[]) 
 
   items.forEach((item, index) => {
     if (index === count - 1) {
-      item.weight = parseFloat((total - accumulatedWeight).toFixed(2))
+      item.weight = roundTo(total - accumulatedWeight, 2)
     } else {
-      const w = parseFloat(avg.toFixed(2))
+      const w = roundTo(avg, 2)
       item.weight = w
       accumulatedWeight += w
     }

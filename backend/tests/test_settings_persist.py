@@ -103,3 +103,89 @@ def test_masked_secret_is_not_overwritten(client):
     from app.config.config import load_settings
 
     assert load_settings()["api_key"] == "real-key-12345678"
+
+
+# ---------------------------------------------- R-P0-2/P1-2/P1-5 新配置校验
+def test_new_phase3_settings_persist_and_validate(client):
+    """新配置（unprotected_position_action / close_price_chase_ticks / api_*）可保存。"""
+    payload = {
+        "unprotected_position_action": "keep_alert",
+        "close_price_chase_ticks": 3,
+        "api_max_concurrency": 5,
+        "api_min_interval_sec": 0.15,
+        "api_max_retries": 4,
+    }
+    response = client.post("/api/settings", json=payload, headers={"X-API-KEY": TEST_KEY})
+    assert response.status_code == 200, response.text
+    stored = _get_settings(client)
+    assert stored["unprotected_position_action"] == "keep_alert"
+    assert stored["close_price_chase_ticks"] == 3
+    assert stored["api_max_concurrency"] == 5
+    assert stored["api_min_interval_sec"] == pytest.approx(0.15)
+    assert stored["api_max_retries"] == 4
+
+
+def test_api_settings_out_of_range_rejected_400(client):
+    for key, bad in (
+        ("close_price_chase_ticks", 99),
+        ("api_max_concurrency", 0),
+        ("api_max_retries", 0),
+        ("api_failure_threshold", 999),
+        ("api_418_cooldown_sec", 0),
+    ):
+        response = client.post("/api/settings", json={key: bad},
+                               headers={"X-API-KEY": TEST_KEY})
+        assert response.status_code == 400, f"{key}={bad} 越界必须 400"
+
+
+def test_unprotected_position_action_choice_validated(client):
+    response = client.post("/api/settings", json={"unprotected_position_action": "boom"},
+                           headers={"X-API-KEY": TEST_KEY})
+    assert response.status_code == 400, "枚举值之外必须 400"
+    response = client.post("/api/settings", json={"unprotected_position_action": "auto_close"},
+                           headers={"X-API-KEY": TEST_KEY})
+    assert response.status_code == 200
+    assert _get_settings(client)["unprotected_position_action"] == "auto_close"
+
+
+# ---------------------------------------------- R-P0-2/P1-2/P1-5 新配置校验
+def test_new_phase3_settings_persist_and_validate(client):
+    """新配置（unprotected_position_action / close_price_chase_ticks / api_*）可保存。"""
+    payload = {
+        "unprotected_position_action": "keep_alert",
+        "close_price_chase_ticks": 3,
+        "api_max_concurrency": 5,
+        "api_min_interval_sec": 0.15,
+        "api_max_retries": 4,
+    }
+    response = client.post("/api/settings", json=payload, headers={"X-API-KEY": TEST_KEY})
+    assert response.status_code == 200, response.text
+    stored = _get_settings(client)
+    assert stored["unprotected_position_action"] == "keep_alert"
+    assert stored["close_price_chase_ticks"] == 3
+    assert stored["api_max_concurrency"] == 5
+    assert stored["api_min_interval_sec"] == pytest.approx(0.15)
+    assert stored["api_max_retries"] == 4
+
+
+def test_api_settings_out_of_range_rejected_400(client):
+    for key, bad in (
+        ("close_price_chase_ticks", 99),
+        ("api_max_concurrency", 0),
+        ("api_max_retries", 0),
+        ("api_failure_threshold", 999),
+        ("api_418_cooldown_sec", 0),
+    ):
+        response = client.post("/api/settings", json={key: bad},
+                               headers={"X-API-KEY": TEST_KEY})
+        assert response.status_code == 400, f"{key}={bad} 越界必须 400"
+
+
+def test_unprotected_position_action_choice_validated(client):
+    response = client.post("/api/settings", json={"unprotected_position_action": "boom"},
+                           headers={"X-API-KEY": TEST_KEY})
+    assert response.status_code == 400, "枚举值之外必须 400"
+    response = client.post("/api/settings", json={"unprotected_position_action": "auto_close"},
+                           headers={"X-API-KEY": TEST_KEY})
+    assert response.status_code == 200
+    assert _get_settings(client)["unprotected_position_action"] == "auto_close"

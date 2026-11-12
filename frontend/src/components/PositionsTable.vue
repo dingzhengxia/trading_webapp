@@ -21,12 +21,7 @@
         class="mr-2"
       >
         <span class="font-weight-medium num">
-          总价值 ${{
-            totalNotional.toLocaleString('en-US', {
-              minimumFractionDigits: 2,
-              maximumFractionDigits: 2,
-            })
-          }}
+          总价值 ${{ formatAmount(totalNotional) }}
         </span>
       </v-chip>
       <v-btn
@@ -112,7 +107,7 @@
         <!-- 次行：回报率 · 名义价值 -->
         <div class="position-card__sub text-caption">
           <span>回报率 <span class="num" :class="pnlClass(item.pnl_percentage)">{{ formatSignedPercent(item.pnl_percentage) }}</span></span>
-          <span>名义价值 <span class="num">${{ item.notional.toFixed(2) }}</span></span>
+          <span>名义价值 <span class="num">${{ formatFixed(item.notional, 2) }}</span></span>
           <v-spacer></v-spacer>
           <v-icon size="16" class="text-medium-emphasis">
             {{ cardExpanded.has(item.full_symbol) ? 'mdi-chevron-up' : 'mdi-chevron-down' }}
@@ -163,7 +158,7 @@
       no-data-text="无持仓数据"
     >
       <template v-slot:item.notional="{ item }">
-        <span class="num">${{ item.notional.toFixed(2) }}</span>
+        <span class="num">${{ formatFixed(item.notional, 2) }}</span>
       </template>
       <template v-slot:item.pnl="{ item }">
         <span class="num" :class="pnlClass(item.pnl)">{{ formatSigned(item.pnl) }}</span>
@@ -231,7 +226,7 @@
             hide-details="auto"
           ></v-text-field>
           <div class="text-caption text-medium-emphasis mt-1">
-            当前仓位名义价值 ${{ reverseTarget.notional.toFixed(2) }}（已预填）
+            当前仓位名义价值 ${{ formatFixed(reverseTarget.notional, 2) }}（已预填）
           </div>
         </v-card-text>
         <v-card-actions>
@@ -258,7 +253,8 @@ import type { Position } from '@/models/types'
 import { useUiStore } from '@/stores/uiStore'
 import { usePositionStore } from '@/stores/positionStore'
 import { directionTone, pnlClass } from '@/utils/tone'
-import { formatSigned, formatSignedPercent } from '@/utils/format'
+import { formatAmount, formatFixed, formatQuantity, formatSigned, formatSignedPercent } from '@/utils/format'
+import { ENDPOINTS } from '@/services/endpoints'
 import EmptyState from '@/components/EmptyState.vue'
 
 type TDataTableHeader = {
@@ -318,8 +314,7 @@ const toggleCardExpand = (fullSymbol: string): void => {
   }
   cardExpanded.value = next
 }
-const entryPriceText = (value: number): string =>
-  Number(value).toLocaleString('en-US', { maximumFractionDigits: 6 })
+const entryPriceText = (value: number): string => formatQuantity(value)
 
 // --- xs 卡片：批量选择（与 v-data-table 共用 positionStore.selectedPositions） ---
 const selectMode = ref(false)
@@ -347,7 +342,7 @@ const confirmReverse = () => {
   if (!target || !(reverseValue.value > 0)) return
   // 传 full_symbol 即可，后端会自动截取基础币种（XAUT/USDT:USDT → XAUT）
   uiStore.launchTask(
-    '/api/trading/manual',
+    ENDPOINTS.tradingManual,
     { items: [{ symbol: target.full_symbol, action: 'reverse', value: Number(reverseValue.value) }] },
     `反手交易 ${target.full_symbol}`,
     1,

@@ -166,7 +166,7 @@ import { ref } from 'vue'
 import type { SignalRecord } from '@/models/types'
 import EmptyState from '@/components/EmptyState.vue'
 import { directionTone } from '@/utils/tone'
-import { formatIsoTime as formatTime, formatSignedPercent } from '@/utils/format'
+import { formatAutoPrecision, formatFixed, formatIsoTime as formatTime, formatSignedPercent } from '@/utils/format'
 
 const props = withDefaults(
   defineProps<{
@@ -210,15 +210,10 @@ const onDirectionChange = (value: unknown): void => {
 
 const strategyLabel = (strategy: string): string => props.strategyLabels[strategy] ?? strategy
 
-const formatPrice = (value: number): string => {
-  const num = Number(value)
-  if (!Number.isFinite(num)) return '—'
-  if (num >= 1000) return num.toLocaleString('en-US', { maximumFractionDigits: 2 })
-  return num.toLocaleString('en-US', { maximumFractionDigits: 6 })
-}
+const formatPrice = (value: number): string => formatAutoPrecision(value)
 
 const volumeLabel = (signal: SignalRecord): string =>
-  signal.volume_ratio == null ? '—' : `${signal.volume_ratio.toFixed(1)}x`
+  signal.volume_ratio == null ? '—' : `${formatFixed(signal.volume_ratio, 1)}x`
 
 // 量能只做提示，不拦截：达标标绿，未达标保持中性灰
 const volumeOk = (signal: SignalRecord): boolean => {

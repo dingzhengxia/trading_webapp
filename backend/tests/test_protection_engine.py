@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from app.core import database
+from app.protection import config as protection_config
 from app.protection import engine
 
 SYMBOL = "BTC/USDC:USDC"
@@ -38,9 +39,9 @@ def test_default_config_covers_all_risk_switches():
 
 
 def test_load_config_merges_sqlite_override(monkeypatch):
-    monkeypatch.setattr(engine, "load_settings",
+    monkeypatch.setattr(protection_config, "load_settings",
                         lambda: {"position_protection": {"enabled": True, "tp1_r_multiple": 1.5}})
-    conf = engine._load_config()["position_protection"]
+    conf = engine.load_protection_config()["position_protection"]
     assert conf["enabled"] is True
     assert conf["tp1_r_multiple"] == 1.5
     # 未覆盖的字段仍使用默认值
@@ -52,14 +53,17 @@ def test_load_config_falls_back_to_defaults_on_error(monkeypatch):
     def _boom():
         raise RuntimeError("db down")
 
-    monkeypatch.setattr(engine, "load_settings", _boom)
-    conf = engine._load_config()["position_protection"]
+    monkeypatch.setattr(protection_config, "load_settings", _boom)
+    conf = engine.load_protection_config()["position_protection"]
     assert conf["timeframe"] == "2h"
     assert conf["enabled"] == engine.DEFAULT_CONFIG["position_protection"]["enabled"]
 
 
 def test_deep_merge_is_recursive():
-    merged = engine._deep_merge_defaults({"a": {"b": 1, "c": 2}}, {"a": {"c": 3}})
+    # T08：配置深合并统一复用 signals/config_store.deep_merge（旧 _deep_merge_defaults 已删除）
+    from app.signals.config_store import deep_merge
+
+    merged = deep_merge({"a": {"b": 1, "c": 2}}, {"a": {"c": 3}})
     assert merged == {"a": {"b": 1, "c": 3}}
 
 
@@ -183,22 +187,32 @@ def test_load_state_returns_empty_when_missing(tmp_db):
 # ---------------------------------------------------------------------------
 # 静态审计：仓位保护只做「平仓/保护」，永远不会开仓
 # ---------------------------------------------------------------------------
-def test_protection_engine_never_calls_create_order():
-    path = Path(engine.__file__)
-    tree = ast.parse(path.read_text(encoding="utf-8"))
+def _protection_python_files():
+    """protection 包内全部 Python 文件（T08 拆分后按包审计）。"""
+    pkg_dir = Path(engine.__file__).parent
+    return sorted(pkg_dir.glob("*.py"))
+
+
+def test_protection_package_never_calls_create_order():
     offenders = []
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
-            if node.func.attr in {"create_order", "createOrder"}:
-                offenders.append(node.lineno)
-    assert not offenders, f"仓位保护引擎不得包含开仓调用: {path}:{offenders}"
+    for path in _protection_python_files():
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+                if node.func.attr in {"create_order", "createOrder"}:
+                    offenders.append(f"{path.name}:{node.lineno}")
+    assert not offenders, f"仓位保护引擎不得包含开仓调用: {offenders}"
 
 
-def test_protection_engine_has_no_plain_market_entry():
-    """所有市价调用必须是 reduceOnly 减仓/止损，且不用于开仓。"""
-    source = Path(engine.__file__).read_text(encoding="utf-8")
-    # 市价只允许出现在 create_market_order 的减仓函数里
-    assert source.count("create_market_order") == 1
+def test_protection_market_order_whitelisted_in_exits_only():
+    """市价单只允许出现在静态审计白名单 exits.py（reduceOnly 减仓/止损），其余文件零市价调用。"""
+    counts = {
+        path.name: path.read_text(encoding="utf-8").count("create_market_order")
+        for path in _protection_python_files()
+    }
+    assert counts.get("exits.py", 0) == 1, f"exits.py 白名单应恰好 1 处市价调用: {counts}"
+    others = {k: v for k, v in counts.items() if k != "exits.py" and v}
+    assert not others, f"市价单调用只允许出现在 exits.py 白名单内: {others}"
 
 
 # ---------------------------------------------------------------------------

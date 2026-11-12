@@ -20,6 +20,8 @@ from pathlib import Path
 from threading import RLock
 from typing import Any, Dict
 
+from loguru import logger
+
 from .paths import PROJECT_ROOT as _PROJECT_ROOT
 
 DB_PATH: Path = _PROJECT_ROOT / 'data' / 'app.db'
@@ -87,7 +89,7 @@ def get_value(table: str, key: str, default=None):
             finally:
                 conn.close()
         except sqlite3.Error as e:
-            print(f"--- [ERROR] SQLite 读取 {table}.{key} 失败: {e} ---")
+            logger.error("SQLite 读取 {}.{} 失败: {}", table, key, e)
             return default
     if row is None or len(row) < 2:
         return default
@@ -166,7 +168,7 @@ def get_all(table: str) -> dict:
             finally:
                 conn.close()
         except sqlite3.Error as e:
-            print(f"--- [ERROR] SQLite 读取整表 {table} 失败: {e} ---")
+            logger.error("SQLite 读取整表 {} 失败: {}", table, e)
             return result
     for row in rows:
         if len(row) < 2:
@@ -210,10 +212,10 @@ def init_db() -> None:
                             [(k, json.dumps(v, ensure_ascii=False))
                              for k, v in user_settings.items()])
                         conn.commit()
-                        print(f"--- [INFO] 已将 user_settings.json ({len(user_settings)} 项) "
-                              f"迁移到 SQLite ({DB_PATH})，旧文件保留作为备份。---")
+                        logger.info("已将 user_settings.json ({}) 项迁移到 SQLite ({})，"
+                              "旧文件保留作为备份。", len(user_settings), DB_PATH)
                 except (json.JSONDecodeError, OSError, sqlite3.Error) as e:
-                    print(f"--- [ERROR] 迁移 user_settings.json 失败: {e} ---")
+                    logger.error("迁移 user_settings.json 失败: {}", e)
 
             # --- 迁移 coin_lists.json -> coin_pools 表 ---
             if _table_count(conn, 'coin_pools') == 0 and COIN_LISTS_FILE.exists():
@@ -231,9 +233,9 @@ def init_db() -> None:
                             [(k, json.dumps(v, ensure_ascii=False))
                              for k, v in pools.items()])
                         conn.commit()
-                        print(f"--- [INFO] 已将 coin_lists.json 迁移到 SQLite ({DB_PATH})，"
-                              f"旧文件保留作为备份。---")
+                        logger.info("已将 coin_lists.json 迁移到 SQLite ({})，"
+                              "旧文件保留作为备份。", DB_PATH)
                 except (json.JSONDecodeError, OSError, sqlite3.Error) as e:
-                    print(f"--- [ERROR] 迁移 coin_lists.json 失败: {e} ---")
+                    logger.error("迁移 coin_lists.json 失败: {}", e)
         finally:
             conn.close()

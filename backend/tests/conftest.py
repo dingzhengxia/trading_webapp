@@ -18,14 +18,20 @@ BACKEND_DIR = Path(__file__).resolve().parents[1]
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
+import ccxt.async_support as ccxt  # noqa: E402  仅用异常类型（OrderNotFound 等），不发网络请求
+
 from app.models.schemas import Position  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
 # Fake exchange
 # ---------------------------------------------------------------------------
-def _market_entry(symbol: str, min_amount: float = 0.001) -> dict:
-    return {"symbol": symbol, "limits": {"amount": {"min": min_amount}}}
+def _market_entry(symbol: str, min_amount: float = 0.001,
+                  min_cost: float | None = None) -> dict:
+    limits: dict = {"amount": {"min": min_amount}}
+    if min_cost is not None:
+        limits["cost"] = {"min": min_cost}
+    return {"symbol": symbol, "limits": limits}
 
 
 def default_markets() -> dict:
@@ -82,6 +88,13 @@ class FakeExchange:
         self._fetch_counts: dict[str, int] = {}
         self.on_create_order = None  # optional sync hook(call) for stateful tests
 
+        # --- Phase 3 扩展（幂等 / minNotional / hedge mode）---
+        # clientOrderId -> 订单 id 索引（create_order 带 newClientOrderId 时自动登记）
+        self._orders_by_client_id: dict[str, str] = {}
+        # 持仓模式探测（R-P0-3）：hedge_mode=True 时 fetch_position_mode 返回 hedged
+        self.hedge_mode = False
+        self.fetch_position_mode_calls = 0
+
     # -- market metadata ---------------------------------------------------
     def market(self, symbol: str) -> dict:
         return self.markets.get(symbol) or _market_entry(symbol)
@@ -91,6 +104,11 @@ class FakeExchange:
 
     def price_to_precision(self, symbol: str, price) -> str:
         return str(round(float(price), 8))
+
+    # -- position mode（R-P0-3 离线探测）-------------------------------------
+    async def fetch_position_mode(self):
+        self.fetch_position_mode_calls += 1
+        return {"hedged": bool(self.hedge_mode)}
 
     # -- lifecycle ---------------------------------------------------------
     async def load_markets(self) -> dict:
@@ -131,8 +149,6 @@ class FakeExchange:
             "params": dict(params or {}),
             "kwargs": dict(kwargs),
         })
-        if callable(self.on_create_order):
-            self.on_create_order(self.create_order_calls[-1])
 
         order_id = "fake-%d" % len(self.create_order_calls)
         snapshot = self._status_snapshot(order_id, 0)
@@ -147,11 +163,27 @@ class FakeExchange:
             "status": snapshot.get("status", "open"),
             "filled": float(snapshot.get("filled", 0.0)),
         }
+        # 先入簿再触发钩子：幂等测试可让 create_order 在"订单已入簿"后抛网络异常，
+        # 精确模拟「请求超时但订单实际已到达交易所」的事故窗口。
         self.orders[order_id] = order
+        coid = (params or {}).get("newClientOrderId")
+        if coid:
+            self._orders_by_client_id[str(coid)] = order_id
+            order["clientOrderId"] = str(coid)
+        if callable(self.on_create_order):
+            self.on_create_order(self.create_order_calls[-1])
         return copy.deepcopy(order)
 
-    async def fetch_order(self, order_id, symbol=None):
+    async def fetch_order(self, order_id, symbol=None, params=None):
         self.fetch_order_calls.append((order_id, symbol))
+        # 按 clientOrderId 反查（幂等恢复路径）：origClientOrderId 命中索引时返回原单，
+        # 查不到则抛 OrderNotFound —— 与交易所行为一致（调用方据此判断能否重下）。
+        orig_coid = (params or {}).get("origClientOrderId") if params else None
+        if orig_coid:
+            mapped = self._orders_by_client_id.get(str(orig_coid))
+            if mapped is None:
+                raise ccxt.OrderNotFound(f"order not found by clientOrderId={orig_coid}")
+            order_id = mapped
         index = self._fetch_counts.get(order_id, 0)
         self._fetch_counts[order_id] = index + 1
         order = copy.deepcopy(self.orders.get(order_id, {"id": order_id, "symbol": symbol}))

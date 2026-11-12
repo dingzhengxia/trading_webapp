@@ -2,13 +2,22 @@
 import asyncio
 import contextlib
 
+from loguru import logger
+
 from ..config.config import load_settings
 from ..logic.exchange_logic_async import initialize_exchange_async
+from .guarded_exchange import wrap_exchange
+from .rest_guardian import shared_guardian
 
 
 # --- 核心修改在这里 ---
 async def get_exchange_with_timeout(timeout=20):
-    """获取交易所实例，并设置一个总的连接和加载市场的超时。"""
+    """获取交易所实例（GuardedExchange 代理），并设置一个总的连接和加载市场的超时。
+
+    R-P1-1：全项目唯一接触裸 ccxt 的构造点在这里——拿到原始实例后立即包一层
+    GuardedExchange，之后 get_shared_exchange()/get_exchange_for_task()/
+    get_exchange_dependency() 返回的都是代理实例，业务代码调用形态不变。
+    """
     settings = load_settings()
     try:
         # 将整个初始化过程包裹在 asyncio.wait_for 中
@@ -22,12 +31,12 @@ async def get_exchange_with_timeout(timeout=20):
             ),
             timeout=timeout
         )
-        return exchange
+        return wrap_exchange(exchange, shared_guardian())
     except asyncio.TimeoutError:
-        print(f"--- [FATAL] 获取交易所连接在 {timeout} 秒内超时！请检查API Key/Secret、网络或代理设置。---")
+        logger.error(f"获取交易所连接在 {timeout} 秒内超时！请检查API Key/Secret、网络或代理设置。")
         raise ConnectionAbortedError(f"获取交易所连接超时 ({timeout}s)")
     except Exception as e:
-        print(f"--- [FATAL] 初始化交易所时发生未知错误: {e} ---")
+        logger.error(f"初始化交易所时发生未知错误: {e}")
         raise
 
 
@@ -66,7 +75,7 @@ async def close_shared_exchange() -> None:
         try:
             await _shared_exchange.close()
         except Exception as e:
-            print(f"--- [WARNING] 关闭共享交易所实例时出错: {e} ---")
+            logger.warning(f"关闭共享交易所实例时出错: {e}")
         _shared_exchange = None
     _shared_loop_states.clear()
 

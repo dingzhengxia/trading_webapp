@@ -51,6 +51,121 @@
                       hide-details
                   /></v-col>
                 </v-row>
+
+                <SectionHeader icon="mdi-shield-alert" title="风控与执行兜底" spaced />
+                <v-row dense>
+                  <v-col cols="12" sm="6">
+                    <v-select
+                      label="裸仓处置（SL/TP 失败时）"
+                      v-model="settingsStore.settings.unprotected_position_action"
+                      :items="[
+                        { title: '自动回收仓位（推荐）', value: 'auto_close' },
+                        { title: '仅告警不触碰仓位', value: 'keep_alert' },
+                      ]"
+                      item-title="title"
+                      item-value="value"
+                      hide-details
+                    />
+                  </v-col>
+                  <v-col cols="12" sm="6">
+                    <v-text-field
+                      label="平仓让价 tick 数（0=关闭）"
+                      v-model.number="settingsStore.settings.close_price_chase_ticks"
+                      type="number"
+                      min="0"
+                      max="10"
+                      hint="reduceOnly 平仓单连续 2 轮 0 成交后按 tick 让价重挂"
+                      persistent-hint
+                    />
+                  </v-col>
+                </v-row>
+
+                <SectionHeader icon="mdi-speedometer" title="API 限流（热更新）" spaced />
+                <v-row dense>
+                  <v-col cols="6" sm="3">
+                    <v-text-field
+                      label="最大并发"
+                      v-model.number="settingsStore.settings.api_max_concurrency"
+                      type="number"
+                      min="1"
+                      max="20"
+                      hide-details
+                    />
+                  </v-col>
+                  <v-col cols="6" sm="3">
+                    <v-text-field
+                      label="最小间隔(秒)"
+                      v-model.number="settingsStore.settings.api_min_interval_sec"
+                      type="number"
+                      min="0"
+                      max="5"
+                      step="0.01"
+                      hide-details
+                    />
+                  </v-col>
+                  <v-col cols="6" sm="3">
+                    <v-text-field
+                      label="最大重试"
+                      v-model.number="settingsStore.settings.api_max_retries"
+                      type="number"
+                      min="1"
+                      max="10"
+                      hide-details
+                    />
+                  </v-col>
+                  <v-col cols="6" sm="3">
+                    <v-text-field
+                      label="熔断失败阈值"
+                      v-model.number="settingsStore.settings.api_failure_threshold"
+                      type="number"
+                      min="1"
+                      max="50"
+                      hide-details
+                    />
+                  </v-col>
+                  <v-col cols="6" sm="3">
+                    <v-text-field
+                      label="熔断冷却(秒)"
+                      v-model.number="settingsStore.settings.api_circuit_breaker_cooldown_sec"
+                      type="number"
+                      min="1"
+                      max="3600"
+                      hide-details
+                    />
+                  </v-col>
+                  <v-col cols="6" sm="3">
+                    <v-text-field
+                      label="418 冷却(秒)"
+                      v-model.number="settingsStore.settings.api_418_cooldown_sec"
+                      type="number"
+                      min="1"
+                      max="3600"
+                      hide-details
+                    />
+                  </v-col>
+                  <v-col cols="6" sm="3">
+                    <v-text-field
+                      label="429 退避基数(秒)"
+                      v-model.number="settingsStore.settings.api_429_base_backoff_sec"
+                      type="number"
+                      min="0.2"
+                      max="60"
+                      step="0.1"
+                      hide-details
+                    />
+                  </v-col>
+                  <v-col cols="6" sm="3">
+                    <v-text-field
+                      label="429 退避上限(秒)"
+                      v-model.number="settingsStore.settings.api_429_max_backoff_sec"
+                      type="number"
+                      min="0.2"
+                      max="600"
+                      step="0.1"
+                      hide-details
+                    />
+                  </v-col>
+                </v-row>
               </v-card-text>
             </v-window-item>
 

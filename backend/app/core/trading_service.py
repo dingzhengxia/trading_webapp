@@ -12,7 +12,7 @@ from .open_history import record_batch
 from .websocket_manager import broadcast_progress_details, log_message, manager as ws_manager, update_status
 from ..config.config import load_settings
 from ..logic.exchange_logic_async import (
-    InterruptedError,
+    TaskInterruptedError,
     close_position_async,
     fetch_positions_with_pnl_async,
     process_order_with_sl_tp_async,
@@ -49,7 +49,7 @@ class TradingService:
         await log_message(f"--- [LOG] 后台任务 '{task_name}' 已调度，准备执行 ---", "info")
         try:
             await task_coro
-        except InterruptedError:
+        except TaskInterruptedError:
             await log_message(f"--- [LOG] ⚠️ 任务 '{task_name}' 被用户停止 ---", "warning")
         except Exception as e:
             await log_message(f"--- [LOG] ❌ 任务 '{task_name}' 执行时发生顶层异常: {e} ---", "error")
@@ -127,7 +127,7 @@ class TradingService:
         await asyncio.wait(tasks)
 
         if self._stop_event.is_set():
-            raise InterruptedError()
+            raise TaskInterruptedError()
 
         status_text = "部分成功" if failure_count > 0 else "全部成功"
         final_progress = self._task_progress.copy()
@@ -225,6 +225,9 @@ class TradingService:
                     exchange, plan, config, log_message, self._stop_event)
             results.append({'coin': plan.get('coin'), 'side': plan.get('side'),
                             'target_value': plan.get('value'), 'success': bool(opened),
+                            # R-P0-2：SL/TP 失败被自动回收 / 危险态标记（供台账区分"开仓成功"与"开仓后回收"）
+                            'auto_closed': bool(plan.get('_auto_closed')),
+                            'danger': plan.get('_danger'),
                             'strategy': plan.get('strategy'), 'timeframe': plan.get('timeframe')})
             if opened and on_opened is not None:
                 try:
@@ -288,7 +291,9 @@ class TradingService:
                                     'error': str(e)})
                     raise
                 results.append({'coin': plan_item.get('coin'), 'side': plan_item.get('side'),
-                                'target_value': plan_item.get('value'), 'success': bool(ok)})
+                                'target_value': plan_item.get('value'), 'success': bool(ok),
+                                'auto_closed': bool(plan_item.get('_auto_closed')),
+                                'danger': plan_item.get('_danger')})
                 return ok
 
             try:
@@ -379,7 +384,7 @@ class TradingService:
                     if task.close_full_symbols:
                         for full_symbol in task.close_full_symbols:
                             if self._stop_event.is_set():
-                                raise InterruptedError()
+                                raise TaskInterruptedError()
                             closed = await close_position_async(
                                 exchange, full_symbol, 1.0, log_message, self._stop_event)
                             if not closed:
@@ -393,13 +398,15 @@ class TradingService:
                                 {"type": "position_closed",
                                  "payload": {"full_symbol": full_symbol, "ratio": 1.0}})
                             if self._stop_event.is_set():
-                                raise InterruptedError()
+                                raise TaskInterruptedError()
 
                     plan = {"coin": task.coin, "value": task.value, "side": task.side}
                     ok = await process_order_with_sl_tp_async(
                         exchange, plan, config, log_message, self._stop_event)
                     results.append({'coin': task.coin, 'side': task.side,
                                     'target_value': task.value, 'success': bool(ok),
+                                    'auto_closed': bool(plan.get('_auto_closed')),
+                                    'danger': plan.get('_danger'),
                                     'action': task.action})
                     return ok
                 except Exception as e:

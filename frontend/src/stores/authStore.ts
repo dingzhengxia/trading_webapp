@@ -1,7 +1,7 @@
 // frontend/src/stores/authStore.ts (最终安全版)
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
-import api from '@/services/api'
+import { api } from '@/services/endpoints'
 
 export const useAuthStore = defineStore('auth', () => {
   const accessKey = ref(localStorage.getItem('access_key') || '')
@@ -22,7 +22,7 @@ export const useAuthStore = defineStore('auth', () => {
     // 不能用 settingsStore.fetchSettings()：它内部 catch 掉错误，永远 resolve，
     // 会导致无效 Key 也被写入 localStorage，之后每次刷新都带脏 Key 反复 403。
     try {
-      await api.get('/api/status')
+      await api.getStatus()
 
       // 步骤 3: 请求成功（200）才把 Key 持久化
       localStorage.setItem('access_key', newKey)

@@ -165,7 +165,7 @@ import EmptyState from '@/components/EmptyState.vue'
 import MetricCard from '@/components/MetricCard.vue'
 import type { LiveExitStatus, SignalTracking } from '@/models/types'
 import { directionTone, pnlClass, pnlTone } from '@/utils/tone'
-import { formatIsoTime as formatTime, formatSignedPercent } from '@/utils/format'
+import { formatAutoPrecision, formatIsoTime as formatTime, formatSignedPercent } from '@/utils/format'
 
 const props = defineProps<{
   tracking: SignalTracking
@@ -175,12 +175,7 @@ const props = defineProps<{
 
 const strategyLabel = (strategy: string): string => props.strategyLabels[strategy] ?? strategy
 
-const formatPrice = (value: number): string => {
-  const num = Number(value)
-  if (!Number.isFinite(num)) return '—'
-  if (num >= 1000) return num.toLocaleString('en-US', { maximumFractionDigits: 2 })
-  return num.toLocaleString('en-US', { maximumFractionDigits: 6 })
-}
+const formatPrice = (value: number): string => formatAutoPrecision(value)
 
 const toneOf = (value: unknown): 'up' | 'down' | 'neutral' => {
   const num = Number(value)

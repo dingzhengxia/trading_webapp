@@ -19,6 +19,7 @@ from ..models.schemas import (
     RebalanceCriteria,
     RebalancePlanResponse,
 )
+from ..signals.market_data import shared_market_data
 
 router = APIRouter(prefix="/api/rebalance", tags=["Rebalance"], dependencies=[Depends(verify_api_key)])
 
@@ -32,6 +33,7 @@ async def screen_coins_task(exchange: ccxt.binanceusdm, criteria: RebalanceCrite
     await log_message(f"将使用您配置的 {len(short_pool)} 个币种的做空备选池进行筛选。", "info")
 
     await log_message("正在获取全市场行情以进行流动性筛选...", "info")
+    # T09：exchange 为 GuardedExchange 代理实例，fetch_tickers 经代理层 + 共享 guardian 限流
     all_tickers = await exchange.fetch_tickers()
 
     stablecoins = set(app_config.STABLECOIN_PREFERENCE)
@@ -82,7 +84,10 @@ async def screen_coins_task(exchange: ccxt.binanceusdm, criteria: RebalanceCrite
         async with semaphore:
             full_symbol = resolve_full_symbol(exchange, symbol)
             if full_symbol:
-                return symbol, await ex_async.fetch_klines_async(exchange, full_symbol, '1d', fetch_limit)
+                # T09：K 线统一收口 shared_market_data（经 GuardedExchange 代理
+                # + 共享 guardian 限流 + TTL 缓存 + 同 key in-flight 去重），
+                # 不再直连 exchange.fetch_ohlcv。
+                return symbol, await shared_market_data().get_ohlcv(full_symbol, '1d', fetch_limit)
             return symbol, None
 
     fetch_tasks = [fetch_kline_with_semaphore(s) for s in symbols_to_fetch]

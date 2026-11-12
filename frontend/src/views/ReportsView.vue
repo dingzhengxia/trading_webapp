@@ -211,6 +211,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import api from '@/services/api'
+import { ENDPOINTS } from '@/services/endpoints'
 import { useSnackbarStore } from '@/stores/snackbar'
 import { getErrorMessage } from '@/utils/errors'
 import { formatUnixSeconds as formatTime } from '@/utils/format'
@@ -288,7 +289,7 @@ const applyStatus = (data: ReportsStatus, overwriteForm = false): void => {
 
 const fetchStatus = async (overwriteForm = false): Promise<void> => {
   try {
-    const response = await api.get<ReportsStatus>('/api/reports')
+    const response = await api.get<ReportsStatus>(ENDPOINTS.reports)
     applyStatus(response.data, overwriteForm)
   } catch (error: unknown) {
     console.warn('获取周期报告状态失败:', getErrorMessage(error))
@@ -298,7 +299,7 @@ const fetchStatus = async (overwriteForm = false): Promise<void> => {
 const saveConfig = async (): Promise<void> => {
   saving.value = true
   try {
-    const response = await api.post<ReportsStatus>('/api/reports/config', {
+    const response = await api.post<ReportsStatus>(ENDPOINTS.reportsConfig, {
       reports: reports.value.map(toConfig),
       dingtalk_enabled: dingtalkEnabled.value,
     })
@@ -315,7 +316,7 @@ const saveConfig = async (): Promise<void> => {
 
 const runNow = async (reportName: string): Promise<void> => {
   try {
-    await api.post('/api/reports/run', { report_name: reportName })
+    await api.post(ENDPOINTS.reportsRun, { report_name: reportName })
     snackbarStore.show({ message: `已开始生成「${reportName}」，稍候刷新查看。`, color: 'info' })
     await fetchStatus()
   } catch (error: unknown) {

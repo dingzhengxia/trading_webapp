@@ -11,7 +11,8 @@ import asyncio
 import time
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
-from ..core.rest_guardian import RestGuardian
+from ..core.guarded_exchange import raw_rest_method
+from ..core.rest_guardian import RestGuardian, shared_guardian
 from . import outcomes
 
 # 稳定币基础币种黑名单（从 monitor market_settings.dynamic_scan.exclude_symbols 提取）
@@ -24,14 +25,17 @@ STABLE_BASES = {
 class MarketDataService:
     """带 TTL 缓存与 in-flight 去重的行情服务。
 
-    :param exchange_provider: 异步工厂，返回 ccxt 交易所实例（共享实例）
-    :param guardian: RestGuardian 实例（缺省新建）
+    :param exchange_provider: 异步工厂，返回 ccxt 交易所实例（共享实例）；
+      实例可能是 GuardedExchange 代理——REST 方法经 ``raw_rest_method`` 解包后
+      交给 guardian，保证**恰好一层**限流（代理层与行情层共用共享 guardian）。
+    :param guardian: RestGuardian 实例（缺省用进程级 shared_guardian，
+      与代理层共享并发/节流/熔断状态——统一背压的前提）。
     """
 
     def __init__(self, exchange_provider: Callable[[], Any], guardian: Optional[RestGuardian] = None,
                  ticker_ttl: float = 30.0, ohlcv_ttl: float = 30.0):
         self._exchange_provider = exchange_provider
-        self.guardian = guardian or RestGuardian()
+        self.guardian = guardian or shared_guardian()
         self.ticker_ttl = max(1.0, float(ticker_ttl))
         self.ohlcv_ttl = max(1.0, float(ohlcv_ttl))
         self._tickers_cache: Optional[Tuple[float, Dict[str, Any]]] = None
@@ -48,7 +52,8 @@ class MarketDataService:
         if not force and self._tickers_cache and now - self._tickers_cache[0] < self.ticker_ttl:
             return self._tickers_cache[1]
         exchange = await self._exchange()
-        tickers = await self.guardian.call(exchange.fetch_tickers, priority='NORMAL')
+        tickers = await self.guardian.call(raw_rest_method(exchange, 'fetch_tickers'),
+                                           priority='NORMAL')
         self._tickers_cache = (time.monotonic(), tickers or {})
         return self._tickers_cache[1]
 
@@ -72,7 +77,8 @@ class MarketDataService:
         try:
             exchange = await self._exchange()
             ohlcv = await self.guardian.call(
-                exchange.fetch_ohlcv, symbol, timeframe, None, limit, priority='LOW')
+                raw_rest_method(exchange, 'fetch_ohlcv'), symbol, timeframe, None, limit,
+                priority='LOW')
             data = ohlcv or []
             fut.set_result(data)
             self._ohlcv_cache[key] = (time.monotonic(), data)
@@ -161,6 +167,8 @@ def shared_market_data() -> 'MarketDataService':
 
     放在本模块而不是 service.py，是为了让 `logic/sl_tp_logic_async` 这种底层模块
     也能拿到 ATR，而不用反向依赖 `signals.service`（那会形成导入环）。
+    guardian 用进程级 shared_guardian（与 GuardedExchange 代理层共享状态），
+    api_* 参数由 user_settings 热更新（R-P1-2），不再读 signal_config.json。
     """
     global _shared
     if _shared is None:
@@ -168,14 +176,9 @@ def shared_market_data() -> 'MarketDataService':
         from ..core.exchange_manager import get_shared_exchange
 
         settings = load_settings()
-        try:
-            from .config_store import load_signal_config
-            api_limit = load_signal_config().get('market_settings', {}).get('api_limit', {})
-        except Exception:
-            api_limit = {}
         _shared = MarketDataService(
             get_shared_exchange,
-            guardian=RestGuardian(api_limit),
+            guardian=shared_guardian(),
             ticker_ttl=float(settings.get('signal_ticker_cache_seconds', 30) or 30),
             ohlcv_ttl=float(settings.get('signal_ohlcv_cache_seconds', 30) or 30),
         )

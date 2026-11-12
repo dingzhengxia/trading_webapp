@@ -187,3 +187,80 @@ def test_build_scan_config_merges_user_settings():
     assert config['market_settings']['static_symbols'] == ['SOL']
     assert 'strategy_params' in config
     assert config['user_settings']['signal_scan_top_n'] == 10
+
+
+# ------------------------------------------------ R-P1-2 配置热更新（interval）
+def test_current_interval_reloads_from_settings_each_cycle():
+    settings = _settings(signal_scan_interval_seconds=300)
+    scanner = _make_scanner(FakeScanExchange(), settings)
+
+    assert scanner._current_interval() == 300
+    settings['signal_scan_interval_seconds'] = 45
+    assert scanner._current_interval() == 45, "设置页改完间隔必须下一轮生效，无需重启"
+    settings['signal_scan_interval_seconds'] = 1
+    assert scanner._current_interval() == 30, "低于 MIN_SCAN_INTERVAL_SEC 时钳制"
+    settings['signal_scan_interval_seconds'] = 'bad'
+    assert scanner._current_interval() == 30, "非法值回退（不崩溃）"
+
+
+def test_run_loop_picks_up_new_interval_without_restart():
+    settings = _settings(signal_scan_interval_seconds=300)
+    scanner = _make_scanner(FakeScanExchange(), settings)
+
+    async def fake_scan_once():
+        # 第二轮开始前改小间隔，验证循环内热更新
+        settings['signal_scan_interval_seconds'] = 45
+        scanner._stop_event.set()
+        return {'scanned_symbols': 0, 'error_count': 0}
+
+    scanner.scan_once = fake_scan_once  # type: ignore[method-assign]
+    asyncio.run(scanner._run_loop())
+
+    assert scanner._interval_seconds == 45, "_run_loop 每轮必须重读 interval"
+
+
+# ---------------------------------------- R-P1-3 策略线程派发合并（O(symbol×timeframe)）
+def test_scan_once_thread_dispatch_count(monkeypatch):
+    """一次 to_thread 跑完该 (symbol, timeframe) 的全部策略：派发 ≤ symbol×timeframe。"""
+    calls = {"count": 0}
+    real_to_thread = asyncio.to_thread
+
+    async def counting_to_thread(func, *args, **kwargs):
+        calls["count"] += 1
+        return await real_to_thread(func, *args, **kwargs)
+
+    monkeypatch.setattr(asyncio, "to_thread", counting_to_thread)
+
+    exchange = FakeScanExchange()
+    scanner = _make_scanner(exchange, _settings())  # 2 币种 × 1 周期
+    result = asyncio.run(scanner.scan_once())
+
+    assert result['scanned_symbols'] == 2
+    assert calls["count"] <= 2, f"线程派发必须按 (symbol,timeframe) 合并: {calls['count']}"
+
+    # 产出一致性：合并派发后 ma_breakout 仍对两个币种都触发，方向/价格与逐个派发一致
+    records = _drain_queue()
+    ma_records = {(r['full_symbol'], r['strategy']): r for r in records
+                  if r['strategy'] == 'ma_breakout'}
+    assert {("BTC/USDC:USDC", "ma_breakout"), ("ETH/USDC:USDC", "ma_breakout")} <= set(ma_records)
+    for record in ma_records.values():
+        assert record['direction'] == 'long'
+        assert record['price'] == pytest.approx(200.0)
+
+
+def test_scan_once_thread_dispatch_multiple_timeframes(monkeypatch):
+    """2 币种 × 2 周期 → 派发数 ≤ 4。"""
+    calls = {"count": 0}
+    real_to_thread = asyncio.to_thread
+
+    async def counting_to_thread(func, *args, **kwargs):
+        calls["count"] += 1
+        return await real_to_thread(func, *args, **kwargs)
+
+    monkeypatch.setattr(asyncio, "to_thread", counting_to_thread)
+
+    exchange = FakeScanExchange()
+    scanner = _make_scanner(exchange, _settings(signal_scan_timeframes=['1h', '4h']))
+    result = asyncio.run(scanner.scan_once())
+    assert result['scanned_symbols'] == 2
+    assert calls["count"] <= 4

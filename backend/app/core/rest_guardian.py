@@ -194,3 +194,39 @@ class RestGuardian:
 
         assert last_exc is not None
         raise last_exc
+
+
+# ---------------------------------------------------------------- 单例 / 工厂
+# 全项目唯一的 RestGuardian( 实例化点（静态审计 test_no_direct_rest 锁定）。
+_shared_guardian: Optional["RestGuardian"] = None
+
+
+def create_guardian(conf: Optional[Dict[str, Any]] = None) -> "RestGuardian":
+    """创建独立的 guardian 实例（需要独立熔断/节流状态的子系统用，如 protection）。"""
+    return RestGuardian(conf)
+
+
+def shared_guardian() -> "RestGuardian":
+    """进程级单例：GuardedExchange 代理层与行情层共用同一份并发/节流/熔断状态。
+
+    配置来自 user_settings 的 api_* 字段（load_settings 有缓存，开销可忽略）；
+    api/settings 保存后调用 ``shared_guardian().configure(...)`` 热更新，无需重启。
+    """
+    global _shared_guardian
+    if _shared_guardian is None:
+        guardian = RestGuardian()
+        try:
+            from ..config.config import load_settings
+
+            settings = load_settings()
+            guardian.configure({k: settings[k] for k in DEFAULT_API_LIMIT if k in settings})
+        except Exception:  # noqa: BLE001 - 配置读取失败时用默认值，不阻塞创建
+            pass
+        _shared_guardian = guardian
+    return _shared_guardian
+
+
+def reset_shared_guardian() -> None:
+    """丢弃单例（仅测试隔离用；下一次 shared_guardian() 会按当前配置重建）。"""
+    global _shared_guardian
+    _shared_guardian = None

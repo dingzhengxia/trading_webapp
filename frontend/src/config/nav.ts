@@ -12,7 +12,7 @@ export interface NavItem {
 
 /** 底部 Tab 第 1–4 项 / PC 侧栏第 1 组 */
 export const primaryNav: NavItem[] = [
-  { path: '/trading', title: '交易', icon: 'mdi-candlestick-chart' },
+  { path: '/trading', title: '交易', icon: 'mdi-candle' },
   { path: '/signals', title: '信号', icon: 'mdi-radar' },
   { path: '/protection', title: '风控', icon: 'mdi-shield-check-outline' },
   { path: '/overview', title: '总览', icon: 'mdi-view-dashboard-outline' },

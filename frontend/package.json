@@ -8,7 +8,9 @@
   },
   "scripts": {
     "dev": "vite",
+    "predev": "node scripts/generate-mdi-subset.mjs",
     "build": "npx vue-tsc --build --force && node scripts/check-contrast.mjs && npx vite build",
+    "prebuild": "node scripts/generate-mdi-subset.mjs",
     "preview": "vite preview",
     "build-only": "vite build",
     "check:contrast": "node scripts/check-contrast.mjs",
@@ -36,9 +38,11 @@
     "jiti": "^2.4.2",
     "npm-run-all2": "^8.0.4",
     "prettier": "3.6.2",
+    "sass": "^1.108.2",
     "typescript": "~5.8.0",
     "vite": "^7.0.6",
     "vite-plugin-vue-devtools": "^8.0.0",
+    "vite-plugin-vuetify": "^2.1.3",
     "vue-tsc": "^3.0.4"
   }
 }

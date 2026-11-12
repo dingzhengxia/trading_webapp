@@ -118,6 +118,7 @@ import OpenHistoryPanel from '@/components/OpenHistoryPanel.vue'
 import AppDockFooter from '@/components/AppDockFooter.vue'
 import ConfigDrawer from '@/components/ConfigDrawer.vue'
 import apiClient from '@/services/api'
+import { ENDPOINTS } from '@/services/endpoints'
 import type { RebalanceCriteria } from '@/models/types'
 import { getErrorMessage } from '@/utils/errors'
 
@@ -153,7 +154,7 @@ const handleStartTrading = () => {
     const total =
       (plan.enable_long_trades ? plan.long_coin_list.length : 0) +
       (plan.enable_short_trades ? plan.short_coin_list.length : 0)
-    uiStore.launchTask('/api/trading/start', plan, '自动开仓', total)
+    uiStore.launchTask(ENDPOINTS.tradingStart, plan, '自动开仓', total)
   }
 }
 
@@ -196,7 +197,7 @@ const handleSyncSlTp = () => {
     }
 
     uiStore.launchTask(
-      '/api/trading/sync-sltp',
+      ENDPOINTS.tradingSyncSltp,
       payload,
       '同步SL/TP/移动止盈',
       positionStore.positions.length,
@@ -237,7 +238,7 @@ const handleGenerateRebalancePlan = async (criteria: RebalanceCriteria) => {
     timestamp: new Date().toLocaleTimeString(),
   })
   try {
-    const response = await apiClient.post('/api/rebalance/plan', criteria)
+    const response = await apiClient.post(ENDPOINTS.rebalancePlan, criteria)
     const planData = response.data
     if (planData.error) {
       uiStore.logStore.addLog({

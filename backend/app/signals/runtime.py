@@ -12,6 +12,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List
 from uuid import uuid4
 
+from loguru import logger
+
 from ..core import database
 
 ALERT_STATES_KEY = 'alerted_states'
@@ -43,10 +45,10 @@ def load_alert_states() -> None:
                 except (ValueError, TypeError):
                     continue
     except Exception as e:
-        print(f"--- [WARNING] 加载信号冷却状态失败（安全降级为空）: {e} ---")
+        logger.warning("加载信号冷却状态失败（安全降级为空）: {}", e)
     alerted_states.clear()
     alerted_states.update(loaded)
-    print(f"--- [INFO] 已加载信号冷却状态，有效条目: {len(alerted_states)} ---")
+    logger.info("已加载信号冷却状态，有效条目: {}", len(alerted_states))
 
 
 def save_alert_states() -> None:
@@ -60,7 +62,7 @@ def save_alert_states() -> None:
             payload = {k: v.isoformat() for k, v in alerted_states.items()}
         database.set_value('signal_state', ALERT_STATES_KEY, payload)
     except Exception as e:
-        print(f"--- [ERROR] 保存信号冷却状态失败: {e} ---")
+        logger.error("保存信号冷却状态失败: {}", e)
 
 
 # ------------------------------------------------------------------ 时间工具

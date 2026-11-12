@@ -98,6 +98,8 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref, watch } from 'vue'
 import apiClient from '@/services/api'
+import { ENDPOINTS } from '@/services/endpoints'
+import { formatMillis, formatUsdLoose } from '@/utils/format'
 import { useUiStore } from '@/stores/uiStore'
 import { getErrorMessage } from '@/utils/errors'
 import { positionSideTone } from '@/utils/tone'
@@ -133,7 +135,7 @@ const openedPanel = ref<number | null>(0)
 const fetchHistory = async () => {
   loading.value = true
   try {
-    const response = await apiClient.get('/api/trading/open-history', { params: { limit: 50 } })
+    const response = await apiClient.get(ENDPOINTS.tradingOpenHistory, { params: { limit: 50 } })
     records.value = Array.isArray(response.data?.records) ? response.data.records : []
   } catch (error: unknown) {
     uiStore.logStore.addLog({
@@ -175,17 +177,9 @@ onUnmounted(() => {
   }
 })
 
-const formatTime = (ts: number) => {
-  if (!ts) return '—'
-  const d = new Date(ts)
-  return d.toLocaleString('zh-CN', { hour12: false })
-}
+const formatTime = (ts: number) => formatMillis(ts)
 
-const formatValue = (value: number) => {
-  const num = Number(value)
-  if (!Number.isFinite(num)) return '—'
-  return `$${num.toLocaleString('zh-CN', { maximumFractionDigits: 2 })}`
-}
+const formatValue = (value: number) => formatUsdLoose(value)
 
 const SOURCE_META: Record<string, { label: string; color: string }> = {
   plan: { label: '自动开仓', color: 'primary' },

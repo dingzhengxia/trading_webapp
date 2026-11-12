@@ -1,0 +1,55 @@
+classDiagram
+    class RestGuardian {
+        -Dict _base_conf
+        -Dict _loop_states
+        +call(func, *args, priority, conf) Any
+        +configure(conf) void
+        +is_circuit_open() bool
+        +stats() Dict
+    }
+    class GuardedExchange {
+        -Any _exchange
+        -RestGuardian _guardian
+        +underlying() Any
+        +__getattr__(name) Any
+        +__setattr__(name, value) void
+    }
+    class ExchangeManager {
+        +get_shared_exchange()$ GuardedExchange
+        +get_exchange_for_task()$ GuardedExchange
+        +get_exchange_dependency()$ GuardedExchange
+        +close_shared_exchange()$ void
+    }
+    class OrderIdFactory {
+        +make_client_order_id(prefix, symbol, seq)$ str
+        +recover_order_by_client_id_async(exchange, symbol, coid)$ Optional~dict~
+    }
+    class ExchangeLogic {
+        +initialize_exchange_async(...) ccxt
+        +detect_position_mode_async(exchange, logger) bool
+        +position_side_for(exchange, order_side)$ Optional~str~
+        +process_order_with_sl_tp_async(exchange, plan, config, logger, stop) bool
+        +close_position_async(exchange, symbol, ratio, logger, stop) bool
+    }
+    class SlTpLogic {
+        +set_tp_sl_for_position_async(exchange, pos, config, logger, stop) bool
+        -_place_conditional_order_async(... position_side, coid)
+        -_place_trailing_stop_order(... position_side)
+    }
+    class ProtectionService {
+        +protection_active_for(full_symbol, side)$ bool
+    }
+    class MarketDataService {
+        +get_tickers(force) Dict
+        +get_ohlcv(symbol, tf, limit) list
+        +atr_at(symbol, tf) Optional~float~
+        +get_top_symbols_by_volume(top_n, exclude) List~str~
+    }
+    ExchangeManager --> GuardedExchange : 创建并包装
+    GuardedExchange --> RestGuardian : 全部 REST 经 call()
+    ExchangeLogic --> OrderIdFactory : coid 生成/反查
+    ExchangeLogic --> GuardedExchange : 调用（形态不变）
+    ExchangeLogic --> ProtectionService : late-import 接管查询
+    ExchangeLogic --> SlTpLogic : 开仓后挂 SL/TP
+    SlTpLogic --> MarketDataService : ATR(late import)
+    MarketDataService ..> GuardedExchange : 共享实例（直调代理方法）

@@ -89,7 +89,7 @@
 
     <!-- v-select 与 v-autocomplete 的 props 完全同构，用动态组件收敛为一份 -->
     <component
-      :is="searchable ? 'v-autocomplete' : 'v-select'"
+      :is="searchable ? VAutocomplete : VSelect"
       v-else
       :model-value="modelValue"
       :items="items"
@@ -114,6 +114,9 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { useDisplay } from 'vuetify'
+// 按需引入（T12）：下面两个组件经 <component :is> 动态渲染且 vite-plugin-vuetify
+// 无法静态分析字符串派发，必须显式 import 并直接传组件对象
+import { VAutocomplete, VSelect } from 'vuetify/components'
 
 type Primitive = string | number
 // v-model 取值：单选为标量，多选为数组；父组件的 ref 类型各不相同，这里统一用联合类型收敛

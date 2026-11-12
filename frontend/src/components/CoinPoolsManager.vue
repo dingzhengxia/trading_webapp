@@ -11,7 +11,7 @@
       <v-card-text>
         <div class="d-flex align-center">
           <v-text-field
-            v-model="newCoinSymbol"
+            v-model="newCoinSymbolUpper"
             label="输入币种代码 (例如: btc)"
             variant="outlined"
             density="compact"
@@ -60,7 +60,7 @@
           </div>
 
           <SmartSelect
-            :model-value="settingsStore.availableLongCoins"
+            :model-value="sortedLongPool"
             :items="availableForLongPool"
             label="从总池中选择做多备选币种（可搜索）"
             multiple
@@ -93,7 +93,7 @@
           </div>
 
           <SmartSelect
-            :model-value="settingsStore.availableShortCoins"
+            :model-value="sortedShortPool"
             :items="availableForShortPool"
             label="从总池中选择做空备选币种（可搜索）"
             multiple
@@ -108,11 +108,12 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue'
+import { ref, computed } from 'vue'
 import SmartSelect from '@/components/SmartSelect.vue'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { useSnackbarStore } from '@/stores/snackbar'
 import apiClient from '@/services/api'
+import { ENDPOINTS } from '@/services/endpoints'
 import { debounce } from '@/utils/debounce'
 import { getErrorMessage } from '@/utils/errors'
 
@@ -122,51 +123,29 @@ const snackbarStore = useSnackbarStore()
 const MAX_VISIBLE_CHIPS = 3
 const isLongPoolExpanded = ref(false)
 const isShortPoolExpanded = ref(false)
-const longPoolShowAll = ref(false)
-const shortPoolShowAll = ref(false)
 
 const newCoinSymbol = ref('')
 const isAddingCoin = ref(false)
 
-// --- 核心修正：创建一个带防抖的保存函数 ---
+// T11：原 5 个 watch 收敛为 computed / 事件驱动 ——
+// 排序/大写归一走 computed，自动保存由「唯一的池子写入口」触发，不再深度监听。
+
+/** 输入框大写归一（原 watch(newCoinSymbol) 的 computed 化） */
+const newCoinSymbolUpper = computed({
+  get: () => newCoinSymbol.value,
+  set: (value: string) => {
+    newCoinSymbol.value = String(value ?? '').toUpperCase()
+  },
+})
+
+/** 池子展示永远有序（原 watch 内 in-place sort 的 computed 化） */
+const sortedLongPool = computed(() => [...settingsStore.availableLongCoins].sort())
+const sortedShortPool = computed(() => [...settingsStore.availableShortCoins].sort())
+
+// --- 带防抖的自动保存 ---
 const savePoolsDebounced = debounce(() => {
   savePools(true) // 传入一个参数标记为自动保存
 }, 1500)
-
-// --- 核心修正：增加 watch 侦听器来触发自动保存 ---
-watch(
-  () => settingsStore.availableLongCoins,
-  () => {
-    savePoolsDebounced()
-  },
-  { deep: true },
-)
-
-watch(
-  () => settingsStore.availableShortCoins,
-  () => {
-    savePoolsDebounced()
-  },
-  { deep: true },
-)
-
-
-watch(newCoinSymbol, (newValue) => {
-  if (newValue && newValue !== newValue.toUpperCase()) {
-    newCoinSymbol.value = newValue.toUpperCase()
-  }
-})
-
-const removePoolItemValue = (poolType: 'long' | 'short', value: string) => {
-  const pool =
-    poolType === 'long'
-      ? settingsStore.availableLongCoins
-      : settingsStore.availableShortCoins
-  const index = pool.indexOf(value)
-  if (index >= 0) {
-    pool.splice(index, 1)
-  }
-}
 
 const allAvailableCoins = computed(() => [...new Set(settingsStore.availableCoins)].sort())
 const mapToSelectItems = (coins: string[]) => coins.map((coin) => ({ title: coin, value: coin }))
@@ -181,28 +160,41 @@ const availableForShortPool = computed(() => {
   return mapToSelectItems(allAvailableCoins.value.filter((coin) => !longSet.has(coin)))
 })
 
-// SmartSelect 回写（多选）：保持池子为字符串数组
+// SmartSelect 回写（多选）：唯一的池子写入口 —— 保持池子为有序字符串数组，
+// 数量缩回阈值以内时收起展开态，并触发防抖自动保存。
+const applyPool = (poolType: 'long' | 'short', coins: string[]) => {
+  const sorted = [...coins].sort()
+  if (poolType === 'long') {
+    settingsStore.availableLongCoins = sorted
+    if (sorted.length <= MAX_VISIBLE_CHIPS) isLongPoolExpanded.value = false
+  } else {
+    settingsStore.availableShortCoins = sorted
+    if (sorted.length <= MAX_VISIBLE_CHIPS) isShortPoolExpanded.value = false
+  }
+  savePoolsDebounced()
+}
+
 const setAvailableLongCoins = (value: string | number | (string | number)[] | null | undefined) => {
-  settingsStore.availableLongCoins = Array.isArray(value) ? value.map(String) : []
+  applyPool('long', Array.isArray(value) ? value.map(String) : [])
 }
 
 const setAvailableShortCoins = (value: string | number | (string | number)[] | null | undefined) => {
-  settingsStore.availableShortCoins = Array.isArray(value) ? value.map(String) : []
+  applyPool('short', Array.isArray(value) ? value.map(String) : [])
 }
 
 const selectAllCoins = (poolType: 'long' | 'short') => {
   if (poolType === 'long') {
-    settingsStore.availableLongCoins = availableForLongPool.value.map((item) => item.value)
+    applyPool('long', availableForLongPool.value.map((item) => item.value))
   } else if (poolType === 'short') {
-    settingsStore.availableShortCoins = availableForShortPool.value.map((item) => item.value)
+    applyPool('short', availableForShortPool.value.map((item) => item.value))
   }
 }
 
 const savePools = async (isAutoSave = false) => {
   try {
-    await apiClient.post('/api/settings/update-coin-pools', {
-      long_coins_pool: settingsStore.availableLongCoins,
-      short_coins_pool: settingsStore.availableShortCoins,
+    await apiClient.post(ENDPOINTS.settingsUpdateCoinPools, {
+      long_coins_pool: [...settingsStore.availableLongCoins].sort(),
+      short_coins_pool: [...settingsStore.availableShortCoins].sort(),
     })
     if (!isAutoSave) {
         snackbarStore.show({ message: '币种备选池已成功保存。', color: 'success' })
@@ -220,7 +212,7 @@ const addCoin = async () => {
 
   isAddingCoin.value = true
   try {
-    const response = await apiClient.post('/api/settings/add-coin', { coin: symbol })
+    const response = await apiClient.post(ENDPOINTS.settingsAddCoin, { coin: symbol })
     settingsStore.availableCoins.splice(0, settingsStore.availableCoins.length, ...response.data)
     newCoinSymbol.value = ''
     snackbarStore.show({ message: `币种 '${symbol}' 添加成功！`, color: 'success' })
@@ -230,32 +222,6 @@ const addCoin = async () => {
     isAddingCoin.value = false
   }
 }
-
-watch(
-  () => settingsStore.availableLongCoins,
-  (newList) => {
-    if (newList) {
-      if (newList.length <= MAX_VISIBLE_CHIPS) {
-        isLongPoolExpanded.value = false
-      }
-      newList.sort()
-    }
-  },
-  { deep: true },
-)
-
-watch(
-  () => settingsStore.availableShortCoins,
-  (newList) => {
-    if (newList) {
-      if (newList.length <= MAX_VISIBLE_CHIPS) {
-        isShortPoolExpanded.value = false
-      }
-      newList.sort()
-    }
-  },
-  { deep: true },
-)
 
 // 让父组件可以通过 ref 调用手动保存
 defineExpose({ savePools })

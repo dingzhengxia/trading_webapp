@@ -2,7 +2,7 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import type { UserSettings } from '@/models/types'
-import api from '@/services/api'
+import { api } from '@/services/endpoints'
 import { useUiStore } from './uiStore'
 import { getErrorMessage, getErrorStatus } from '@/utils/errors'
 
@@ -38,6 +38,16 @@ const defaultSettings: UserSettings = {
   open_order_fill_timeout_seconds: 60,
   close_maker_retries: 3,
   close_order_fill_timeout_seconds: 12,
+  unprotected_position_action: 'auto_close',
+  close_price_chase_ticks: 1,
+  api_max_concurrency: 3,
+  api_min_interval_sec: 0.08,
+  api_max_retries: 3,
+  api_failure_threshold: 5,
+  api_circuit_breaker_cooldown_sec: 30,
+  api_418_cooldown_sec: 60,
+  api_429_base_backoff_sec: 2,
+  api_429_max_backoff_sec: 30,
   rebalance_method: 'multi_factor_weakest',
   rebalance_top_n: 50,
   rebalance_min_volume_usd: 20000000,
@@ -72,7 +82,12 @@ export const useSettingsStore = defineStore('settings', () => {
 
     try {
       // 带时间戳防浏览器/代理缓存：刷新后必须看到服务端最新值
-      const response = await api.get('/api/settings', { params: { _t: Date.now() } })
+      const response = await api.getSettings<{
+        user_settings: Partial<UserSettings>
+        available_coins: string[]
+        available_long_coins: string[]
+        available_short_coins: string[]
+      }>()
       const fetchedSettings = {...defaultSettings, ...response.data.user_settings}
 
       if (settings.value) {
@@ -113,7 +128,7 @@ export const useSettingsStore = defineStore('settings', () => {
       payload[key] = value
     }
     try {
-      await api.post('/api/settings', payload)
+      await api.postSettings(payload)
       uiStore.logStore.addLog({
         message: '通用配置已自动保存。',
         level: 'success',
@@ -147,7 +162,7 @@ export const useSettingsStore = defineStore('settings', () => {
       Object.assign(settings.value, partial)
     }
     try {
-      await api.post('/api/settings', partial)
+      await api.patchSettings(partial)
       return { ok: true, detail: '' }
     } catch (error) {
       console.error('Failed to patch settings:', error)

@@ -3,7 +3,8 @@ import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import { useLogStore } from './logStore'
 import type { RebalancePlan, Position, ProgressState } from '@/models/types'
-import api from '@/services/api'
+import { api } from '@/services/endpoints'
+import type { EndpointPath } from '@/services/endpoints'
 import type { ThemeInstance } from 'vuetify' // 导入 Vuetify 的类型
 
 export type CloseTarget =
@@ -75,7 +76,7 @@ export const useUiStore = defineStore('ui', () => {
   }
 
   // (其他函数保持不变)
-  function launchTask(endpoint: string, payload: object, taskName: string, totalTasks: number) {
+  function launchTask(endpoint: EndpointPath, payload: object, taskName: string, totalTasks: number) {
     if (isRunning.value) {
       logStore.addLog({
         message: '已有任务在运行中，请稍后再试。',
@@ -102,7 +103,7 @@ export const useUiStore = defineStore('ui', () => {
     })
 
     api
-      .post(endpoint, payloadWithId)
+      .post<{ message?: string }>(endpoint, payloadWithId)
       .then((response) => {
         console.log('API call successful:', response.data.message)
       })
@@ -167,7 +168,15 @@ export const useUiStore = defineStore('ui', () => {
 
   async function checkInitialStatus(): Promise<boolean> {
     try {
-      const response = await api.get('/api/status')
+      const response = await api.getStatus<{
+        is_running: boolean
+        progress?: {
+          task_name: string
+          success_count: number
+          failed_count: number
+          total: number
+        }
+      }>()
       const { is_running, progress: progressData } = response.data
 
       if (is_running && progressData && typeof progressData.total !== 'undefined') {

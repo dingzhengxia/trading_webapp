@@ -62,3 +62,49 @@ export function formatSignedPercent(
   const body = Math.abs(num).toFixed(digits)
   return num < 0 ? `−${body}%` : `+${body}%`
 }
+
+/**
+ * 以下为 T10 新增：承接组件里散落的 toFixed / toLocaleString 显示格式化
+ * （eslint no-restricted-syntax 禁止组件直接调用，统一走本文件）。
+ */
+
+/** 固定小数位（无千分位），与 toFixed 显示口径一致；非法值按 0 处理 */
+export function formatFixed(value: number | string | null | undefined, digits = 2): string {
+  const num = Number(value)
+  if (!Number.isFinite(num)) return (0).toFixed(digits)
+  return num.toFixed(digits)
+}
+
+/** 开仓价：千分位 + 最多 6 位小数；非法值按 0 处理 */
+export function formatQuantity(value: number | string | null | undefined): string {
+  const num = Number(value)
+  if (!Number.isFinite(num)) return '0'
+  return num.toLocaleString('en-US', { maximumFractionDigits: 6 })
+}
+
+/** 价格自适应精度：≥1000 保留 2 位小数，否则最多 6 位；非法值显示破折号 */
+export function formatAutoPrecision(value: number | string | null | undefined): string {
+  const num = Number(value)
+  if (!Number.isFinite(num)) return '—'
+  const digits = Math.abs(num) >= 1000 ? 2 : 6
+  return num.toLocaleString('en-US', { maximumFractionDigits: digits })
+}
+
+/** 美元金额（zh-CN 千分位 + 最多 2 位小数）；非法值显示破折号 */
+export function formatUsdLoose(value: number | string | null | undefined): string {
+  const num = Number(value)
+  if (!Number.isFinite(num)) return '—'
+  return `$${num.toLocaleString('zh-CN', { maximumFractionDigits: 2 })}`
+}
+
+/** Unix 毫秒级时间戳 → 本地时间字符串 */
+export function formatMillis(value: number | null | undefined): string {
+  if (!value) return '—'
+  return new Date(value).toLocaleString('zh-CN', { hour12: false })
+}
+
+/** 数值取整到固定小数位（返回 number，用于权重分配等计算而非展示） */
+export function roundTo(value: number, digits = 2): number {
+  const factor = 10 ** digits
+  return Math.round((value + Number.EPSILON) * factor) / factor
+}

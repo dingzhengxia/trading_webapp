@@ -1,4 +1,5 @@
 # backend/app/core/security.py
+import os
 import secrets
 
 from fastapi import Security, HTTPException, status
@@ -38,6 +39,29 @@ def _keys_equal(provided: str, expected: str) -> bool:
         return secrets.compare_digest(provided, expected)
     except TypeError:
         return provided == expected
+
+
+def ws_auth_disabled() -> bool:
+    """WS 鉴权降级开关（Q4 默认决策）：**仅**环境变量 WS_AUTH_DISABLED=1。
+
+    配置文件不支持该项，防止误配置把鉴权永久关掉；开启时启动日志会打 error 级告警。
+    """
+    return os.environ.get('WS_AUTH_DISABLED', '').strip() == '1'
+
+
+def verify_ws_token(token: str) -> bool:
+    """校验 WebSocket 握手 token（与 REST 同一把 app_access_key）。
+
+    空密钥一律拒绝（等同 REST 的"未配置密钥时全部拒绝"语义）；
+    比较用常数时间比较，避免时序侧信道。
+    """
+    expected_key = get_app_access_key()
+    if not expected_key:
+        return False
+    provided = str(token or '')
+    if not provided:
+        return False
+    return _keys_equal(provided, expected_key)
 
 
 async def verify_api_key(api_key: str = Security(api_key_header)):

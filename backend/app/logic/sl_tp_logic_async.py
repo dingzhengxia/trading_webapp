@@ -1,12 +1,13 @@
 # backend/app/logic/sl_tp_logic_async.py
 import asyncio
-from typing import Set
+from typing import Optional, Set
 
 import ccxt.async_support as ccxt
 
 from ..config import constants
 from ..core import exit_rules
 from ..models.schemas import Position
+from .order_id import make_client_order_id, order_client_id
 
 
 def _amount_to_precision(exchange: ccxt.binanceusdm, symbol: str, amount: float) -> str:
@@ -48,15 +49,39 @@ async def cancel_all_orders_async(exchange: ccxt.binanceusdm, symbol: str, async
     return ok
 
 
+async def _recover_conditional_by_coid(exchange: ccxt.binanceusdm, symbol: str,
+                                       client_order_id: str) -> Optional[dict]:
+    """网络类异常后按 coid 扫挂单簿；查到即视为下单成功（R-P0-1）。"""
+    if not client_order_id:
+        return None
+    try:
+        open_orders = await exchange.fetch_open_orders(symbol)
+    except Exception:  # noqa: BLE001 - 反查失败返回 None，由调用方走原重试
+        return None
+    for order in open_orders or []:
+        if not isinstance(order, dict):
+            continue
+        if str((order or {}).get('symbol') or '') not in ('', symbol):
+            continue
+        if order_client_id(order) == client_order_id:
+            return order
+    return None
+
+
 async def _place_trailing_stop_order(
         exchange: ccxt.binanceusdm,
         symbol: str,
         side: str,
         amount: float,
         callback_rate: float,
-        async_logger
+        async_logger,
+        position_side: Optional[str] = None,
 ):
-    """移动止盈下单（阶梯式降级）。"""
+    """移动止盈下单（阶梯式降级）。
+
+    R-P0-1：带 TS 前缀的 clientOrderId；遇网络类错误先按 coid 反查挂单簿，
+    查到即视为成功，查不到才走原有降级重试。
+    """
     amount_str = _amount_to_precision(exchange, symbol, amount)
 
     user_rate = max(0.1, min(20.0, float(callback_rate)))
@@ -75,15 +100,30 @@ async def _place_trailing_stop_order(
         rates_to_try.append(2.0)
 
     for rate in rates_to_try:
+        coid = make_client_order_id('TS', symbol)
         params = {
             'callbackRate': rate,
             'reduceOnly': True,
+            'newClientOrderId': coid,
         }
+        if position_side:
+            params['positionSide'] = position_side
         for attempt in range(2):
             try:
                 return await exchange.create_order(
                     symbol, constants.ORDER_TYPE_TRAILING_STOP, side, amount_str, None, params
                 )
+            except (ccxt.RequestTimeout, ccxt.NetworkError, ccxt.ExchangeNotAvailable) as e:
+                recovered = await _recover_conditional_by_coid(exchange, symbol, coid)
+                if isinstance(recovered, dict) and recovered.get('id'):
+                    await async_logger(
+                        f"🔁 {symbol} 移动止盈网络异常（{type(e).__name__}）后按 clientOrderId "
+                        f"反查到订单 {recovered.get('id')}，视为下单成功。", "warning")
+                    return recovered
+                await async_logger(
+                    f"⚠️ {symbol} 移动止盈网络异常（第 {attempt + 1}/2 次），可重试: "
+                    f"{type(e).__name__}", "warning")
+                continue
             except Exception as e:
                 err = str(e)
                 # 情况A: 交易所明确拒绝这个比率 (-2007)，降级到下一个比率
@@ -111,16 +151,40 @@ async def _place_conditional_order_async(
         amount: float,
         trigger_price: float,
         order_type: str,
-        async_logger
+        async_logger,
+        position_side: Optional[str] = None,
+        client_order_id: Optional[str] = None,
 ):
-    """提交 reduce-only 条件单（STOP_MARKET / TAKE_PROFIT_MARKET）。"""
+    """提交 reduce-only 条件单（STOP_MARKET / TAKE_PROFIT_MARKET）。
+
+    R-P0-1：带 SL/TP 前缀的 clientOrderId；遇网络类错误先按 coid 反查挂单簿，
+    查到即视为成功，查不到才走现有重试。
+    """
     price_str = _price_to_precision(exchange, symbol, trigger_price)
     amount_str = _amount_to_precision(exchange, symbol, amount)
-    params = {'stopPrice': price_str, 'reduceOnly': True, 'workingType': 'MARK_PRICE'}
+    if client_order_id:
+        coid = client_order_id
+    else:
+        coid = make_client_order_id('TP' if 'TAKE_PROFIT' in str(order_type).upper() else 'SL', symbol)
+    params = {'stopPrice': price_str, 'reduceOnly': True, 'workingType': 'MARK_PRICE',
+              'newClientOrderId': coid}
+    if position_side:
+        params['positionSide'] = position_side
 
     for attempt in range(3):
         try:
             return await exchange.create_order(symbol, order_type, side, amount_str, None, params)
+        except (ccxt.RequestTimeout, ccxt.NetworkError, ccxt.ExchangeNotAvailable) as e:
+            recovered = await _recover_conditional_by_coid(exchange, symbol, coid)
+            if isinstance(recovered, dict) and recovered.get('id'):
+                await async_logger(
+                    f"🔁 {symbol} 条件单 {order_type} 网络异常（{type(e).__name__}）后按 clientOrderId "
+                    f"反查到订单 {recovered.get('id')}，视为下单成功。", "warning")
+                return recovered
+            await async_logger(
+                f"⚠️ {symbol} 条件单 {order_type} 网络异常（第 {attempt + 1}/3 次），可重试: "
+                f"{type(e).__name__}", "warning")
+            continue
         except Exception as e:
             err = str(e)
             if '-4045' in err or '-4130' in err or 'limit' in err:
@@ -149,6 +213,16 @@ async def _resolve_atr(full_symbol: str, config: dict, async_logger) -> float | 
     except Exception as e:  # noqa: BLE001 - 行情失败不能影响挂单主流程
         await async_logger(f"⚠️ {full_symbol} 获取 ATR({timeframe}) 失败: {e}", "warning")
         return None
+
+
+def _hedge_position_side(exchange, is_long: bool):
+    """hedge 模式下的 positionSide（跟随持仓方向）；单向返回 None（不携带）。
+
+    late import 避免 sl_tp → exchange_logic 的模块级循环依赖（先例：_resolve_atr）。
+    """
+    from .exchange_logic_async import position_side_for
+    return position_side_for(
+        exchange, constants.ORDER_SIDE_BUY if is_long else constants.ORDER_SIDE_SELL)
 
 
 async def set_tp_sl_for_position_async(exchange: ccxt.binanceusdm, position: Position, config: dict, async_logger,
@@ -199,7 +273,8 @@ async def set_tp_sl_for_position_async(exchange: ccxt.binanceusdm, position: Pos
     if trailing_enabled:
         callback_rate = config.get(f'{side_key}_trailing_stop_callback_rate', 1.0)
         res = await _place_trailing_stop_order(
-            exchange, full_symbol, exit_side, contracts, callback_rate, async_logger
+            exchange, full_symbol, exit_side, contracts, callback_rate, async_logger,
+            position_side=_hedge_position_side(exchange, is_long)
         )
         if isinstance(res, dict) and res.get('id'):
             info = res.get('info') or {}
@@ -230,7 +305,8 @@ async def set_tp_sl_for_position_async(exchange: ccxt.binanceusdm, position: Pos
     if sl_trigger is not None:
         res = await _place_conditional_order_async(
             exchange, full_symbol, exit_side, contracts, sl_trigger,
-            constants.ORDER_TYPE_STOP_MARKET, async_logger
+            constants.ORDER_TYPE_STOP_MARKET, async_logger,
+            position_side=_hedge_position_side(exchange, is_long)
         )
         if isinstance(res, dict) and res.get('id'):
             await async_logger(f"✅ {position.symbol} 固定止损成功 (触发价: {sl_trigger:.8g})", "success")
@@ -242,7 +318,8 @@ async def set_tp_sl_for_position_async(exchange: ccxt.binanceusdm, position: Pos
     if tp_trigger is not None:
         res = await _place_conditional_order_async(
             exchange, full_symbol, exit_side, contracts, tp_trigger,
-            constants.ORDER_TYPE_TAKE_PROFIT_MARKET, async_logger
+            constants.ORDER_TYPE_TAKE_PROFIT_MARKET, async_logger,
+            position_side=_hedge_position_side(exchange, is_long)
         )
         if isinstance(res, dict) and res.get('id'):
             await async_logger(f"✅ {position.symbol} 固定止盈成功 (触发价: {tp_trigger:.8g})", "success")

@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import type { Position } from '@/models/types'
-import api from '@/services/api'
+import { api } from '@/services/endpoints'
 
 export const usePositionStore = defineStore('position', () => {
   const positions = ref<Position[]>([])
@@ -37,7 +37,7 @@ export const usePositionStore = defineStore('position', () => {
     loading.value = true
     selectedPositions.value = []
     try {
-      const response = await api.get<Position[]>('/api/positions')
+      const response = await api.getPositions<Position[]>()
       positions.value = response.data
     } catch (error) {
       console.error('Failed to fetch positions', error)

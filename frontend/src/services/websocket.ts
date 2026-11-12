@@ -1,4 +1,5 @@
 // frontend/src/services/websocket.ts (优化心跳后的完整代码)
+import { useAuthStore } from '@/stores/authStore'
 import { useUiStore } from '@/stores/uiStore'
 import { usePositionStore } from '@/stores/positionStore'
 
@@ -24,7 +25,11 @@ class WebSocketService {
   private getWebSocketUrl(): string {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
     const host = import.meta.env.DEV ? `${window.location.hostname}:8000` : window.location.host
-    return `${protocol}//${host}/ws`
+    // R-P0-5：握手带 ?token=（与 REST 同一把 Access Key）；未认证时不带，由后端 4401 拒绝
+    const authStore = useAuthStore()
+    const token = authStore.isAuthenticated ? authStore.accessKey : ''
+    const suffix = token ? `?token=${encodeURIComponent(token)}` : ''
+    return `${protocol}//${host}/ws${suffix}`
   }
 
   // REFACTOR: 启动心跳和连接检查

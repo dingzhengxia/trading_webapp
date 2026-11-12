@@ -32,7 +32,7 @@ const routes: Array<RouteRecordRaw> = [
     path: '/trading',
     name: 'trading',
     component: TradingView,
-    meta: { title: '交易', icon: 'mdi-candlestick-chart', hasDock: true },
+    meta: { title: '交易', icon: 'mdi-candle', hasDock: true },
   },
   // 「手动交易」页已下线（反手/平仓统一在交易页的持仓表里操作），旧链接重定向
   {
