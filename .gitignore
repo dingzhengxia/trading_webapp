@@ -34,3 +34,8 @@ data/
 !.env.example
 .tools-venv/
 .venv312/
+
+# 前端类型检查产物：vue-tsc --build 在 tsconfig 缺 noEmit 时会把 src 编译成 .js，
+# 而 Vite 解析无扩展名导入时 .js 优先于 .ts，入库后线上会跑到过期产物。项目纯 TS，禁止 src 下 .js 入库。
+frontend/src/*.js
+frontend/src/**/*.js

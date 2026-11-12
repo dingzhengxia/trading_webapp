@@ -4,6 +4,9 @@
   "exclude": ["src/**/__tests__/*"],
   "compilerOptions": {
     "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.app.tsbuildinfo",
+    // 只做类型检查，绝不产出 js：否则会在 src/ 里生成 main.js / *.vue.js 等编译快照，
+    // 而 Vite 解析无扩展名导入时 .js 优先于 .ts，线上会跑到过期产物。
+    "noEmit": true,
 
     "paths": {
       "@/*": ["./src/*"]
