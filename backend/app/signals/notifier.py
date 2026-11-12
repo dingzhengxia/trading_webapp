@@ -22,12 +22,55 @@ from ..reports import dingtalk
 MAX_BATCH = 20          # 单条合并消息最多包含的信号数
 MAX_ITEM_CHARS = 1200   # 单条信号正文上限（超出截断，保留整体可读性）
 
+DEFAULT_PUSH_VOLUME_MULTIPLIER = 2.0  # 非静态币推送所需的成交量倍数默认值
+
 # 中国市场习惯：红涨绿跌 -> 做多红、做空绿
 _DIRECTION_LABEL = {
     'long': '🔴 做多',
     'short': '🟢 做空',
     'neutral': '⚪ 中性',
 }
+
+
+def _static_bases(settings: Dict[str, Any]) -> set:
+    """静态币种列表（base 大写集合），这些币的信号无条件推送。"""
+    return {
+        str(base).strip().upper()
+        for base in (settings.get('signal_scan_static_symbols') or [])
+        if str(base).strip()
+    }
+
+
+def filter_for_push(records: List[Dict[str, Any]], settings: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """推送层量能过滤：静态币实时全推，其它币要求放量达标。
+
+    - signal_push_volume_multiplier <= 0 表示不过滤（全部推送）；
+    - 倍数取信号记录里的 volume_ratio（当前量/动态基准，已按周期进度调整），
+      与 signal_config.json 各策略的成交量确认是同一口径，但作用在推送层，
+      不影响信号产生与自动开仓；
+    - 无法计算倍数的信号（如资金费率告警）按不达标处理，不推送。
+    """
+    try:
+        multiplier = float(settings.get('signal_push_volume_multiplier',
+                                        DEFAULT_PUSH_VOLUME_MULTIPLIER) or 0)
+    except (TypeError, ValueError):
+        multiplier = DEFAULT_PUSH_VOLUME_MULTIPLIER
+    if multiplier <= 0:
+        return list(records)
+
+    static = _static_bases(settings)
+    kept: List[Dict[str, Any]] = []
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        base = str(record.get('symbol') or '').strip().upper()
+        if base in static:
+            kept.append(record)
+            continue
+        ratio = record.get('volume_ratio')
+        if isinstance(ratio, (int, float)) and ratio >= multiplier:
+            kept.append(record)
+    return kept
 
 
 def is_enabled(settings: Optional[Dict[str, Any]] = None) -> bool:
@@ -61,6 +104,9 @@ def _format_item(index: int, record: Dict[str, Any]) -> str:
     meta = f"{label} · 周期 `{timeframe}` · 策略 `{strategy}`"
     if price:
         meta += f" · 价格 `{price}`"
+    ratio = record.get('volume_ratio')
+    if isinstance(ratio, (int, float)) and ratio > 0 and ratio != float('inf'):
+        meta += f" · 放量 `{ratio:.1f}x`"
 
     body = str(record.get('message') or '').strip()
     if len(body) > MAX_ITEM_CHARS:
@@ -95,7 +141,12 @@ async def push_signal_batch(records: List[Dict[str, Any]],
     if not records:
         return False
     try:
-        if not is_enabled(settings):
+        conf = settings if isinstance(settings, dict) else load_settings()
+        if not is_enabled(conf):
+            return False
+        records = filter_for_push(records, conf)
+        if not records:
+            logger.debug('📡 [信号] 本批信号全部未达推送量能门槛，跳过钉钉推送')
             return False
         title, text = format_signal_batch(records)
         sent = await dingtalk.send_markdown(title, text)

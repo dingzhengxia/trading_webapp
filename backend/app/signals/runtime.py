@@ -116,12 +116,20 @@ def calculate_cooldown_time(minutes, align_to_period_end=True) -> datetime:
 # ------------------------------------------------------------------ 信号发射
 def emit_signal(*, symbol: str, full_symbol: str, timeframe: str, strategy: str,
                 strategy_index: int, direction: str, price, title: str, message: str,
-                dedupe_key: str) -> None:
+                dedupe_key: str, volume_ratio=None) -> None:
     """构造结构化信号记录并入队（线程安全，可被任意线程调用）。
 
     由 SignalStore 的异步消费 task 消费：落库 + 触发自动开仓过滤链。
+    volume_ratio：当前量/动态基准的倍数（按周期进度调整），推送层用它做
+    「非静态币放量达标才推」的过滤；无法计算时为 None。
     """
     base = str(symbol).split('/')[0].split(':')[0].upper()
+    try:
+        ratio_value = float(volume_ratio) if volume_ratio is not None else None
+        if ratio_value is not None and ratio_value != ratio_value:  # NaN 防御
+            ratio_value = None
+    except (TypeError, ValueError):
+        ratio_value = None
     record = {
         'id': uuid4().hex,
         'created_at': datetime.now(timezone.utc).isoformat(),
@@ -132,6 +140,7 @@ def emit_signal(*, symbol: str, full_symbol: str, timeframe: str, strategy: str,
         'strategy_index': int(strategy_index or 0),
         'direction': str(direction or 'neutral'),
         'price': float(price) if price is not None else None,
+        'volume_ratio': ratio_value,
         'title': str(title or ''),
         'message': str(message or ''),
         'dedupe_key': str(dedupe_key),

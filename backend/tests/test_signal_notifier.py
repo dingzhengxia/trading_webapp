@@ -73,3 +73,41 @@ def test_signal_switch_defaults_on_for_old_settings(monkeypatch):
     """老库没有 signal_dingtalk_enabled 键时应视为开启（只看总开关 + webhook）。"""
     monkeypatch.setenv('DINGTALK_WEBHOOK_URL', 'https://example.com/robot/send')
     assert notifier.is_enabled({'dingtalk_enabled': True}) is True
+
+
+# ------------------------------------------------------------------ 推送量能过滤
+
+_SETTINGS = {'signal_scan_static_symbols': ['BTC', 'ETH'], 'signal_push_volume_multiplier': 2.0}
+
+
+def test_static_symbols_always_pushed():
+    records = [_rec(), _rec(volume_ratio=0.3), _rec(volume_ratio=None)]
+    kept = notifier.filter_for_push(records, _SETTINGS)
+    assert len(kept) == 3  # BTC 是静态币，无论量能都推
+
+
+def test_non_static_requires_volume_ratio():
+    records = [
+        _rec(symbol='DOGE', volume_ratio=2.5),   # 达标 -> 推
+        _rec(symbol='DOGE', volume_ratio=1.9),   # 未达标 -> 过滤
+        _rec(symbol='DOGE', volume_ratio=None),  # 无法计算 -> 过滤
+    ]
+    kept = notifier.filter_for_push(records, _SETTINGS)
+    assert len(kept) == 1
+    assert kept[0]['volume_ratio'] == 2.5
+
+
+def test_multiplier_zero_disables_filter():
+    kept = notifier.filter_for_push(
+        [_rec(symbol='DOGE', volume_ratio=None)],
+        {'signal_scan_static_symbols': [], 'signal_push_volume_multiplier': 0},
+    )
+    assert len(kept) == 1
+
+
+def test_item_shows_volume_ratio():
+    _, text = notifier.format_signal_batch([_rec(volume_ratio=3.2)])
+    assert '`3.2x`' in text
+    # inf 与缺失不显示
+    _, text2 = notifier.format_signal_batch([_rec(volume_ratio=float('inf'))])
+    assert '`inf' not in text2 and 'x`' not in text2.replace('43,210.50', '')

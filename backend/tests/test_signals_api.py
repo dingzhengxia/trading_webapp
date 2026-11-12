@@ -77,7 +77,9 @@ def test_get_signals_structure(client, api_key):
     assert data["config"]["signal_dingtalk_enabled"] is True
     # 推送状态：未配置 webhook 时 mock 环境下也不应抛错
     assert set(data["push"]) == {"dingtalk_configured", "dingtalk_enabled",
-                                 "signal_dingtalk_enabled"}
+                                 "signal_dingtalk_enabled",
+                                 "signal_push_volume_multiplier", "static_symbols"}
+    assert data["push"]["signal_push_volume_multiplier"] >= 0
 
 
 def test_config_rejects_unknown_key(client, api_key):

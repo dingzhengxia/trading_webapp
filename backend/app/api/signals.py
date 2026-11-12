@@ -74,6 +74,9 @@ async def get_signals() -> Dict[str, Any]:
             "dingtalk_configured": dingtalk.is_configured(),
             "dingtalk_enabled": bool(settings.get('dingtalk_enabled', False)),
             "signal_dingtalk_enabled": bool(settings.get('signal_dingtalk_enabled', True)),
+            "signal_push_volume_multiplier": float(
+                settings.get('signal_push_volume_multiplier', 2.0) or 0),
+            "static_symbols": list(settings.get('signal_scan_static_symbols') or []),
         },
     }
 

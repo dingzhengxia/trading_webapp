@@ -50,6 +50,7 @@ def _prepare_and_send_notification(config, symbol, timeframe, df, signal_info):
     trend_status, trend_emoji = "趋势未知", "📊"
 
     price = None
+    volume_ratio = None
     if df is not None:
         static_bases = market_settings.get('static_symbols', [])
         symbol_base = symbol.split('/')[0].split(':')[0]
@@ -72,6 +73,7 @@ def _prepare_and_send_notification(config, symbol, timeframe, df, signal_info):
         is_vol_over, v_text, actual_vol_ratio = is_realtime_volume_over(
             df, tf_minutes, vol_ma_period, dynamic_multiplier
         )
+        volume_ratio = actual_vol_ratio
 
         if final_volume_confirm and not is_vol_over:
             logger.debug(f"[{symbol}|{timeframe}] 信号 '{signal_info.get('log_name', 'N/A')}' 因成交量不足被过滤。")
@@ -106,6 +108,7 @@ def _prepare_and_send_notification(config, symbol, timeframe, df, signal_info):
         strategy_index=signal_info.get('strategy_index', 0),
         direction=signal_info.get('direction', 'neutral'),
         price=price,
+        volume_ratio=volume_ratio,
         title=title,
         message=message,
         dedupe_key=alert_key,

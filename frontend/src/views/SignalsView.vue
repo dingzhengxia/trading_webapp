@@ -120,6 +120,60 @@
       </v-col>
     </v-row>
 
+    <!-- 钉钉推送设置卡 -->
+    <v-row>
+      <v-col cols="12">
+        <v-card class="mt-2">
+          <v-card-title class="text-h6 d-flex align-center flex-wrap ga-2">
+            <v-icon start>mdi-bell-ring-outline</v-icon>
+            <span>钉钉推送设置</span>
+            <v-spacer></v-spacer>
+            <v-chip
+              size="small"
+              variant="tonal"
+              :color="pushStatus.dingtalk_configured ? 'success' : 'warning'"
+            >
+              {{ pushStatus.dingtalk_configured ? 'Webhook 已配置' : '未配置 DINGTALK_WEBHOOK_URL' }}
+            </v-chip>
+          </v-card-title>
+          <v-divider></v-divider>
+          <v-card-text>
+            <v-row dense align="center">
+              <v-col cols="12" sm="6" md="3">
+                <v-text-field
+                  v-model.number="pushVolumeInput"
+                  label="非静态币推送量能倍数"
+                  type="number"
+                  min="0"
+                  max="100"
+                  step="0.5"
+                  hint="当前量/动态基准 ≥ 该倍数才推送；0 = 不过滤"
+                  persistent-hint
+                  @update:model-value="pushVolumeDirty = true"
+                ></v-text-field>
+              </v-col>
+              <v-col cols="12" sm="6" md="2">
+                <v-btn
+                  color="primary"
+                  variant="tonal"
+                  :loading="savingPushConfig"
+                  @click="savePushVolume"
+                >
+                  保存
+                </v-btn>
+              </v-col>
+              <v-col cols="12" md="7">
+                <div class="text-caption text-grey">
+                  静态币（{{ pushStatus.static_symbols.join(' / ') || '无' }}）的信号始终实时推送；
+                  其它币种需放量达标才推送。所有信号仍会进入下方列表与自动开仓链路，此门槛只作用于钉钉推送。
+                </div>
+              </v-col>
+            </v-row>
+          </v-card-text>
+        </v-card>
+      </v-col>
+    </v-row>
+
     <!-- 自动开仓配置卡 -->
     <v-row>
       <v-col cols="12">
@@ -474,7 +528,12 @@ const pushStatus = ref<SignalPushStatus>({
   dingtalk_configured: false,
   dingtalk_enabled: false,
   signal_dingtalk_enabled: true,
+  signal_push_volume_multiplier: 2,
+  static_symbols: [],
 })
+const savingPushConfig = ref(false)
+const pushVolumeInput = ref<number>(2)
+const pushVolumeDirty = ref(false)
 
 const autoForm = ref<AutoTradeForm>({
   directions: [...defaultSignalConfig.signal_auto_trade_directions],
@@ -557,13 +616,21 @@ const normalizeLastAutoOpen = (value: unknown): string | Record<string, unknown>
 
 const mergePushStatus = (raw: unknown): SignalPushStatus => {
   if (raw === null || typeof raw !== 'object') {
-    return { dingtalk_configured: false, dingtalk_enabled: false, signal_dingtalk_enabled: true }
+    return {
+      dingtalk_configured: false,
+      dingtalk_enabled: false,
+      signal_dingtalk_enabled: true,
+      signal_push_volume_multiplier: 2,
+      static_symbols: [],
+    }
   }
   const source = raw as Partial<Record<keyof SignalPushStatus, unknown>>
   return {
     dingtalk_configured: source.dingtalk_configured === true,
     dingtalk_enabled: source.dingtalk_enabled === true,
     signal_dingtalk_enabled: source.signal_dingtalk_enabled !== false,
+    signal_push_volume_multiplier: toNumber(source.signal_push_volume_multiplier, 2),
+    static_symbols: toStringArray(source.static_symbols, []),
   }
 }
 
@@ -702,6 +769,7 @@ const fetchSignals = async (silent: boolean): Promise<void> => {
     const nextConfig = mergeConfig(data.config)
     config.value = nextConfig
     pushStatus.value = mergePushStatus(data.push)
+    if (!pushVolumeDirty.value) pushVolumeInput.value = pushStatus.value.signal_push_volume_multiplier
     syncAutoForm(nextConfig)
   } catch (error: unknown) {
     if (!silent) {
@@ -792,8 +860,32 @@ const onToggleScan = async (value: unknown): Promise<void> => {
   }
 }
 
-const onToggleDingtalkPush = async (value: unknown): Promise<void> => {
-  const enabled = Boolean(value)
+const savePushVolume = async (): Promise<void> => {
+  if (savingPushConfig.value) return
+  const raw = Number(pushVolumeInput.value)
+  const value = Number.isFinite(raw) && raw >= 0 ? Math.min(raw, 100) : 0
+  savingPushConfig.value = true
+  const previous = pushStatus.value.signal_push_volume_multiplier
+  try {
+    await api.post('/api/signals/config', { signal_push_volume_multiplier: value })
+    pushStatus.value.signal_push_volume_multiplier = value
+    pushVolumeDirty.value = false
+    const label = value > 0 ? `${value}x` : '不过滤'
+    snackbarStore.show({ message: `推送量能门槛已保存（${label}）。`, color: 'success' })
+    pushLog(`[前端] 推送量能门槛已保存: ${label}`, 'success')
+    await fetchSignals(true)
+  } catch (error: unknown) {
+    pushStatus.value.signal_push_volume_multiplier = previous
+    snackbarStore.show({
+      message: '保存推送量能门槛失败: ' + getErrorMessage(error),
+      color: 'error',
+    })
+  } finally {
+    savingPushConfig.value = false
+  }
+}
+
+const onToggleDingtalkPush = async (value: unknown): Promise<void> => {  const enabled = Boolean(value)
   if (savingDingtalkPush.value || enabled === pushStatus.value.signal_dingtalk_enabled) return
   savingDingtalkPush.value = true
   const previous = pushStatus.value.signal_dingtalk_enabled

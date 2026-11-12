@@ -202,6 +202,8 @@ export interface SignalPushStatus {
   dingtalk_configured: boolean
   dingtalk_enabled: boolean
   signal_dingtalk_enabled: boolean
+  signal_push_volume_multiplier: number
+  static_symbols: string[]
 }
 
 export interface SignalsResponse {

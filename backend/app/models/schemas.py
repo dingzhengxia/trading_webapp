@@ -196,3 +196,4 @@ class SignalConfigUpdate(BaseModel):
     signal_auto_trade_max_positions: Optional[int] = Field(None, ge=1, le=50)
     signal_auto_trade_value_usd: Optional[float] = Field(None, gt=0, le=1_000_000)
     signal_dingtalk_enabled: Optional[bool] = None
+    signal_push_volume_multiplier: Optional[float] = Field(None, ge=0, le=100)
