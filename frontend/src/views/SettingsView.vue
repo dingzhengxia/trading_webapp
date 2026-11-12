@@ -93,6 +93,7 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { useSettingsStore } from '@/stores/settingsStore'
+import { useSnackbarStore } from '@/stores/snackbar'
 import CoinPoolsManager from '@/components/CoinPoolsManager.vue'
 import AppDockFooter from '@/components/AppDockFooter.vue'
 
@@ -101,10 +102,14 @@ const activeTab = ref('general')
 const coinPoolsManagerRef = ref<InstanceType<typeof CoinPoolsManager> | null>(null)
 
 // handleSave 函数本身是正确的，无需修改
-const handleSave = () => {
+const handleSave = async () => {
   if (activeTab.value === 'general') {
     if (settingsStore.settings) {
-      settingsStore.saveGeneralSettings(settingsStore.settings)
+      const ok = await settingsStore.saveGeneralSettings(settingsStore.settings)
+      useSnackbarStore().show({
+        message: ok ? '配置已保存' : '配置保存失败，请查看日志详情',
+        color: ok ? 'success' : 'error',
+      })
     }
   } else if (activeTab.value === 'coin_pools') {
     if (coinPoolsManagerRef.value) {

@@ -1,7 +1,24 @@
 <!-- frontend/src/components/ControlPanel.vue (完整代码) -->
 <template>
   <v-card v-if="settingsStore.settings">
-    <v-card-title class="text-h6">交易参数</v-card-title>
+    <v-card-title class="d-flex align-center text-h6">
+      交易参数
+      <v-spacer></v-spacer>
+      <span v-if="lastSavedAt" class="text-caption text-medium-emphasis mr-2 text-no-wrap">
+        已保存 {{ formatClock(lastSavedAt) }}
+      </span>
+      <v-btn
+        size="small"
+        variant="tonal"
+        color="success"
+        :loading="saving"
+        class="text-no-wrap"
+        @click="persistNow"
+      >
+        <v-icon start>mdi-content-save</v-icon>
+        保存
+      </v-btn>
+    </v-card-title>
     <v-tabs v-model="modelValue" bg-color="primary">
       <v-tab value="general">通用开仓设置</v-tab>
       <v-tab value="rebalance">智能再平衡</v-tab>
@@ -38,6 +55,9 @@
                     :disabled="!settingsStore.settings.enable_long_trades"
                     @update:model-value="setLongCoinList"
                   ></SmartSelect>
+                  <div v-if="longOutsidePool.length" class="text-caption text-warning mt-1">
+                    已选币种中有 {{ longOutsidePool.join('/') }} 不在做多备选池内，仍会按已选列表开仓。
+                  </div>
 
                   <v-btn
                     size="small"
@@ -128,6 +148,9 @@
                     :disabled="!settingsStore.settings.enable_short_trades"
                     @update:model-value="setShortCoinList"
                   ></SmartSelect>
+                  <div v-if="shortOutsidePool.length" class="text-caption text-warning mt-1">
+                    已选币种中有 {{ shortOutsidePool.join('/') }} 不在做空备选池内，仍会按已选列表开仓。
+                  </div>
 
                   <v-divider class="my-4"></v-divider>
                   <v-switch
@@ -385,9 +408,10 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch, computed } from 'vue'
+import { ref, watch, computed, onBeforeUnmount } from 'vue'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { useUiStore } from '@/stores/uiStore'
+import { useSnackbarStore } from '@/stores/snackbar'
 import { debounce } from '@/utils/debounce'
 import SmartSelect from '@/components/SmartSelect.vue'
 
@@ -404,8 +428,28 @@ const longListShowAll = ref(false)
 const shortListShowAll = ref(false)
 
 // 多/空交易币种从各自备选池中选择；v-autocomplete 自带搜索过滤，无需手工过滤
-const longListItems = computed(() => [...settingsStore.availableLongCoins].sort())
-const shortListItems = computed(() => [...settingsStore.availableShortCoins].sort())
+// 并上「当前已选」：选中的币若不在备选池（例如从总池移除过），只给 items=备选池 时
+// Vuetify 找不到对应项就渲染不出 chip，看起来像“保存丢失”，实际后端已存着。
+const unionSorted = (pool: string[], selected?: string[]) =>
+  [...new Set([...(pool ?? []), ...(selected ?? [])])].sort()
+
+const longListItems = computed(() =>
+  unionSorted(settingsStore.availableLongCoins, settingsStore.settings?.long_coin_list),
+)
+const shortListItems = computed(() =>
+  unionSorted(settingsStore.availableShortCoins, settingsStore.settings?.short_coin_list),
+)
+
+const longOutsidePool = computed(() =>
+  (settingsStore.settings?.long_coin_list ?? []).filter(
+    (coin) => !settingsStore.availableLongCoins.includes(coin),
+  ),
+)
+const shortOutsidePool = computed(() =>
+  (settingsStore.settings?.short_coin_list ?? []).filter(
+    (coin) => !settingsStore.availableShortCoins.includes(coin),
+  ),
+)
 
 const removeListItemValue = (listType: 'long' | 'short', value: string) => {
   if (!settingsStore.settings) return
@@ -426,33 +470,70 @@ const toList = (value: string | number | (string | number)[] | null | undefined)
 const setLongCoinList = (value: string | number | (string | number)[] | null | undefined) => {
   if (!settingsStore.settings) return
   settingsStore.settings.long_coin_list = toList(value)
+  persistNow() // 选币是点选动作，不能等 1.5s 防抖：用户往往选完就刷新
 }
 
 const setShortCoinList = (value: string | number | (string | number)[] | null | undefined) => {
   if (!settingsStore.settings) return
   settingsStore.settings.short_coin_list = toList(value)
+  persistNow()
 }
 
 const setBenchmarkCoins = (value: string | number | (string | number)[] | null | undefined) => {
   if (!settingsStore.settings) return
   settingsStore.settings.rebalance_benchmark_coin = toList(value)
+  persistNow()
 }
 
 const rebalanceMethods = [{ value: 'multi_factor_weakest', text: '多因子弱势策略' }]
 
-const saveSettingsDebounced = debounce(() => {
-  if (settingsStore.settings) {
-    settingsStore.saveGeneralSettings(settingsStore.settings)
+// ---- 保存状态：让“到底存没存”在界面上可见，而不是只写进日志抽屉 ----
+const saving = ref(false)
+const lastSavedAt = ref<number | null>(null)
+let lastSavedJson = ''
+
+const snapshot = () => JSON.stringify(settingsStore.settings ?? {})
+const formatClock = (ts: number) =>
+  new Date(ts).toLocaleTimeString('zh-CN', { hour12: false })
+
+const persistNow = async () => {
+  if (!settingsStore.settings || saving.value) return
+  const before = snapshot()
+  saveSettingsDebounced.cancel()
+  saving.value = true
+  const ok = await settingsStore.saveGeneralSettings(settingsStore.settings)
+  saving.value = false
+  if (ok) {
+    lastSavedAt.value = Date.now()
+    lastSavedJson = before
+  } else {
+    useSnackbarStore().show({ message: '配置保存失败，请查看日志详情', color: 'error' })
   }
+}
+
+const saveSettingsDebounced = debounce(() => {
+  // 与上次成功保存内容相同就不重复提交（选币已经即时保存过）
+  if (settingsStore.settings && snapshot() !== lastSavedJson) persistNow()
 }, 1500)
 
 watch(
   () => settingsStore.settings,
   () => {
+    if (!settingsStore.settings) return
+    // 首次加载（或刷新回来的数据）不算用户修改，只记基线
+    if (!lastSavedJson) {
+      lastSavedJson = snapshot()
+      return
+    }
     saveSettingsDebounced()
   },
   { deep: true },
 )
+
+// 离开页面时把还没落库的修改立刻提交，避免“改完就切页”丢失
+onBeforeUnmount(() => {
+  saveSettingsDebounced.flush()
+})
 
 watch(
   () => settingsStore.settings?.long_coin_list,

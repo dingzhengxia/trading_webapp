@@ -70,7 +70,8 @@ export const useSettingsStore = defineStore('settings', () => {
     }
 
     try {
-      const response = await api.get('/api/settings')
+      // 带时间戳防浏览器/代理缓存：刷新后必须看到服务端最新值
+      const response = await api.get('/api/settings', { params: { _t: Date.now() } })
       const fetchedSettings = {...defaultSettings, ...response.data.user_settings}
 
       if (settings.value) {
@@ -99,8 +100,8 @@ export const useSettingsStore = defineStore('settings', () => {
     availableShortCoins.value = shortPool
   }
 
-  async function saveGeneralSettings(newSettings: UserSettings | null) {
-    if (!newSettings) return
+  async function saveGeneralSettings(newSettings: UserSettings | null): Promise<boolean> {
+    if (!newSettings) return false
     // 过滤空字符串/NaN：输入框清空时 Vuetify 给出 ''，若原样落库会让杠杆、止损百分比变成非法值
     const payload: Record<string, unknown> = {}
     for (const [key, value] of Object.entries(newSettings)) {
@@ -115,13 +116,18 @@ export const useSettingsStore = defineStore('settings', () => {
         level: 'success',
         timestamp: new Date().toLocaleTimeString(),
       })
+      return true
     } catch (error) {
       console.error('Failed to save settings:', error)
+      // 把服务端 detail 带出来：400/校验失败时只说“保存失败”无法定位是哪一项
+      const detail =
+        (error as { response?: { data?: { detail?: unknown } } })?.response?.data?.detail
       uiStore.logStore.addLog({
-        message: '自动保存配置失败！',
+        message: `自动保存配置失败！${detail ? `（${String(detail)}）` : ''}`,
         level: 'error',
         timestamp: new Date().toLocaleTimeString(),
       })
+      return false
     }
   }
 
