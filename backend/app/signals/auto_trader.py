@@ -6,7 +6,8 @@
 2. direction in signal_auto_trade_directions（neutral 永不开仓）；
 3. strategy in signal_auto_trade_strategies（方向性入场策略白名单）；
 4. timeframe in signal_auto_trade_timeframes；
-5. 确认数：时间窗口内同 symbol + 同 direction 的不同策略数 >= signal_auto_trade_confirmations；
+5. 确认数：时间窗口内同 symbol + 同 direction 的不同「信号族」数 >=
+   signal_auto_trade_confirmations（同族多策略只算 1 票，见 families.py）；
 6. 冷却：同 symbol 距上次自动开仓 < signal_auto_trade_cooldown_seconds -> skip；
 7. 当前持仓数 < signal_auto_trade_max_positions；该 symbol 已有持仓（任意方向）skip；
 8. 调用 open_callback(signal)，成功/失败记录 last_auto_open。
@@ -18,6 +19,7 @@ from typing import Any, Callable, Dict
 from loguru import logger
 
 from ..core import database
+from .families import family_of
 
 AUTO_TRADE_STATE_KEY = 'auto_trade_state'
 
@@ -36,7 +38,7 @@ class SignalAutoTrader:
         self._settings_loader = settings_loader
         self._position_provider = position_provider
         self._open_callback = open_callback
-        # 近期信号窗口：(ts_seconds, symbol, direction, strategy)
+        # 近期信号窗口：(ts_seconds, symbol, direction, family)
         self._recent: deque = deque(maxlen=500)
         # 同 symbol 上次自动开仓时间（秒级 monotonic）
         self._last_open: Dict[str, float] = {}
@@ -64,13 +66,13 @@ class SignalAutoTrader:
     # -------------------------------------------------------------- 过滤链
     def _confirmation_count(self, symbol: str, direction: str,
                             window_seconds: int) -> int:
-        """时间窗口内同 symbol + 同 direction 的不同策略数。"""
+        """时间窗口内同 symbol + 同 direction 的不同信号族数。"""
         now = time.time()
-        strategies = set()
-        for ts, sym, dirn, strat in self._recent:
+        families = set()
+        for ts, sym, dirn, fam in self._recent:
             if now - ts <= window_seconds and sym == symbol and dirn == direction:
-                strategies.add(strat)
-        return len(strategies)
+                families.add(fam)
+        return len(families)
 
     async def on_signal(self, signal: Dict[str, Any]) -> Dict[str, Any]:
         """信号入口：返回 {'action': 'skip'|'open'|'error', 'reason': str}。"""
@@ -79,9 +81,6 @@ class SignalAutoTrader:
         direction = str(signal.get('direction') or 'neutral').lower()
         strategy = str(signal.get('strategy') or '')
         timeframe = str(signal.get('timeframe') or '')
-
-        # 记录到确认窗口（无论后续是否通过，信号本身计入）
-        self._recent.append((time.time(), symbol, direction, strategy))
 
         # 1. 总开关
         if not settings.get('signal_auto_trade_enabled', False):
@@ -102,12 +101,15 @@ class SignalAutoTrader:
         if timeframe not in allowed_timeframes:
             return {'action': 'skip', 'reason': f'时间框架 {timeframe} 不在允许列表'}
 
-        # 5. 确认数：窗口内同 symbol+direction 的不同策略数
+        # 进入确认窗口：只有通过白名单的信号才有投票权（按信号族去重）
+        self._recent.append((time.time(), symbol, direction, family_of(strategy)))
+
+        # 5. 确认数：窗口内同 symbol+direction 的不同信号族数
         window = int(settings.get('signal_auto_trade_confirmation_window_seconds', 300) or 300)
         required = max(1, int(settings.get('signal_auto_trade_confirmations', 1) or 1))
         confirmations = self._confirmation_count(symbol, direction, window)
         if confirmations < required:
-            return {'action': 'skip', 'reason': f'确认数不足 ({confirmations}/{required})'}
+            return {'action': 'skip', 'reason': f'确认族数不足 ({confirmations}/{required})'}
 
         # 6. 冷却
         cooldown = int(settings.get('signal_auto_trade_cooldown_seconds', 900) or 900)
@@ -131,7 +133,8 @@ class SignalAutoTrader:
             return {'action': 'skip', 'reason': f'{symbol} 已有持仓，不叠加'}
 
         # 8. 开仓
-        logger.info(f"⚡ 信号触发自动开仓: {symbol} {direction} ({strategy} @ {timeframe})")
+        logger.info(f"⚡ 信号触发自动开仓: {symbol} {direction} "
+                    f"({strategy}/{family_of(strategy)} @ {timeframe}, 确认 {confirmations} 族)")
         try:
             opened = await self._open_callback(signal)
         except Exception as e:

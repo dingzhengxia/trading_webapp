@@ -109,16 +109,33 @@ def test_timeframe_whitelist():
     assert opened == []
 
 
-def test_confirmations_require_distinct_strategies():
+def test_confirmations_require_distinct_families():
+    """确认数按「信号族」计：同族的多个策略只算 1 票。"""
     trader, opened = _make_trader(base_settings(signal_auto_trade_confirmations=2))
-    # 同策略第二个信号不算新确认
+    # 同族（trend）：ema_cross / ma_breakout / trend_channel_breakout 都只算 1 票
     r1 = asyncio.run(trader.on_signal(_signal(strategy="ema_cross")))
     assert r1['action'] == 'skip'
-    r2 = asyncio.run(trader.on_signal(_signal(strategy="ema_cross")))
-    assert r2['action'] == 'skip'
-    # 第二个不同策略 -> 确认数达到 2 -> 开仓
-    r3 = asyncio.run(trader.on_signal(_signal(strategy="ma_breakout")))
-    assert r3['action'] == 'open'
+    r2 = asyncio.run(trader.on_signal(_signal(strategy="ma_breakout")))
+    assert r2['action'] == 'skip' and '确认族数不足' in r2['reason']
+    r3 = asyncio.run(trader.on_signal(_signal(strategy="trend_channel_breakout")))
+    assert r3['action'] == 'skip'
+    # 不同族（level）-> 2 族共振 -> 开仓
+    r4 = asyncio.run(trader.on_signal(_signal(strategy="level_breakout")))
+    assert r4['action'] == 'open'
+    assert len(opened) == 1
+
+
+def test_confirmation_counts_only_whitelisted_signals():
+    """不在策略白名单的信号不参与确认计票。"""
+    settings = base_settings(signal_auto_trade_confirmations=2,
+                             signal_auto_trade_strategies=['ema_cross', 'level_breakout'])
+    trader, opened = _make_trader(settings)
+    # volatility_breakout 不在白名单，即使属于独立族也不计票
+    assert asyncio.run(trader.on_signal(
+        _signal(strategy="volatility_breakout")))['action'] == 'skip'
+    assert asyncio.run(trader.on_signal(_signal(strategy="ema_cross")))['action'] == 'skip'
+    assert asyncio.run(trader.on_signal(
+        _signal(strategy="level_breakout")))['action'] == 'open'
     assert len(opened) == 1
 
 

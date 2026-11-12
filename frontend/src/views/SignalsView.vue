@@ -225,7 +225,7 @@
               density="compact"
               variant="outlined"
               hide-details
-              hint="同方向不同策略数达到该值才开仓"
+              hint="同方向不同信号族数达到该值才开仓"
               persistent-hint
               @update:model-value="markAutoFormDirty"
             ></v-text-field>
