@@ -49,6 +49,23 @@ def _try_lock_risk_action(symbol, side, pos_state, action):
     return True
 
 
+# 与风险周期无关的动作级冷却：即使周期被异常重建（身份字段抖动/仓位闪断），
+# 同一 symbol+side 的 T1/T2 也不能在短时间内反复减仓。
+LAST_RISK_ACTION_TS: dict = {}
+
+
+def _risk_action_on_cooldown(symbol, side, action, conf):
+    interval = _f((conf or {}).get("risk_action_min_interval_sec"), 0.0) or 0.0
+    if interval <= 0:
+        return False
+    last = LAST_RISK_ACTION_TS.get((symbol, side, action), 0.0)
+    return (time.time() - last) < interval
+
+
+def _mark_risk_action_done(symbol, side, action):
+    LAST_RISK_ACTION_TS[(symbol, side, action)] = time.time()
+
+
 CLIENT_ALGO_PREFIX = "PM_WS_SL_"
 
 DEFAULT_CONFIG = {
@@ -107,7 +124,10 @@ DEFAULT_CONFIG = {
  'stop_maintenance_interval_sec': 5.0,
  'stop_min_update_pct': 0.0005,
  'stop_min_update_atr_ratio': 0.05,
- 'price_source_tolerance_pct': 0.01}
+ 'price_source_tolerance_pct': 0.01,
+ 'risk_action_min_interval_sec': 1800.0,
+ 'identity_grace_after_reduce_sec': 900.0,
+ 'flat_confirm_sec': 30.0}
 }
 
 
@@ -248,6 +268,8 @@ class Runtime:
         self.risk_action_latches = set()
         # 状态文件不可写时，新周期仍保存在进程内，避免下一轮又读回旧周期。
         self.runtime_position_states = {}
+        # 仓位“闪断”防抖：记录某方向第一次消失的时间，确认超过 flat_confirm_sec 才重建周期。
+        self.disappeared_since = {}
 
     def action_lock(self, symbol, side):
         key = (symbol, side)
@@ -1168,7 +1190,7 @@ async def _ensure_disaster_stop(exchange, symbol, side, pos, current_price, conf
         logger.error(f"[{symbol}] 维护灾难止损出错: {e}")
 
 
-def _reconcile_position_state(state, key, symbol, side, contracts, timeframe, position=None):
+def _reconcile_position_state(state, key, symbol, side, contracts, timeframe, position=None, conf=None):
     ps = state.get(key)
     if not isinstance(ps, dict):
         ps = {
@@ -1213,6 +1235,7 @@ def _reconcile_position_state(state, key, symbol, side, contracts, timeframe, po
     ps.setdefault("t1_realtime_armed_initialized", False)
     ps.setdefault("risk_entry_price", _f((position or {}).get("entryPrice"), 0.0))
     ps.setdefault("risk_entry_price_source", "position_average")
+    ps.setdefault("last_program_reduce_ts", 0)
     ps.setdefault("t1_triggered", bool(ps.get("t1_done")))
     ps.setdefault("t2_triggered", bool(ps.get("t2_done")))
     ps.setdefault("t3_triggered", False)
@@ -1248,11 +1271,25 @@ def _reconcile_position_state(state, key, symbol, side, contracts, timeframe, po
 
     # 防止“平仓后同数量重新开仓”继承旧风险周期。
     # 优先使用交易所开仓时间；没有可靠时间时，用平均开仓价变化作为辅助身份识别。
-    identity_changed = False
-    if current_open_time > 0 and old_open_time > 0 and current_open_time != old_open_time:
-        identity_changed = True
-    elif current_entry_price > 0 and old_entry_price > 0:
-        identity_changed = abs(current_entry_price - old_entry_price) / max(old_entry_price, 1e-12) > 0.001
+    open_time_changed = current_open_time > 0 and old_open_time > 0 and current_open_time != old_open_time
+    entry_price_changed = (current_entry_price > 0 and old_entry_price > 0
+                           and abs(current_entry_price - old_entry_price) / max(old_entry_price, 1e-12) > 0.001)
+    identity_changed = open_time_changed or entry_price_changed
+
+    # 程序自身减仓（T1/T2/TP）可能让交易所侧的“仓位时间/均价”字段发生抖动
+    # （部分交易所把 updateTime/重算后的均价映射到这些字段）。
+    # 宽限期内只采纳新字段值、不重建风险周期，切断“减仓 -> 换周期 -> T1 立即再减仓”的自激循环。
+    grace = _f((conf or {}).get("identity_grace_after_reduce_sec"), 0.0) or 0.0
+    last_reduce = int(ps.get("last_program_reduce_ts") or 0)
+    if identity_changed and grace > 0 and last_reduce > 0 and (time.time() - last_reduce) < grace:
+        logger.warning(
+            f"[{symbol}] 🕒 程序减仓后 {grace:.0f}s 宽限期内仓位身份字段变化"
+            f"（open:{old_open_time}->{current_open_time} entry:{old_entry_price}->{current_entry_price}），"
+            f"疑似交易所 updateTime/均价抖动，保留原风险周期 {ps.get('risk_cycle_id')}"
+        )
+        ps["exchange_entry_time_ms"] = current_open_time or old_open_time
+        ps["last_position_entry_price"] = current_entry_price or old_entry_price
+        identity_changed = False
 
     if identity_changed:
         ps.update({
@@ -1405,7 +1442,7 @@ async def watch_symbol_position(exchange, symbol, side):
             if key in RUNTIME.runtime_position_states and not force_new_cycle:
                 state[key] = RUNTIME.runtime_position_states[key]
 
-            pos_state, changed = _reconcile_position_state(state, key, symbol, side, contracts, timeframe, position=pos)
+            pos_state, changed = _reconcile_position_state(state, key, symbol, side, contracts, timeframe, position=pos, conf=conf)
             RUNTIME.runtime_position_states[key] = pos_state
 
             if changed or force_new_cycle:
@@ -1814,6 +1851,12 @@ async def watch_symbol_position(exchange, symbol, side):
                             if action_key in RUNTIME.risk_action_latches:
                                 logger.warning(f"[{symbol}/{side}] 🛑 T2本风险周期已执行/已锁定，跳过重复动作。")
                                 continue
+                            if _risk_action_on_cooldown(symbol, side, "T2", conf):
+                                logger.warning(
+                                    f"[{symbol}/{side}] ⏳ T2 距上次减仓不足 "
+                                    f"{_f(conf.get('risk_action_min_interval_sec'), 0.0):.0f}s"
+                                    f"（疑似风险周期被异常重建），本次跳过，不落闩。")
+                                continue
                             RUNTIME.risk_action_latches.add(action_key)
                             pos_state["t2_triggered"] = True
                             state[key] = pos_state
@@ -1826,6 +1869,8 @@ async def watch_symbol_position(exchange, symbol, side):
                             send_alert(full_config, "风控提示: T2 减仓", msg, symbol=symbol)
                             _, after = await _limit_reduce_with_maker_retry(exchange, symbol, side, fresh, qty, "T2结构减仓", conf, int(pos_state.get("position_version", 0)), pos_state)
                             pos_state["contracts"] = after; pos_state["t2_done"] = True
+                            pos_state["last_program_reduce_ts"] = int(time.time())
+                            _mark_risk_action_done(symbol, side, "T2")
                             state[key] = pos_state; _save_state(state)
 
                         # T1：小结构破位 -> 20%，不再用MA直接触发
@@ -1835,6 +1880,12 @@ async def watch_symbol_position(exchange, symbol, side):
                             action_key = (symbol, side, str(pos_state.get("risk_cycle_id")), "T1")
                             if action_key in RUNTIME.risk_action_latches:
                                 logger.warning(f"[{symbol}/{side}] 🛑 T1本风险周期已执行/已锁定，跳过重复减仓。")
+                                continue
+                            if _risk_action_on_cooldown(symbol, side, "T1", conf):
+                                logger.warning(
+                                    f"[{symbol}/{side}] ⏳ T1 距上次减仓不足 "
+                                    f"{_f(conf.get('risk_action_min_interval_sec'), 0.0):.0f}s"
+                                    f"（疑似风险周期被异常重建），本次跳过，不落闩。")
                                 continue
                             RUNTIME.risk_action_latches.add(action_key)
                             pos_state["t1_triggered"] = True
@@ -1848,6 +1899,8 @@ async def watch_symbol_position(exchange, symbol, side):
                             send_alert(full_config, "风控提示: T1 减仓", msg, symbol=symbol)
                             _, after = await _limit_reduce_with_maker_retry(exchange, symbol, side, fresh, qty, "T1结构减仓", conf, int(pos_state.get("position_version", 0)), pos_state)
                             pos_state["contracts"] = after; pos_state["t1_done"] = True
+                            pos_state["last_program_reduce_ts"] = int(time.time())
+                            _mark_risk_action_done(symbol, side, "T1")
                             state[key] = pos_state; _save_state(state)
 
             except Exception as exc:
@@ -1928,8 +1981,20 @@ async def protect_positions_main(exchange, config=None):
             # 3.5 仓位生命周期：只要主控观察到某方向从“有仓”变成“无仓”，
             # 就立即标记下一次重新出现为全新风险周期。这样手动平仓后再开仓，
             # 即使旧 state 文件还没来得及清理，也绝不会继承 T1/T2/TP/抄底状态。
+            # 防抖：部分交易所在挂reduce单/资金费结算时会短暂漏报仓位，
+            # 必须连续消失超过 flat_confirm_sec 才认定真平仓，否则会“闪断 -> 换周期 -> T1立刻再减”。
             disappeared = RUNTIME.previous_active_keys - active
+            keep_previous = set()
             for old_key in disappeared:
+                confirm_sec = _f(conf.get("flat_confirm_sec"), 0.0) or 0.0
+                first_seen = RUNTIME.disappeared_since.setdefault(old_key, time.time())
+                if confirm_sec > 0 and (time.time() - first_seen) < confirm_sec:
+                    logger.warning(
+                        f"[{old_key[0]}/{old_key[1]}] 👻 仓位短暂消失 {time.time() - first_seen:.0f}s"
+                        f"（<{confirm_sec:.0f}s），暂不重建风险周期，防接口抖动误判。")
+                    keep_previous.add(old_key)
+                    continue
+                RUNTIME.disappeared_since.pop(old_key, None)
                 RUNTIME.force_new_cycle_keys.add(old_key)
                 # 旧周期的一次性动作闩锁也必须失效。
                 RUNTIME.risk_action_latches = {
@@ -1950,7 +2015,11 @@ async def protect_positions_main(exchange, config=None):
                     logger.warning(f"[{old_symbol}/{old_side}] 平仓后生命周期清理异常: {lifecycle_exc}")
                 logger.info(f"[{old_symbol}/{old_side}] 🧹 检测到仓位已消失：下一次重新开仓强制建立全新风险周期。")
 
-            RUNTIME.previous_active_keys = set(active)
+            # 防抖期内重新出现的方向不再保留“消失中”标记
+            for k in list(RUNTIME.disappeared_since):
+                if k in active:
+                    RUNTIME.disappeared_since.pop(k, None)
+            RUNTIME.previous_active_keys = set(active) | keep_previous
 
             # 4. 按 symbol + side 调度，完整支持 Binance Hedge Mode 同币双向持仓
             for symbol, side in active:

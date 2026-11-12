@@ -329,3 +329,71 @@ def test_ui_log_sink_install_is_idempotent():
     install_ui_log_sink()
     install_ui_log_sink()
     assert len(logger._core.handlers) == sinks_before  # 重复安装不新增 sink
+
+
+# ---------------------------------------------------------------------------
+# 防重复减仓：身份宽限期 + 动作级冷却（2026-11-12 T1 连续触发修复）
+# ---------------------------------------------------------------------------
+def _position(open_time_ms, entry_price, contracts=1.0):
+    return {"entryPrice": entry_price, "contracts": contracts,
+            "info": {"openTime": open_time_ms}}
+
+
+def test_reconcile_identity_grace_keeps_cycle_after_program_reduce(tmp_db):
+    """程序减仓后宽限期内，openTime/均价抖动只采纳新值，不重建风险周期。"""
+    key = "BTC/USDC:USDC_long"
+    state = {}
+    ps, changed = engine._reconcile_position_state(
+        state, key, "BTC/USDC:USDC", "long", 1.0, "2h",
+        position=_position(1_700_000_000_000, 100.0))
+    assert changed and ps["risk_cycle_id"]
+    cycle_id = ps["risk_cycle_id"]
+    ps["last_program_reduce_ts"] = int(engine.time.time())  # 刚减过仓
+
+    # openTime 与均价同时变化：宽限期内应被认定为抖动，保留周期
+    ps2, changed2 = engine._reconcile_position_state(
+        state, key, "BTC/USDC:USDC", "long", 1.0, "2h",
+        position=_position(1_700_000_100_000, 101.0), conf={"identity_grace_after_reduce_sec": 900.0})
+    assert changed2 is False
+    assert ps2["risk_cycle_id"] == cycle_id
+    assert ps2["exchange_entry_time_ms"] == 1_700_000_100_000  # 采纳新字段，避免下一轮再次“变化”
+    assert ps2["last_position_entry_price"] == 101.0
+
+    # 宽限期外：同样的变化必须重建周期（真实重开仓场景）
+    ps2["last_program_reduce_ts"] = int(engine.time.time()) - 3600
+    ps3, changed3 = engine._reconcile_position_state(
+        state, key, "BTC/USDC:USDC", "long", 1.0, "2h",
+        position=_position(1_700_000_200_000, 102.0), conf={"identity_grace_after_reduce_sec": 900.0})
+    assert changed3 is True
+    assert ps3["risk_cycle_id"] != cycle_id
+
+
+def test_reconcile_no_grace_without_program_reduce(tmp_db):
+    """没有程序减仓记录时，身份变化必须立即重建周期（原始行为不变）。"""
+    key = "ETH/USDC:USDC_long"
+    state = {}
+    ps, _ = engine._reconcile_position_state(
+        state, key, "ETH/USDC:USDC", "long", 1.0, "2h",
+        position=_position(1_700_000_000_000, 100.0))
+    old_cycle = ps["risk_cycle_id"]
+    ps2, changed = engine._reconcile_position_state(
+        state, key, "ETH/USDC:USDC", "long", 1.0, "2h",
+        position=_position(1_700_000_100_000, 100.0), conf={"identity_grace_after_reduce_sec": 900.0})
+    assert changed is True
+    assert ps2["risk_cycle_id"] != old_cycle
+
+
+def test_risk_action_cooldown_blocks_and_expires():
+    engine.LAST_RISK_ACTION_TS.clear()
+    conf = {"risk_action_min_interval_sec": 1800.0}
+    assert engine._risk_action_on_cooldown("BTC/USDC:USDC", "long", "T1", conf) is False
+    engine._mark_risk_action_done("BTC/USDC:USDC", "long", "T1")
+    assert engine._risk_action_on_cooldown("BTC/USDC:USDC", "long", "T1", conf) is True
+    # 不同动作/方向互不影响
+    assert engine._risk_action_on_cooldown("BTC/USDC:USDC", "long", "T2", conf) is False
+    assert engine._risk_action_on_cooldown("BTC/USDC:USDC", "short", "T1", conf) is False
+    # 冷却过期后放行
+    engine.LAST_RISK_ACTION_TS[("BTC/USDC:USDC", "long", "T1")] = engine.time.time() - 1801
+    assert engine._risk_action_on_cooldown("BTC/USDC:USDC", "long", "T1", conf) is False
+    # interval<=0 时完全关闭冷却
+    assert engine._risk_action_on_cooldown("BTC/USDC:USDC", "long", "T1", {"risk_action_min_interval_sec": 0}) is False

@@ -17,6 +17,13 @@
 
       <!-- 多空仓位（共享面板）：反手 / 平仓都在这里的每一行上操作 -->
       <PositionsPanel />
+
+      <!-- 开仓记录：选币快照 + 每笔开仓结果（自动/信号/手动/再平衡共用台账） -->
+      <v-row>
+        <v-col cols="12">
+          <OpenHistoryPanel />
+        </v-col>
+      </v-row>
     </v-container>
   </div>
 
@@ -65,6 +72,7 @@ import { useSettingsStore } from '@/stores/settingsStore'
 import ControlPanel from '@/components/ControlPanel.vue'
 import PositionsPanel from '@/components/PositionsPanel.vue'
 import PnlSummary from '@/components/PnlSummary.vue'
+import OpenHistoryPanel from '@/components/OpenHistoryPanel.vue'
 import AppDockFooter from '@/components/AppDockFooter.vue'
 import apiClient from '@/services/api'
 import type { RebalanceCriteria } from '@/models/types'

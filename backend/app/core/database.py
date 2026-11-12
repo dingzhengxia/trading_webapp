@@ -25,7 +25,7 @@ from .paths import PROJECT_ROOT as _PROJECT_ROOT
 DB_PATH: Path = _PROJECT_ROOT / 'data' / 'app.db'
 
 # 允许使用的表名白名单，防止调用方拼接任意表名
-ALLOWED_TABLES = ('settings', 'coin_pools', 'signal_state', 'protection_state')
+ALLOWED_TABLES = ('settings', 'coin_pools', 'signal_state', 'protection_state', 'open_history')
 
 # 迁移用的旧 JSON 文件路径（由 config.py 注入，避免循环导入时仅作默认值）
 USER_SETTINGS_FILE = _PROJECT_ROOT / 'user_settings.json'
@@ -40,6 +40,7 @@ _CREATE_SQL = (
     "CREATE TABLE IF NOT EXISTS coin_pools (pool TEXT PRIMARY KEY, coins TEXT)",
     "CREATE TABLE IF NOT EXISTS signal_state (key TEXT PRIMARY KEY, value TEXT)",
     "CREATE TABLE IF NOT EXISTS protection_state (key TEXT PRIMARY KEY, value TEXT)",
+    "CREATE TABLE IF NOT EXISTS open_history (key TEXT PRIMARY KEY, value TEXT)",
 )
 
 

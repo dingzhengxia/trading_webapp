@@ -4,6 +4,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from typing import Optional
 
 from ..core.exchange_manager import get_exchange_dependency
+from ..core.open_history import get_history
 from ..core.security import verify_api_key
 from ..core.trading_service import trading_service
 from ..logic.utils import extract_tradeable_coins, resolve_symbol_details
@@ -40,6 +41,12 @@ def sync_sltp_task(settings: SyncSltpRequest, background_tasks: BackgroundTasks)
 def manual_trade_task(request: ManualTradeRequest, background_tasks: BackgroundTasks):
     """手动做多 / 做空 / 反手（限价 post-only；反手先全平再反向开仓）。"""
     return trading_service.manual_trade(request, background_tasks)
+
+
+@router.get("/open-history")
+def get_open_history(limit: int = Query(50, ge=1, le=200)):
+    """开仓记录：控制面板选币快照 + 每笔开仓结果（自动/信号/手动/再平衡共用台账）。"""
+    return {"records": get_history(limit)}
 
 
 @router.get("/symbols")
