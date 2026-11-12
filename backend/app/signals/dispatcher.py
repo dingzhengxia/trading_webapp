@@ -6,7 +6,9 @@
 1. store.add            —— 网页信号列表（全量保留，不受任何过滤影响）；
 2. 钉钉推送（独立 task） —— notifier 内部做量能门槛过滤后合并推送，
    不阻塞开仓链路，失败只记日志；
-3. 自动开仓（逐条）     —— auto_trader 过滤链：开关/方向/策略/周期/确认数/
+3. 结果跟踪（可选）     —— tracker 复用同一条过滤链，把「下单」换成「记纸面持仓」，
+   并补算每条信号的前视收益（不碰交易所，纯记录）；
+4. 自动开仓（逐条）     —— auto_trader 过滤链：开关/方向/策略/周期/确认数/
    冷却/持仓约束，全部通过才调用 TradingService 开仓。
 
 后续新增输出渠道（邮件/TG/声音报警）或全局过滤，只需扩展 dispatch_batch。
@@ -32,9 +34,10 @@ class SignalDispatcher:
     """消费 runtime.signal_queue 并按固定顺序分发每批信号。"""
 
     def __init__(self, store: SignalStore, auto_trader: SignalAutoTrader,
-                 queue_obj: Optional["queue.Queue"] = None):
+                 queue_obj: Optional["queue.Queue"] = None, tracker=None):
         self._store = store
         self._auto_trader = auto_trader
+        self._tracker = tracker
         self._queue = queue_obj if queue_obj is not None else runtime.signal_queue
         self._task: Optional[asyncio.Task] = None
 
@@ -79,7 +82,7 @@ class SignalDispatcher:
 
     # -------------------------------------------------------------- 分发
     async def dispatch_batch(self, batch: List[Dict[str, Any]]) -> Dict[str, int]:
-        """按「展示 → 推送 → 开仓」顺序处理一批信号，返回动作统计。"""
+        """按「展示 → 推送 → 跟踪 → 开仓」顺序处理一批信号，返回动作统计。"""
         if not batch:
             return {'total': 0, 'open': 0, 'skip': 0, 'error': 0}
 
@@ -90,7 +93,15 @@ class SignalDispatcher:
         # 2. 钉钉推送：独立 task，量能门槛/合并/重试细节都在 notifier 内
         asyncio.create_task(notifier.push_signal_batch(batch))
 
-        # 3. 自动开仓：逐条过滤链
+        # 3. 结果跟踪：纸面持仓 + 前视收益（仅记录，不下单；失败不影响开仓链）
+        if self._tracker is not None:
+            for record in batch:
+                try:
+                    await self._tracker.on_signal(record)
+                except Exception as e:
+                    logger.error(f"📡 [信号] 跟踪链异常 {record.get('symbol')}: {e}")
+
+        # 4. 自动开仓：逐条过滤链
         stats = {'total': len(batch), 'open': 0, 'skip': 0, 'error': 0}
         for record in batch:
             try:

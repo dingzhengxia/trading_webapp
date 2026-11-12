@@ -162,6 +162,7 @@ export interface SignalRecord {
   direction: SignalDirection
   price: number
   volume_ratio: number | null
+  fwd: Record<string, number> | null
   title: string
   message: string
 }
@@ -197,6 +198,11 @@ export interface SignalConfig {
   signal_ticker_cache_seconds: number
   signal_ohlcv_cache_seconds: number
   signal_dingtalk_enabled: boolean
+  signal_paper_enabled: boolean
+  signal_paper_sl_atr: number
+  signal_paper_tp_r: number
+  signal_paper_max_bars: number
+  signal_forward_bars: number[]
 }
 
 export interface SignalPushStatus {
@@ -207,11 +213,56 @@ export interface SignalPushStatus {
   static_symbols: string[]
 }
 
+export interface PaperPosition {
+  id: string
+  symbol: string
+  timeframe: string
+  strategy: string
+  direction: SignalDirection
+  entry_price: number
+  stop_loss: number
+  take_profit: number
+  max_bars: number
+  opened_at: string
+}
+
+export interface PaperStats {
+  total: number
+  win_rate: number | null
+  avg_pnl_pct: number | null
+  avg_bars: number | null
+  sum_pnl_pct: number | null
+  by_reason: Record<string, number>
+}
+
+export interface ForwardStatRow {
+  timeframe: string
+  strategy: string
+  samples: number
+  [key: string]: string | number | null
+}
+
+export interface SignalTracking {
+  params: {
+    enabled: boolean
+    sl_atr: number
+    tp_r: number
+    max_bars: number
+    value_usd: number
+    forward_bars: number[]
+  }
+  open_positions: PaperPosition[]
+  trades: Array<PaperPosition & { exit_price: number; pnl_pct: number; reason: string; bars_held: number }>
+  paper_stats: PaperStats
+  forward_stats: ForwardStatRow[]
+}
+
 export interface SignalsResponse {
   status: SignalStatus
   signals: SignalRecord[]
   config: Partial<SignalConfig>
   push?: SignalPushStatus
+  tracking?: SignalTracking
 }
 // ------------------------------------------------
 

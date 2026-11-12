@@ -51,6 +51,7 @@ def _prepare_and_send_notification(config, symbol, timeframe, df, signal_info):
 
     price = None
     volume_ratio = None
+    bar_ts = None
     if df is not None:
         static_bases = market_settings.get('static_symbols', [])
         symbol_base = symbol.split('/')[0].split(':')[0]
@@ -89,9 +90,10 @@ def _prepare_and_send_notification(config, symbol, timeframe, df, signal_info):
 
         trend_status, trend_emoji = get_current_trend(df.copy(), timeframe, params)
 
-        # 结构化价格：当前收盘价
+        # 结构化价格：当前收盘价；bar_ts 供结果跟踪对齐 K 线
         try:
             price = float(df.iloc[-1]['close'])
+            bar_ts = int(df.iloc[-1]['timestamp'])
         except (KeyError, IndexError, TypeError, ValueError):
             price = None
 
@@ -116,6 +118,7 @@ def _prepare_and_send_notification(config, symbol, timeframe, df, signal_info):
         title=title,
         message=message,
         dedupe_key=alert_key,
+        bar_ts=bar_ts,
     )
 
     if signal_info.get('cooldown_logic') == 'align_to_period_end':

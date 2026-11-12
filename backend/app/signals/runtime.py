@@ -119,12 +119,14 @@ def calculate_cooldown_time(minutes, align_to_period_end=True) -> datetime:
 # ------------------------------------------------------------------ 信号发射
 def emit_signal(*, symbol: str, full_symbol: str, timeframe: str, strategy: str,
                 strategy_index: int, direction: str, price, title: str, message: str,
-                dedupe_key: str, volume_ratio=None) -> None:
+                dedupe_key: str, volume_ratio=None, bar_ts=None) -> None:
     """构造结构化信号记录并入队（线程安全，可被任意线程调用）。
 
     由 SignalStore 的异步消费 task 消费：落库 + 触发自动开仓过滤链。
     volume_ratio：当前量/动态基准的倍数（按周期进度调整），推送层用它做
     「非静态币放量达标才推」的过滤；无法计算时为 None。
+    bar_ts：产生信号那根 K 线的开盘时间（毫秒）。结果跟踪（前视收益/纸面持仓）
+    需要它来对齐 K 线，缺省时由 tracker 用 created_at 向下取整兜底。
     """
     base = str(symbol).split('/')[0].split(':')[0].upper()
     try:
@@ -144,6 +146,7 @@ def emit_signal(*, symbol: str, full_symbol: str, timeframe: str, strategy: str,
         'direction': str(direction or 'neutral'),
         'price': float(price) if price is not None else None,
         'volume_ratio': ratio_value,
+        'ts': int(bar_ts) if bar_ts is not None else None,
         'title': str(title or ''),
         'message': str(message or ''),
         'dedupe_key': str(dedupe_key),

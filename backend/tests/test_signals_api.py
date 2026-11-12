@@ -62,7 +62,9 @@ def test_get_signals_structure(client, api_key):
     response = client.get("/api/signals", headers={"X-API-KEY": api_key})
     assert response.status_code == 200
     data = response.json()
-    assert set(data) == {"status", "signals", "config", "strategy", "push"}
+    assert set(data) == {"status", "signals", "config", "strategy", "push", "tracking"}
+    assert set(data["tracking"]) == {"params", "open_positions", "trades", "paper_stats", "forward_stats"}
+    assert data["tracking"]["params"]["sl_atr"] > 0
     # 策略参数持久化：来源标记 + 至少含策略表
     assert data["strategy"]["source"] in ("db", "file")
     assert "strategy_params" in data["strategy"]["config"]
@@ -244,3 +246,20 @@ def test_strategy_config_rejects_unknown(client, api_key, tmp_strategy_db):
 def test_strategy_config_requires_api_key(client):
     assert client.post("/api/signals/strategy-config",
                        json={"strategy_params": {"ma_breakout": {"enabled": False}}}).status_code == 403
+
+
+def test_paper_config_bounds(client, api_key):
+    """纸面出场参数有上下限：0 或越界 -> 400。"""
+    assert client.post("/api/signals/config", json={"signal_paper_sl_atr": 0},
+                       headers={"X-API-KEY": api_key}).status_code == 400
+    assert client.post("/api/signals/config", json={"signal_paper_max_bars": 0},
+                       headers={"X-API-KEY": api_key}).status_code == 400
+    ok = client.post("/api/signals/config",
+                     json={"signal_paper_enabled": True, "signal_paper_sl_atr": 1.2,
+                           "signal_paper_tp_r": 2.5, "signal_paper_max_bars": 8},
+                     headers={"X-API-KEY": api_key})
+    assert ok.status_code == 200
+    config = ok.json()["config"]
+    assert config["signal_paper_enabled"] is True
+    assert config["signal_paper_sl_atr"] == 1.2
+    assert config["signal_paper_max_bars"] == 8

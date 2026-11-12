@@ -197,3 +197,8 @@ class SignalConfigUpdate(BaseModel):
     signal_auto_trade_value_usd: Optional[float] = Field(None, gt=0, le=1_000_000)
     signal_dingtalk_enabled: Optional[bool] = None
     signal_push_volume_multiplier: Optional[float] = Field(None, ge=0, le=100)
+    signal_paper_enabled: Optional[bool] = None
+    signal_paper_sl_atr: Optional[float] = Field(None, ge=0.2, le=10)
+    signal_paper_tp_r: Optional[float] = Field(None, ge=0.5, le=10)
+    signal_paper_max_bars: Optional[int] = Field(None, ge=1, le=100)
+    signal_forward_bars: Optional[List[int]] = Field(None, min_length=1, max_length=5)

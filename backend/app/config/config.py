@@ -97,6 +97,13 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     # 推送量能门槛：静态币(signal_scan_static_symbols)实时全推，
     # 其它币要求成交量达到「当前量/动态基准」≥ 该倍数才推送；0 表示不过滤
     'signal_push_volume_multiplier': 2.0,
+    # 纸面跟踪：复用自动开仓过滤链，只记录不下单；出场 = ATR 止损 / R 倍数止盈 / 超时平仓
+    'signal_paper_enabled': False,
+    'signal_paper_sl_atr': 1.5,
+    'signal_paper_tp_r': 2.0,
+    'signal_paper_max_bars': 6,
+    # 信号前视收益的持有期（单位：根 K 线），用于「信号发出后到底赚不赚」的统计
+    'signal_forward_bars': [4, 12],
 
     # 手动交易页持久化预设（选中币种/每行动作与价值/默认价值），随 settings 存入 SQLite
     'manual_trade_preset': {},

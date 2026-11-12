@@ -29,15 +29,20 @@ class SignalAutoTrader:
 
     def __init__(self, settings_loader: Callable[[], Dict[str, Any]],
                  position_provider: Callable[[], Any],
-                 open_callback: Callable[[Dict[str, Any]], Any]):
+                 open_callback: Callable[[Dict[str, Any]], Any],
+                 state_key: str = AUTO_TRADE_STATE_KEY, label: str = '自动开仓'):
         """
         :param settings_loader: 返回 user settings（含 signal_* 键）
         :param position_provider: 异步 callable，返回当前持仓列表（Position 模型）
         :param open_callback: 异步 callable(signal) -> bool，由 TradingService.auto_open_from_signal 实现
+        :param state_key: 冷却状态在 signal_state 表的键（纸面跟踪用独立 key，互不干扰）
+        :param label: 日志前缀（区分真实开仓 / 纸面跟踪）
         """
         self._settings_loader = settings_loader
         self._position_provider = position_provider
         self._open_callback = open_callback
+        self._state_key = state_key
+        self._label = label
         # 近期信号窗口：(ts_seconds, symbol, direction, family)
         self._recent: deque = deque(maxlen=500)
         # 同 symbol 上次自动开仓时间（秒级 monotonic）
@@ -47,7 +52,7 @@ class SignalAutoTrader:
     # -------------------------------------------------------------- 状态持久化
     def _load_state(self) -> None:
         try:
-            raw = database.get_value('signal_state', AUTO_TRADE_STATE_KEY, {}) or {}
+            raw = database.get_value('signal_state', self._state_key, {}) or {}
             last_open = raw.get('last_open') or {}
             if isinstance(last_open, dict):
                 # 存的是 wall-clock 秒，恢复后与新的 monotonic 无可比性时会被视为"很久以前"
@@ -58,7 +63,7 @@ class SignalAutoTrader:
 
     def _save_state(self) -> None:
         try:
-            database.set_value('signal_state', AUTO_TRADE_STATE_KEY,
+            database.set_value('signal_state', self._state_key,
                                {'last_open': {k: v for k, v in self._last_open.items()}})
         except Exception as e:
             logger.warning(f"保存自动开仓冷却状态失败: {e}")
@@ -133,7 +138,7 @@ class SignalAutoTrader:
             return {'action': 'skip', 'reason': f'{symbol} 已有持仓，不叠加'}
 
         # 8. 开仓
-        logger.info(f"⚡ 信号触发自动开仓: {symbol} {direction} "
+        logger.info(f"⚡ 信号触发{self._label}: {symbol} {direction} "
                     f"({strategy}/{family_of(strategy)} @ {timeframe}, 确认 {confirmations} 族)")
         try:
             opened = await self._open_callback(signal)
@@ -154,5 +159,5 @@ class SignalAutoTrader:
         from datetime import datetime, timezone
         # 由 store 更新；auto_trader 不持有 store 引用时静默跳过
         store = getattr(self, '_store', None)
-        if store is not None:
+        if store is not None and self._state_key == AUTO_TRADE_STATE_KEY:
             store.update_auto_status(last_auto_open=datetime.now(timezone.utc).isoformat())

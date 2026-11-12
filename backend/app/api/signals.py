@@ -87,14 +87,17 @@ async def get_signals() -> Dict[str, Any]:
     else:
         status = scanner.status()
     settings = load_settings()
+    tracker = signal_service._get_tracker()
+    signals = tracker.decorate(signal_service.store.recent(200))
     return {
         "status": status,
-        "signals": signal_service.store.recent(200),
+        "signals": signals,
         "config": _signal_config_view(),
         "strategy": {
             "config": config_store.load_signal_config(),
             "source": config_store.config_source(),
         },
+        "tracking": tracker.snapshot(),
         "push": {
             "dingtalk_configured": dingtalk.is_configured(),
             "dingtalk_enabled": bool(settings.get('dingtalk_enabled', False)),

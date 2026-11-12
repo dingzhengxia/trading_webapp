@@ -393,7 +393,183 @@
         </div>
     </PageCard>
 
-    <!-- 卡 3：信号列表 -->
+    <!-- 卡 3：纸面跟踪与结果（只记录不下单，为调参提供反馈闭环） -->
+    <PageCard icon="mdi-chart-timeline-variant" title="纸面跟踪与结果" spaced>
+      <template #badges>
+        <v-chip size="small" variant="tonal" :color="paperEnabled ? 'success' : 'grey'">
+          {{ paperEnabled ? '纸面跟踪中' : '未启用' }}
+        </v-chip>
+        <v-chip v-if="tracking.paper_stats.total > 0" size="small" variant="tonal" color="info">
+          已平仓 {{ tracking.paper_stats.total }} 笔 / 胜率 {{ tracking.paper_stats.win_rate }}%
+        </v-chip>
+      </template>
+
+        <v-alert type="info" variant="tonal" density="compact" class="mb-3 text-caption">
+          纸面跟踪复用自动开仓的过滤链（方向/策略/周期/确认数/冷却/持仓上限），<b>只记录不下单</b>，
+          出场按 ATR 止损 / R 倍数止盈 / 超时平仓模拟。用来在不冒资金风险的前提下，
+          验证「这套信号真的能不能赚」。
+        </v-alert>
+
+        <v-row dense align="center">
+          <v-col cols="12" sm="6" md="3">
+            <v-switch
+              :model-value="paperEnabled"
+              :loading="savingPaperToggle"
+              label="启用纸面跟踪"
+              color="primary"
+              inset
+              hide-details
+              @update:model-value="onTogglePaper"
+            ></v-switch>
+          </v-col>
+          <v-col cols="12" sm="4" md="2">
+            <v-text-field
+              v-model.number="paperForm.slAtr"
+              label="止损 (ATR 倍数)"
+              type="number"
+              min="0.2"
+              max="10"
+              step="0.1"
+              density="compact"
+              variant="outlined"
+              hide-details
+              @update:model-value="paperDirty = true"
+            ></v-text-field>
+          </v-col>
+          <v-col cols="12" sm="4" md="2">
+            <v-text-field
+              v-model.number="paperForm.tpR"
+              label="止盈 (R 倍数)"
+              type="number"
+              min="0.5"
+              max="10"
+              step="0.5"
+              density="compact"
+              variant="outlined"
+              hide-details
+              @update:model-value="paperDirty = true"
+            ></v-text-field>
+          </v-col>
+          <v-col cols="12" sm="4" md="2">
+            <v-text-field
+              v-model.number="paperForm.maxBars"
+              label="最大持有 (根)"
+              type="number"
+              min="1"
+              max="100"
+              density="compact"
+              variant="outlined"
+              hide-details
+              @update:model-value="paperDirty = true"
+            ></v-text-field>
+          </v-col>
+          <v-col cols="12" md="3" class="d-flex justify-end">
+            <v-btn
+              color="primary"
+              variant="tonal"
+              prepend-icon="mdi-content-save"
+              :loading="savingPaperConfig"
+              :disabled="!paperFormValid || savingPaperConfig"
+              @click="savePaperConfig"
+            >
+              保存参数
+            </v-btn>
+          </v-col>
+        </v-row>
+
+        <v-row dense class="mt-3">
+          <v-col cols="12" md="7">
+            <div class="text-subtitle-2 mb-1">纸面持仓（{{ tracking.open_positions.length }}）</div>
+            <v-table v-if="tracking.open_positions.length > 0" density="compact">
+              <thead>
+                <tr>
+                  <th class="text-left">币种</th>
+                  <th class="text-left">方向</th>
+                  <th class="text-left">周期</th>
+                  <th class="text-left">入场</th>
+                  <th class="text-left">止损</th>
+                  <th class="text-left">止盈</th>
+                  <th class="text-left">开仓时间</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="position in tracking.open_positions" :key="position.id">
+                  <td class="font-weight-medium">{{ position.symbol }}</td>
+                  <td>
+                    <v-chip size="x-small" variant="tonal" :color="directionColor(position.direction)">
+                      {{ directionLabel(position.direction) }}
+                    </v-chip>
+                  </td>
+                  <td>{{ position.timeframe }}</td>
+                  <td>${{ formatPrice(position.entry_price) }}</td>
+                  <td class="text-error">${{ formatPrice(position.stop_loss) }}</td>
+                  <td class="text-success">${{ formatPrice(position.take_profit) }}</td>
+                  <td class="text-caption text-grey">{{ formatTime(position.opened_at) }}</td>
+                </tr>
+              </tbody>
+            </v-table>
+            <v-alert v-else type="info" variant="text" density="compact" class="text-caption">
+              暂无纸面持仓。启用后，通过过滤链的信号会在这里模拟建仓。
+            </v-alert>
+          </v-col>
+          <v-col cols="12" md="5">
+            <div class="text-subtitle-2 mb-1">已平仓统计</div>
+            <div v-if="tracking.paper_stats.total > 0" class="d-flex flex-wrap ga-2 mb-2">
+              <v-chip size="small" variant="tonal">样本 {{ tracking.paper_stats.total }}</v-chip>
+              <v-chip size="small" variant="tonal">胜率 {{ tracking.paper_stats.win_rate }}%</v-chip>
+              <v-chip size="small" variant="tonal">
+                均收益 {{ formatPct(tracking.paper_stats.avg_pnl_pct) }}
+              </v-chip>
+              <v-chip size="small" variant="tonal">累计 {{ formatPct(tracking.paper_stats.sum_pnl_pct) }}</v-chip>
+              <v-chip size="small" variant="tonal">均持有 {{ tracking.paper_stats.avg_bars }} 根</v-chip>
+            </div>
+            <div v-if="tracking.trades.length > 0" class="text-caption text-grey">
+              最近：
+              <span v-for="trade in tracking.trades.slice(0, 5)" :key="trade.id" class="mr-2">
+                {{ trade.symbol }}{{ directionLabel(trade.direction) }}
+                <span :class="trade.pnl_pct >= 0 ? 'text-success' : 'text-error'">
+                  {{ formatPct(trade.pnl_pct) }}
+                </span>
+                ({{ exitReasonLabel(trade.reason) }})
+              </span>
+            </div>
+            <div v-else class="text-caption text-grey">还没有平仓记录。</div>
+          </v-col>
+        </v-row>
+
+        <div class="text-subtitle-2 mt-4 mb-1">
+          信号前视收益（按周期 × 策略，扣成本前）
+        </div>
+        <v-table v-if="tracking.forward_stats.length > 0" density="compact">
+          <thead>
+            <tr>
+              <th class="text-left">周期</th>
+              <th class="text-left">策略</th>
+              <th class="text-left">样本</th>
+              <th v-for="bar in tracking.params.forward_bars" :key="bar" class="text-left">
+                T+{{ bar }}
+              </th>
+              <th class="text-left">胜率</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="row in tracking.forward_stats" :key="`${row.timeframe}-${row.strategy}`">
+              <td>{{ row.timeframe }}</td>
+              <td>{{ strategyLabel(row.strategy) }}</td>
+              <td>{{ row.samples }}</td>
+              <td v-for="bar in tracking.params.forward_bars" :key="bar">
+                <span :class="pctClass(row[`h${bar}`])">{{ formatPct(row[`h${bar}`]) }}</span>
+              </td>
+              <td>{{ row.h4_win ?? '—' }}%</td>
+            </tr>
+          </tbody>
+        </v-table>
+        <v-alert v-else type="info" variant="text" density="compact" class="text-caption">
+          还没有前视结果。信号产生后需要再走满 {{ tracking.params.forward_bars.join(' / ') }} 根 K 线才会回填。
+        </v-alert>
+    </PageCard>
+
+    <!-- 卡 4：信号列表 -->
     <PageCard title="信号列表" spaced>
       <template #badges>
         <v-chip size="small" variant="tonal">
@@ -424,6 +600,7 @@
               <th class="text-left">周期</th>
               <th class="text-left">价格</th>
               <th class="text-left">量能</th>
+              <th class="text-left">前视</th>
               <th class="text-left">标题 / 说明</th>
             </tr>
           </thead>
@@ -444,6 +621,7 @@
               <td class="text-no-wrap">{{ signal.timeframe }}</td>
               <td class="text-no-wrap">${{ formatPrice(signal.price) }}</td>
               <td class="text-no-wrap text-caption" :class="volumeClass(signal)">{{ volumeLabel(signal) }}</td>
+              <td class="text-no-wrap text-caption">{{ fwdLabel(signal) }}</td>
               <td class="signal-title">
                 <div class="text-body-2">{{ signal.title }}</div>
                 <div class="text-caption text-grey signal-message">{{ plainMessage(signal.message) }}</div>
@@ -470,6 +648,7 @@ import type {
   SignalRecord,
   SignalsResponse,
   SignalStatus,
+  SignalTracking,
 } from '@/models/types'
 import { getErrorMessage, getErrorStatus } from '@/utils/errors'
 import { formatIsoTime as formatTime } from '@/utils/format'
@@ -551,6 +730,11 @@ const defaultSignalConfig: SignalConfig = {
   signal_ticker_cache_seconds: 30,
   signal_ohlcv_cache_seconds: 300,
   signal_dingtalk_enabled: true,
+  signal_paper_enabled: false,
+  signal_paper_sl_atr: 1.5,
+  signal_paper_tp_r: 2,
+  signal_paper_max_bars: 6,
+  signal_forward_bars: [4, 12],
 }
 
 const DIRECTION_FILTERS = ['all', 'long', 'short', 'neutral'] as const
@@ -580,6 +764,37 @@ const pushStatus = ref<SignalPushStatus>({
 const savingPushConfig = ref(false)
 const pushVolumeInput = ref<number>(2)
 const pushVolumeDirty = ref(false)
+
+// ------------------------------------------------- 纸面跟踪（只记录不下单）
+const emptyTracking = (): SignalTracking => ({
+  params: { enabled: false, sl_atr: 1.5, tp_r: 2, max_bars: 6, value_usd: 100, forward_bars: [4, 12] },
+  open_positions: [],
+  trades: [],
+  paper_stats: {
+    total: 0,
+    win_rate: null,
+    avg_pnl_pct: null,
+    avg_bars: null,
+    sum_pnl_pct: null,
+    by_reason: {},
+  },
+  forward_stats: [],
+})
+const tracking = ref<SignalTracking>(emptyTracking())
+const savingPaperConfig = ref(false)
+const savingPaperToggle = ref(false)
+const paperDirty = ref(false)
+const paperForm = ref({ slAtr: 1.5, tpR: 2, maxBars: 6 })
+const paperEnabled = computed(() => tracking.value.params.enabled)
+const paperFormValid = computed(
+  () =>
+    Number(paperForm.value.slAtr) >= 0.2 &&
+    Number(paperForm.value.slAtr) <= 10 &&
+    Number(paperForm.value.tpR) >= 0.5 &&
+    Number(paperForm.value.tpR) <= 10 &&
+    Number(paperForm.value.maxBars) >= 1 &&
+    Number(paperForm.value.maxBars) <= 100,
+)
 
 // ------------------------------------------------- 扫描范围（静态币 / TopN / 周期）
 const savingScope = ref(false)
@@ -766,6 +981,13 @@ const mergeConfig = (raw: Partial<SignalConfig> | undefined): SignalConfig => {
       fallback.signal_ohlcv_cache_seconds,
     ),
     signal_dingtalk_enabled: source.signal_dingtalk_enabled !== false,
+    signal_paper_enabled: source.signal_paper_enabled === true,
+    signal_paper_sl_atr: toNumber(source.signal_paper_sl_atr, fallback.signal_paper_sl_atr),
+    signal_paper_tp_r: toNumber(source.signal_paper_tp_r, fallback.signal_paper_tp_r),
+    signal_paper_max_bars: toNumber(source.signal_paper_max_bars, fallback.signal_paper_max_bars),
+    signal_forward_bars: Array.isArray(source.signal_forward_bars)
+      ? (source.signal_forward_bars as unknown[]).map((bar) => toNumber(bar, 4))
+      : [...fallback.signal_forward_bars],
   }
 }
 
@@ -793,11 +1015,58 @@ const normalizeSignals = (raw: unknown): SignalRecord[] => {
         typeof record.volume_ratio === 'number' && Number.isFinite(record.volume_ratio)
           ? record.volume_ratio
           : null,
+      fwd:
+        record.fwd !== null && typeof record.fwd === 'object'
+          ? Object.fromEntries(
+              Object.entries(record.fwd as Record<string, unknown>)
+                .map(([key, value]) => [key, Number(value)])
+                .filter(([, value]) => Number.isFinite(value as number)),
+            )
+          : null,
       title: typeof record.title === 'string' ? record.title : '',
       message: typeof record.message === 'string' ? record.message : '',
     })
   }
   return result
+}
+
+const mergeTracking = (raw: unknown): SignalTracking => {
+  const base = emptyTracking()
+  if (raw === null || typeof raw !== 'object') return base
+  const data = raw as Record<string, unknown>
+  const params = (data.params ?? {}) as Record<string, unknown>
+  return {
+    params: {
+      enabled: params.enabled === true,
+      sl_atr: toNumber(params.sl_atr, base.params.sl_atr),
+      tp_r: toNumber(params.tp_r, base.params.tp_r),
+      max_bars: toNumber(params.max_bars, base.params.max_bars),
+      value_usd: toNumber(params.value_usd, base.params.value_usd),
+      forward_bars: Array.isArray(params.forward_bars)
+        ? (params.forward_bars as number[]).map((bar) => toNumber(bar, 4))
+        : base.params.forward_bars,
+    },
+    open_positions: Array.isArray(data.open_positions)
+      ? (data.open_positions as SignalTracking['open_positions'])
+      : [],
+    trades: Array.isArray(data.trades) ? (data.trades as SignalTracking['trades']) : [],
+    paper_stats: {
+      ...base.paper_stats,
+      ...((data.paper_stats ?? {}) as Partial<SignalTracking['paper_stats']>),
+    },
+    forward_stats: Array.isArray(data.forward_stats)
+      ? (data.forward_stats as SignalTracking['forward_stats'])
+      : [],
+  }
+}
+
+const syncPaperForm = (next: SignalTracking): void => {
+  if (paperDirty.value) return
+  paperForm.value = {
+    slAtr: next.params.sl_atr,
+    tpR: next.params.tp_r,
+    maxBars: next.params.max_bars,
+  }
 }
 
 const syncAutoForm = (nextConfig: SignalConfig): void => {
@@ -829,6 +1098,8 @@ const fetchSignals = async (silent: boolean): Promise<void> => {
     config.value = nextConfig
     pushStatus.value = mergePushStatus(data.push)
     if (!pushVolumeDirty.value) pushVolumeInput.value = pushStatus.value.signal_push_volume_multiplier
+    tracking.value = mergeTracking(data.tracking)
+    syncPaperForm(tracking.value)
     syncScopeForm(nextConfig)
     syncAutoForm(nextConfig)
   } catch (error: unknown) {
@@ -869,6 +1140,35 @@ const directionColor = (direction: string): string => {
 const strategyLabel = (strategy: string): string => strategyTitleMap.get(strategy) ?? strategy
 
 // 量能只记录不拦截：倍数照实展示，是否达到推送门槛用颜色区分（静态币始终推送）
+const formatPct = (value: unknown): string => {
+  const num = Number(value)
+  if (!Number.isFinite(num)) return '—'
+  return `${num >= 0 ? '+' : ''}${num.toFixed(2)}%`
+}
+
+const pctClass = (value: unknown): string => {
+  const num = Number(value)
+  if (!Number.isFinite(num)) return 'text-grey'
+  // 用户偏好：红跌绿涨
+  return num >= 0 ? 'text-success' : 'text-error'
+}
+
+const exitReasonLabel = (reason: string): string => {
+  const labels: Record<string, string> = { stop: '止损', target: '止盈', time: '超时' }
+  return labels[reason] ?? reason
+}
+
+const fwdLabel = (signal: SignalRecord): string => {
+  if (!signal.fwd) return '—'
+  const bars = tracking.value.params.forward_bars
+  const parts = bars
+    .map((bar) => (signal.fwd && signal.fwd[String(bar)] !== undefined
+      ? `T+${bar} ${formatPct(signal.fwd[String(bar)])}`
+      : ''))
+    .filter((part) => part.length > 0)
+  return parts.length > 0 ? parts.join(' / ') : '—'
+}
+
 const volumeLabel = (signal: SignalRecord): string =>
   signal.volume_ratio == null ? '—' : `${signal.volume_ratio.toFixed(1)}x`
 
@@ -1003,6 +1303,58 @@ const saveScanScope = async (): Promise<void> => {
     })
   } finally {
     savingScope.value = false
+  }
+}
+
+const onTogglePaper = async (value: unknown): Promise<void> => {
+  const enabled = Boolean(value)
+  if (savingPaperToggle.value || enabled === paperEnabled.value) return
+  savingPaperToggle.value = true
+  const previous = tracking.value.params.enabled
+  tracking.value.params.enabled = enabled
+  try {
+    await api.post('/api/signals/config', { signal_paper_enabled: enabled })
+    snackbarStore.show({
+      message: enabled ? '纸面跟踪已启用（只记录，不下单）。' : '纸面跟踪已停用。',
+      color: 'success',
+    })
+    pushLog('[前端] 纸面跟踪已' + (enabled ? '启用' : '停用') + '。', 'info')
+    await fetchSignals(true)
+  } catch (error: unknown) {
+    tracking.value.params.enabled = previous
+    snackbarStore.show({
+      message: '切换纸面跟踪失败: ' + getErrorMessage(error),
+      color: 'error',
+    })
+  } finally {
+    savingPaperToggle.value = false
+  }
+}
+
+const savePaperConfig = async (): Promise<void> => {
+  if (savingPaperConfig.value || !paperFormValid.value) return
+  savingPaperConfig.value = true
+  const payload = {
+    signal_paper_sl_atr: Number(paperForm.value.slAtr),
+    signal_paper_tp_r: Number(paperForm.value.tpR),
+    signal_paper_max_bars: Number(paperForm.value.maxBars),
+  }
+  try {
+    await api.post('/api/signals/config', payload)
+    paperDirty.value = false
+    snackbarStore.show({ message: '纸面出场参数已保存。', color: 'success' })
+    pushLog(
+      `[前端] 纸面出场参数: 止损 ${payload.signal_paper_sl_atr} ATR / 止盈 ${payload.signal_paper_tp_r}R / 最多 ${payload.signal_paper_max_bars} 根`,
+      'success',
+    )
+    await fetchSignals(true)
+  } catch (error: unknown) {
+    snackbarStore.show({
+      message: '保存纸面出场参数失败: ' + getErrorMessage(error),
+      color: 'error',
+    })
+  } finally {
+    savingPaperConfig.value = false
   }
 }
 

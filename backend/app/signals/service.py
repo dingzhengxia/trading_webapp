@@ -22,11 +22,13 @@ from .runtime import emit_signal  # noqa: F401  供外部统一导入
 from .scanner import SignalScanner
 from .config_store import load_signal_config
 from .signal_store import SignalStore
+from .tracker import OutcomeTracker
 
 store = SignalStore()
 auto_trader: Optional[SignalAutoTrader] = None
 scanner: Optional[SignalScanner] = None
 market_data: Optional[MarketDataService] = None
+tracker: Optional[OutcomeTracker] = None
 
 
 def _build_rest_guardian() -> RestGuardian:
@@ -68,6 +70,17 @@ def _get_auto_trader() -> SignalAutoTrader:
     return auto_trader
 
 
+def _get_tracker() -> OutcomeTracker:
+    global tracker
+    if tracker is None:
+        tracker = OutcomeTracker(
+            settings_loader=load_settings,
+            market_data=_get_market_data(),
+            store=store,
+        )
+    return tracker
+
+
 def _get_scanner() -> SignalScanner:
     global scanner
     if scanner is None:
@@ -101,7 +114,8 @@ _dispatcher: Optional[SignalDispatcher] = None
 def _get_dispatcher() -> SignalDispatcher:
     global _dispatcher
     if _dispatcher is None:
-        _dispatcher = SignalDispatcher(store=store, auto_trader=_get_auto_trader())
+        _dispatcher = SignalDispatcher(store=store, auto_trader=_get_auto_trader(),
+                                       tracker=_get_tracker())
     return _dispatcher
 
 
@@ -119,6 +133,7 @@ async def startup_signals() -> None:
     from . import runtime as _runtime
     _runtime.load_alert_states()
     await start_consumer()
+    _get_tracker().start()
     settings = load_settings()
     store.update_auto_status(auto_trade_enabled=bool(settings.get('signal_auto_trade_enabled', False)))
     if settings.get('signal_scan_enabled', False):
@@ -131,6 +146,8 @@ async def shutdown_signals() -> None:
     """FastAPI lifespan 关闭：停止扫描与消费循环（共享 exchange 由 main 关闭）。"""
     if scanner is not None:
         await scanner.stop()
+    if tracker is not None:
+        await tracker.stop()
     await stop_consumer()
 
 
