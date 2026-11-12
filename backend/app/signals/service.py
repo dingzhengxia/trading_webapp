@@ -13,11 +13,10 @@ from loguru import logger
 from ..config.config import load_settings
 from ..core.exchange_manager import get_shared_exchange
 from ..core.rest_guardian import RestGuardian
-from ..core.tasks import cancel_task
 from ..core.trading_service import trading_service
 from ..logic.exchange_logic_async import fetch_positions_with_pnl_async
-from . import notifier
 from .auto_trader import SignalAutoTrader
+from .dispatcher import SignalDispatcher
 from .market_data import MarketDataService
 from .runtime import emit_signal  # noqa: F401  供外部统一导入
 from .scanner import SignalScanner, load_signal_config
@@ -94,68 +93,23 @@ async def _open_from_signal(signal: Dict[str, Any]) -> bool:
 
 
 # ------------------------------------------------------------------ 消费循环
-_consumer_task: Optional[asyncio.Task] = None
+# 信号分发（展示/推送/开仓）统一由 SignalDispatcher 编排，service 只负责装配与生命周期。
+_dispatcher: Optional[SignalDispatcher] = None
 
 
-async def _consume_loop() -> None:
-    """SignalStore 的异步消费 task：runtime.emit_signal 队列 -> 落库 + 推送 + 自动开仓。
-
-    同一批（同一次队列排空）的信号合并成一条钉钉消息推送，避免刷屏与机器人限流；
-    推送用独立 task 执行，不阻塞自动开仓。
-    """
-    import queue as _queue
-
-    from . import runtime as _runtime
-
-    while True:
-        try:
-            record = await asyncio.to_thread(runtime_queue_get)
-        except _queue.Empty:
-            await asyncio.sleep(0.2)
-            continue
-        except asyncio.CancelledError:
-            raise
-
-        # 把队列里已排队的信号一并取出，形成一次合并推送
-        batch = [record]
-        while len(batch) < notifier.MAX_BATCH:
-            try:
-                batch.append(_runtime.signal_queue.get_nowait())
-            except _queue.Empty:
-                break
-
-        for rec in batch:
-            store.add(rec)
-
-        # 通知独立执行：钉钉超时/失败不影响开仓链路
-        asyncio.create_task(notifier.push_signal_batch(batch))
-
-        for rec in batch:
-            try:
-                result = await _get_auto_trader().on_signal(rec)
-                if result.get('action') != 'skip':
-                    logger.info(f"信号 {rec.get('symbol')} {rec.get('strategy')} -> "
-                                f"{result.get('action')}: {result.get('reason')}")
-            except Exception as e:
-                logger.error(f"处理信号时异常: {e}")
-
-
-def runtime_queue_get(timeout: float = 0.5):
-    """在线程中带超时地阻塞取队列（供 asyncio.to_thread 调用）。"""
-    from . import runtime as _runtime
-    return _runtime.signal_queue.get(True, timeout)
+def _get_dispatcher() -> SignalDispatcher:
+    global _dispatcher
+    if _dispatcher is None:
+        _dispatcher = SignalDispatcher(store=store, auto_trader=_get_auto_trader())
+    return _dispatcher
 
 
 async def start_consumer() -> None:
-    global _consumer_task
-    if _consumer_task is None or _consumer_task.done():
-        _consumer_task = asyncio.create_task(_consume_loop())
+    _get_dispatcher().start()
 
 
 async def stop_consumer() -> None:
-    global _consumer_task
-    task, _consumer_task = _consumer_task, None
-    await cancel_task(task)
+    await _get_dispatcher().stop()
 
 
 # ------------------------------------------------------------------ 生命周期

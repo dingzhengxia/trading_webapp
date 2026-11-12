@@ -1,13 +1,13 @@
 <!-- frontend/src/views/SignalsView.vue (信号监控) -->
 <template>
   <div>
-    <!-- 状态卡 -->
+    <!-- 卡 1：信号扫描 -->
     <v-row>
       <v-col cols="12">
         <v-card>
           <v-card-title class="text-h6 d-flex align-center flex-wrap ga-2">
             <v-icon start>mdi-radar</v-icon>
-            <span>信号监控</span>
+            <span>信号扫描</span>
             <v-spacer></v-spacer>
             <v-chip size="small" variant="tonal" :color="status.running ? 'warning' : 'success'">
               {{ status.running ? '扫描中' : '空闲' }}
@@ -30,19 +30,7 @@
                   @update:model-value="onToggleScan"
                 ></v-switch>
               </v-col>
-              <v-col cols="12" sm="6" md="3">
-                <v-switch
-                  :model-value="pushStatus.signal_dingtalk_enabled"
-                  :loading="savingDingtalkPush"
-                  :disabled="!pushStatus.dingtalk_configured || !pushStatus.dingtalk_enabled"
-                  label="币种钉钉推送"
-                  color="primary"
-                  inset
-                  hide-details
-                  @update:model-value="onToggleDingtalkPush"
-                ></v-switch>
-              </v-col>
-              <v-col cols="12" md="6">
+              <v-col cols="12" md="9">
                 <div class="d-flex flex-wrap ga-2 align-center">
                   <v-chip size="small" variant="tonal" prepend-icon="mdi-clock-outline">
                     上次扫描: {{ formatTime(status.last_scan_at) }}
@@ -118,25 +106,50 @@
       </v-col>
     </v-row>
 
-    <!-- 钉钉推送设置卡 -->
+    <!-- 卡 2：推送与开仓（统一编排：先推送后开仓） -->
     <v-row>
       <v-col cols="12">
         <v-card class="mt-2">
           <v-card-title class="text-h6 d-flex align-center flex-wrap ga-2">
             <v-icon start>mdi-bell-ring-outline</v-icon>
-            <span>钉钉推送设置</span>
+            <span>推送与开仓</span>
             <v-spacer></v-spacer>
             <v-chip
               size="small"
               variant="tonal"
-              :color="pushStatus.dingtalk_configured ? 'success' : 'warning'"
+              :color="autoTradeEnabled ? 'success' : 'grey'"
             >
-              {{ pushStatus.dingtalk_configured ? 'Webhook 已配置' : '未配置 DINGTALK_WEBHOOK_URL' }}
+              {{ autoTradeEnabled ? '自动开仓已启用' : '自动开仓已停用' }}
             </v-chip>
           </v-card-title>
           <v-divider></v-divider>
           <v-card-text>
+            <!-- A. 钉钉推送 -->
+            <div class="d-flex align-center flex-wrap ga-2 mb-3">
+              <v-icon size="18" color="primary">mdi-bell-ring-outline</v-icon>
+              <span class="text-subtitle-1 font-weight-medium">钉钉推送</span>
+              <v-chip
+                size="x-small"
+                variant="tonal"
+                :color="pushStatus.dingtalk_configured ? 'success' : 'warning'"
+              >
+                {{ pushStatus.dingtalk_configured ? 'Webhook 已配置' : '未配置 DINGTALK_WEBHOOK_URL' }}
+              </v-chip>
+            </div>
+
             <v-row dense align="center">
+              <v-col cols="12" sm="6" md="3">
+                <v-switch
+                  :model-value="pushStatus.signal_dingtalk_enabled"
+                  :loading="savingDingtalkPush"
+                  :disabled="!pushStatus.dingtalk_configured || !pushStatus.dingtalk_enabled"
+                  label="币种信号推送"
+                  color="primary"
+                  inset
+                  hide-details
+                  @update:model-value="onToggleDingtalkPush"
+                ></v-switch>
+              </v-col>
               <v-col cols="12" sm="6" md="3">
                 <v-text-field
                   v-model.number="pushVolumeInput"
@@ -150,12 +163,6 @@
                   @update:model-value="pushVolumeDirty = true"
                 ></v-text-field>
               </v-col>
-              <v-col cols="12" md="7">
-                <div class="text-caption text-grey">
-                  静态币（{{ pushStatus.static_symbols.join(' / ') || '无' }}）的信号始终实时推送；
-                  其它币种需放量达标才推送。所有信号仍会进入下方列表与自动开仓链路，此门槛只作用于钉钉推送。
-                </div>
-              </v-col>
               <v-col cols="12" sm="6" md="2" class="d-flex justify-end">
                 <v-btn
                   color="primary"
@@ -167,36 +174,29 @@
                   保存
                 </v-btn>
               </v-col>
+              <v-col cols="12" md="4">
+                <div class="text-caption text-grey">
+                  静态币（{{ pushStatus.static_symbols.join(' / ') || '无' }}）始终实时推送；
+                  其它币种需放量达标。此门槛只作用于推送，不影响信号列表与自动开仓。
+                </div>
+              </v-col>
             </v-row>
-          </v-card-text>
-        </v-card>
-      </v-col>
-    </v-row>
 
-    <!-- 自动开仓配置卡 -->
-    <v-row>
-      <v-col cols="12">
-        <v-card class="mt-2">
-          <v-card-title class="text-h6 d-flex align-center flex-wrap ga-2">
-            <v-icon start>mdi-robot</v-icon>
-            <span>信号自动开仓</span>
-            <v-spacer></v-spacer>
-            <v-chip
-              size="small"
-              variant="tonal"
-              :color="autoTradeEnabled ? 'success' : 'grey'"
-            >
-              {{ autoTradeEnabled ? '自动开仓已启用' : '自动开仓已停用' }}
-            </v-chip>
-          </v-card-title>
-          <v-divider></v-divider>
-          <v-card-text>
+            <v-divider class="my-4"></v-divider>
+
+            <!-- B. 自动开仓 -->
+            <div class="d-flex align-center flex-wrap ga-2 mb-3">
+              <v-icon size="18" color="primary">mdi-robot</v-icon>
+              <span class="text-subtitle-1 font-weight-medium">信号自动开仓</span>
+              <span class="text-caption text-grey">最近自动开仓: {{ lastAutoOpenText }}</span>
+            </div>
+
             <v-alert type="warning" variant="tonal" density="compact" class="mb-4 text-caption">
               <div>· 信号为技术指标信号，不构成收益保证；自动开仓使用限价 post-only 单。</div>
               <div>· 扫描与自动开仓默认关闭，开启后才会请求交易所行情并可能自动开仓（开仓后按现有 SL/TP 设置挂单）。</div>
             </v-alert>
 
-            <v-row dense align="center">
+            <v-row dense align="center" class="mb-1">
               <v-col cols="12" sm="6" md="3">
                 <v-switch
                   :model-value="autoTradeEnabled"
@@ -208,12 +208,9 @@
                   @update:model-value="onToggleAutoTrade"
                 ></v-switch>
               </v-col>
-              <v-col cols="12" md="9" class="text-caption text-grey d-flex align-center">
-                最近自动开仓: {{ lastAutoOpenText }}
-              </v-col>
             </v-row>
 
-            <v-row dense class="mt-2">
+            <v-row dense>
               <v-col cols="12" md="6">
                 <SmartSelect
                   v-model="autoForm.directions"
@@ -381,8 +378,8 @@
               </thead>
               <tbody>
                 <tr v-for="signal in filteredSignals" :key="signal.id">
-                  <td class="text-caption">{{ formatTime(signal.created_at) }}</td>
-                  <td class="font-weight-medium">{{ signal.symbol }}</td>
+                  <td class="text-caption text-no-wrap">{{ formatTime(signal.created_at) }}</td>
+                  <td class="font-weight-medium text-no-wrap">{{ signal.symbol }}</td>
                   <td>
                     <v-chip
                       size="small"
@@ -392,12 +389,12 @@
                       {{ directionLabel(signal.direction) }}
                     </v-chip>
                   </td>
-                  <td>{{ strategyLabel(signal.strategy) }}</td>
-                  <td>{{ signal.timeframe }}</td>
-                  <td>${{ formatPrice(signal.price) }}</td>
+                  <td class="text-no-wrap">{{ strategyLabel(signal.strategy) }}</td>
+                  <td class="text-no-wrap">{{ signal.timeframe }}</td>
+                  <td class="text-no-wrap">${{ formatPrice(signal.price) }}</td>
                   <td class="signal-title">
                     <div class="text-body-2">{{ signal.title }}</div>
-                    <div class="text-caption text-grey">{{ signal.message }}</div>
+                    <div class="text-caption text-grey signal-message">{{ plainMessage(signal.message) }}</div>
                   </td>
                 </tr>
               </tbody>
@@ -793,12 +790,23 @@ const directionLabel = (direction: string): string => {
 }
 
 const directionColor = (direction: string): string => {
-  if (direction === 'long') return 'success'
-  if (direction === 'short') return 'error'
+  // 中国市场习惯：红涨绿跌
+  if (direction === 'long') return 'red'
+  if (direction === 'short') return 'green'
   return 'grey'
 }
 
 const strategyLabel = (strategy: string): string => strategyTitleMap.get(strategy) ?? strategy
+
+const plainMessage = (value: string): string =>
+  value
+    .replace(/^#+\s*/gm, '')
+    .replace(/\*\*(.*?)\*\*/g, '$1')
+    .replace(/`([^`]*)`/g, '$1')
+    .replace(/^>\s*/gm, '')
+    .replace(/^---+$/gm, '')
+    .replace(/\n{2,}/g, '\n')
+    .trim()
 
 const isDirectionFilter = (value: unknown): value is DirectionFilter =>
   typeof value === 'string' && (DIRECTION_FILTERS as readonly string[]).includes(value)
@@ -1056,5 +1064,12 @@ onUnmounted(() => {
 .signal-title {
   max-width: 420px;
   word-break: break-word;
+}
+.signal-message {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  white-space: pre-line;
 }
 </style>
