@@ -24,10 +24,10 @@ MAX_ITEM_CHARS = 1200   # 单条信号正文上限（超出截断，保留整体
 
 DEFAULT_PUSH_VOLUME_MULTIPLIER = 2.0  # 非静态币推送所需的成交量倍数默认值
 
-# 中国市场习惯：红涨绿跌 -> 做多红、做空绿
+# 用户偏好：红跌绿涨 -> 做多绿、做空红
 _DIRECTION_LABEL = {
-    'long': '🔴 做多',
-    'short': '🟢 做空',
+    'long': '🟢 做多',
+    'short': '🔴 做空',
     'neutral': '⚪ 中性',
 }
 

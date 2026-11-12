@@ -27,7 +27,7 @@ def test_format_single_keeps_original_title():
     title, text = notifier.format_signal_batch([_rec()])
     assert title == '🚀 EMA 放量金叉: BTC/USDT:USDT (1h)'
     assert '### 🔔 币种信号 · 1 条' in text
-    assert '🔴 做多' in text
+    assert '🟢 做多' in text
     assert 'ema_cross' in text
     assert '43,210.50' in text
 
@@ -40,7 +40,7 @@ def test_format_batch_merges_into_one_message():
     ])
     assert title == '🔔 币种信号 × 2'
     assert text.count('---') == 1
-    assert '🟢 做空' in text
+    assert '🔴 做空' in text
     assert '0.5234' in text
 
 

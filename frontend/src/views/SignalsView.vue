@@ -790,9 +790,9 @@ const directionLabel = (direction: string): string => {
 }
 
 const directionColor = (direction: string): string => {
-  // 中国市场习惯：红涨绿跌
-  if (direction === 'long') return 'red'
-  if (direction === 'short') return 'green'
+  // 用户偏好：红跌绿涨（做多绿、做空红）
+  if (direction === 'long') return 'green'
+  if (direction === 'short') return 'red'
   return 'grey'
 }
 
