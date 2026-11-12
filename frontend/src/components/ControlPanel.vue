@@ -19,7 +19,7 @@
         保存
       </v-btn>
     </v-card-title>
-    <v-tabs v-model="modelValue" bg-color="primary">
+    <v-tabs v-model="modelValue" class="tabs-quiet">
       <v-tab value="general">通用开仓设置</v-tab>
       <v-tab value="rebalance">智能再平衡</v-tab>
     </v-tabs>
@@ -442,12 +442,12 @@ const shortListItems = computed(() =>
 
 const longOutsidePool = computed(() =>
   (settingsStore.settings?.long_coin_list ?? []).filter(
-    (coin) => !settingsStore.availableLongCoins.includes(coin),
+    (coin) => !(settingsStore.availableLongCoins ?? []).includes(coin),
   ),
 )
 const shortOutsidePool = computed(() =>
   (settingsStore.settings?.short_coin_list ?? []).filter(
-    (coin) => !settingsStore.availableShortCoins.includes(coin),
+    (coin) => !(settingsStore.availableShortCoins ?? []).includes(coin),
   ),
 )
 

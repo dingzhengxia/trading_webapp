@@ -63,7 +63,7 @@
                 :icon="isSelected(opt.value) ? 'mdi-check-circle' : 'mdi-circle-outline'"
               ></v-icon>
             </div>
-            <div v-if="filteredItems.length === 0" class="pa-6 text-center text-caption text-grey">
+            <div v-if="filteredItems.length === 0" class="pa-6 text-center text-caption text-medium-emphasis">
               没有匹配的选项
             </div>
           </div>

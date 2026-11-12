@@ -8,7 +8,7 @@
       <v-card-text>
         <!-- 核心修改：新增显示预计总仓位价值的区域 -->
         <div class="text-center mb-6">
-          <div class="text-caption text-grey">预计空头总价值</div>
+          <div class="text-caption text-medium-emphasis">预计空头总价值</div>
           <div class="text-h4 font-weight-bold text-amber-accent-3 my-1">
             ${{
               targetShortValue.toLocaleString('en-US', {

@@ -123,7 +123,7 @@
               </v-col>
             </v-row>
 
-            <div class="d-flex flex-wrap ga-2 mt-3 text-caption text-grey-darken-1">
+            <div class="d-flex flex-wrap ga-2 mt-3 text-caption text-medium-emphasis">
               <span>上次：{{ formatTime(report.last_run) }}</span>
               <span>·</span>
               <span>下次：{{ report.enabled ? formatTime(report.next_run) : '未启用' }}</span>
@@ -181,7 +181,7 @@
       <v-divider></v-divider>
       <v-card-text>
         <template v-if="currentLatest">
-          <div class="text-caption text-grey-darken-1 mb-2">
+          <div class="text-caption text-medium-emphasis mb-2">
             {{ currentLatest.title }} · 生成于 {{ formatTime(currentLatest.generated_at) }}
           </div>
           <pre class="report-body">{{ currentLatest.markdown }}</pre>

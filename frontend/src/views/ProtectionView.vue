@@ -397,13 +397,10 @@
             <tr v-for="row in status.positions" :key="`${row.symbol}-${row.side}`">
               <td class="font-weight-medium">{{ row.symbol }}</td>
               <td>
-                <v-chip
-                  size="x-small"
-                  variant="tonal"
-                  :color="row.side === 'long' ? 'success' : 'error'"
-                >
-                  {{ row.side === 'long' ? '多' : '空' }}
-                </v-chip>
+                <span class="dir-badge" :class="`dir-badge--${directionTone(row.side).key}`">
+                  <v-icon>{{ directionTone(row.side).icon }}</v-icon
+                  >{{ directionTone(row.side).label }}
+                </span>
               </td>
               <td class="text-right">{{ formatNumber(row.contracts, 4) }}</td>
               <td class="text-right">{{ formatNumber(row.entry_price) }}</td>
@@ -411,7 +408,7 @@
               <td class="text-right">
                 <span v-if="row.protected_stop">{{ formatNumber(row.protected_stop) }}</span>
                 <span v-else-if="row.stop_price">{{ formatNumber(row.stop_price) }}</span>
-                <span v-else class="text-grey">—</span>
+                <span v-else class="text-medium-emphasis">—</span>
               </td>
               <td class="text-right text-caption">
                 {{ formatNumber(row.tp1_price) }} / {{ formatNumber(row.tp2_price) }} /
@@ -421,11 +418,11 @@
                 <span v-if="row.tier_levels?.length">
                   {{ row.tier_levels.map((v) => formatNumber(v)).join(' / ') }}
                 </span>
-                <span v-else class="text-grey">—</span>
+                <span v-else class="text-medium-emphasis">—</span>
               </td>
               <td v-if="isV2" class="text-right text-caption">
                 <span v-if="row.disaster_stop">{{ formatNumber(row.disaster_stop) }}</span>
-                <span v-else class="text-grey">—</span>
+                <span v-else class="text-medium-emphasis">—</span>
               </td>
               <td>
                 <div class="d-flex flex-wrap ga-1">
@@ -438,16 +435,19 @@
                   <v-chip v-if="row.t4_done" size="x-small" variant="tonal" color="error">T4</v-chip>
                   <span
                     v-if="!hasTriggered(row)"
-                    class="text-caption text-grey"
+                    class="text-caption text-medium-emphasis"
                   >等待触发</span>
                 </div>
               </td>
             </tr>
           </tbody>
         </v-table>
-        <div v-else class="text-caption text-grey">
-          当前没有持仓，引擎处于待机巡检状态。
-        </div>
+        <EmptyState
+          v-else
+          icon="mdi-shield-outline"
+          title="当前没有持仓"
+          description="引擎处于待机巡检状态；有持仓后这里会显示每个仓位已挂的保护线与减仓进度。"
+        />
     </PageCard>
 
     <!-- v2 动作轨迹：什么时候、因为哪条线、减了多少 -->
@@ -457,7 +457,7 @@
           第 {{ status.v2?.cycle_count ?? 0 }} 轮
         </v-chip>
       </template>
-      <div v-if="(status.v2?.recent_actions?.length ?? 0) === 0" class="text-caption text-grey">
+      <div v-if="(status.v2?.recent_actions?.length ?? 0) === 0" class="text-caption text-medium-emphasis">
         最近没有触发减仓/止盈，引擎只在上移止损时保持安静。
       </div>
       <v-list v-else density="compact" lines="one">
@@ -490,6 +490,8 @@ import { getErrorMessage } from '@/utils/errors'
 import { formatNumberOrDash as formatNumber } from '@/utils/format'
 import SmartSelect from '@/components/SmartSelect.vue'
 import PageCard from '@/components/PageCard.vue'
+import EmptyState from '@/components/EmptyState.vue'
+import { directionTone } from '@/utils/tone'
 import type { ProtectionConfig, ProtectionPositionRow, ProtectionStatus } from '@/models/types'
 
 const snackbarStore = useSnackbarStore()

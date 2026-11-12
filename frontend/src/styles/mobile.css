@@ -3,6 +3,9 @@
  * 1) 弹层菜单里的选项加大到 52px，手指不用精准点；
  * 2) iOS Safari 对字号 <16px 的输入框会自动放大页面，统一提到 16px；
  * 3) 去掉触摸时整块变灰的高亮。
+ *
+ * 注：底部导航的规则已删除 —— 导航早已改成顶部抽屉（见 App.vue），
+ * 那些 .v-bottom-navigation 选择器匹配不到任何元素。
  */
 @media (max-width: 600px) {
   .v-overlay-container .v-list-item {
@@ -27,20 +30,6 @@
     -webkit-tap-highlight-color: transparent;
   }
 
-  /* 底部导航：7 个入口在窄屏上禁止换行、压缩最小宽度 */
-  .v-bottom-navigation .v-btn {
-    min-width: 0;
-    flex: 1 1 0;
-    padding: 0 2px;
-  }
-  .v-bottom-navigation .v-btn__content {
-    font-size: 10px;
-    line-height: 1.2;
-  }
-  .v-bottom-navigation .v-btn__content span {
-    white-space: nowrap;
-  }
-
   /* 数据表格：收紧单元格内边距，减少横向溢出 */
   .v-data-table .v-data-table__th,
   .v-data-table .v-data-table__td {
@@ -51,5 +40,10 @@
   /* 应用栏状态 chip 不再挤占标题空间 */
   .v-app-bar .v-toolbar-title {
     min-width: 0;
+  }
+
+  /* 悬浮底栏在手机上更高一点，避开 iOS 底部安全区 */
+  :root {
+    --dock-h: 96px;
   }
 }

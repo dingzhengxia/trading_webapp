@@ -1,24 +1,17 @@
-<!-- frontend/src/components/ProgressBar.vue (最终优化版) -->
+<!-- frontend/src/components/ProgressBar.vue -->
+<!--
+  全局任务进度条（悬浮 HUD）。
+  刻意固定为深色：它浮在任意主题的内容之上，需要跨主题保持同样的可读性，
+  因此不使用主题色当底色（浅色主题下会变成白底白字）。
+-->
 <template>
-  <v-footer
-    v-if="uiStore.progress.show"
-    app
-    class="pa-0"
-    style="z-index: 1008; border-top: 1px solid rgba(255, 255, 255, 0.12)"
-  >
-    <v-card
-      flat
-      tile
-      class="d-flex align-center px-2 px-sm-4 w-100"
-      :color="cardColor"
-      height="48px"
-    >
+  <v-footer v-if="uiStore.progress.show" app class="pa-0 progress-dock" style="z-index: 1008">
+    <div class="progress-card d-flex align-center px-2 px-sm-4 w-100">
       <!-- 左侧任务名 -->
-      <span class="text-caption font-weight-bold flex-shrink-0 mr-4 d-none d-md-flex">
+      <span class="hud-title flex-shrink-0 mr-4 d-none d-md-flex">
         {{ uiStore.progress.task_name }}
       </span>
 
-      <!-- 核心修改：将统计数字放在 v-progress-linear 的插槽中 -->
       <v-progress-linear
         :model-value="progressPercentage"
         :color="progressColor"
@@ -26,45 +19,38 @@
         height="25"
         rounded
         :striped="!uiStore.isStopping"
-        stream
-        class="flex-grow-1 font-weight-bold"
+        bg-color="rgba(255,255,255,0.10)"
+        class="flex-grow-1"
       >
-        <template v-slot:default>
-          <div class="d-flex justify-space-between align-center w-100 px-2 text-white text-caption">
-            <!-- 左侧：任务名 (手机端) -->
+        <template #default>
+          <div class="d-flex justify-space-between align-center w-100 px-2 hud-readout">
             <span class="d-md-none">{{ uiStore.progress.task_name }}</span>
             <v-spacer class="d-md-none"></v-spacer>
 
-            <!-- 中间：进度百分比 -->
-            <span v-if="!uiStore.isStopping" class="mx-2"
-              >{{ Math.ceil(progressPercentage) }}%</span
-            >
-            <span v-else class="mx-2">正在停止...</span>
+            <span v-if="!uiStore.isStopping" class="mx-2 num">
+              {{ Math.ceil(progressPercentage) }}%
+            </span>
+            <span v-else class="mx-2">正在停止…</span>
 
-            <!-- 右侧：成功/失败/总数 统计 -->
             <v-spacer></v-spacer>
-            <div class="d-flex align-center">
-              <v-icon size="small" color="light-green-accent-3" class="mr-1"
-                >mdi-check-circle</v-icon
-              >
-              <span>{{ uiStore.progress.success_count }}</span>
+            <div class="d-flex align-center ga-1">
+              <v-icon size="small" color="success">mdi-check-circle</v-icon>
+              <span class="num">{{ uiStore.progress.success_count }}</span>
               <span class="mx-1">/</span>
               <v-icon
                 size="small"
-                :color="uiStore.progress.failed_count > 0 ? 'red-accent-2' : 'grey-lighten-1'"
-                class="mr-1"
+                :color="uiStore.progress.failed_count > 0 ? 'error' : 'grey'"
                 >mdi-close-circle</v-icon
               >
-              <span>{{ uiStore.progress.failed_count }}</span>
+              <span class="num">{{ uiStore.progress.failed_count }}</span>
               <span class="mx-1">/</span>
-              <v-icon size="small" color="grey-lighten-1" class="mr-1">mdi-gauge-full</v-icon>
-              <span>{{ uiStore.progress.total }}</span>
+              <v-icon size="small" color="grey">mdi-gauge-full</v-icon>
+              <span class="num">{{ uiStore.progress.total }}</span>
             </div>
           </div>
         </template>
       </v-progress-linear>
 
-      <!-- 停止按钮 -->
       <v-btn
         color="white"
         variant="text"
@@ -74,9 +60,9 @@
         :loading="uiStore.isStopping"
         class="flex-shrink-0 ml-2"
         icon="mdi-stop-circle-outline"
-      >
-      </v-btn>
-    </v-card>
+        aria-label="停止当前任务"
+      />
+    </div>
   </v-footer>
 </template>
 
@@ -106,17 +92,32 @@ const stopTrading = () => {
   })
 }
 
-const cardColor = computed(() => {
-  if (uiStore.isStopping) return 'red-darken-3'
-  const hasErrors = uiStore.progress.failed_count > 0
-  if (uiStore.progress.is_final) {
-    return hasErrors ? 'red-darken-3' : 'green-darken-3'
-  }
-  return hasErrors ? 'red-darken-3' : 'blue-grey-darken-3'
-})
-
+// 状态只体现在进度条填充色上，底色保持固定的深色 HUD
 const progressColor = computed(() => {
-  if (uiStore.isStopping) return 'white'
-  return uiStore.progress.failed_count > 0 ? 'red-lighten-2' : 'light-blue-accent-3'
+  if (uiStore.isStopping) return 'warning'
+  if (uiStore.progress.failed_count > 0) return 'error'
+  if (uiStore.progress.is_final) return 'success'
+  return 'primary'
 })
 </script>
+
+<style scoped>
+.progress-card {
+  height: 48px;
+  background: #161a20;
+  color: #e8ecf2;
+}
+.hud-title {
+  font-size: 12px;
+  font-weight: 500;
+  color: #e8ecf2;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.hud-readout {
+  font-size: 12px;
+  color: #ffffff;
+}
+</style>

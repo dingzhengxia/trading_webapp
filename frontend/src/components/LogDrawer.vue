@@ -45,7 +45,7 @@
       <template v-slot:default="{ item, index }">
         <v-list-item :key="index" class="py-1 px-2">
           <div class="log-entry" :class="logLevelColor(toLogEntry(item).level)">
-            <span class="log-timestamp text-grey">[{{ toLogEntry(item).timestamp }}]</span>
+            <span class="log-timestamp text-medium-emphasis">[{{ toLogEntry(item).timestamp }}]</span>
             <span class="log-message">{{ toLogEntry(item).message }}</span>
           </div>
         </v-list-item>

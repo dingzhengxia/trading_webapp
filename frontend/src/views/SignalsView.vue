@@ -1,731 +1,198 @@
 <!-- frontend/src/views/SignalsView.vue (信号监控) -->
+<!--
+  结构调整：原来 4 张卡纵向堆叠，首屏是 8 个同权重 chip + 一屏设置表单，
+  真正的「信号列表」排在第 4 张卡、首屏看不到。
+  现在改成：KPI 指标行 + Tab（信号列表 / 扫描范围 / 推送与开仓 / 出场与统计），
+  按「读」和「改」切分——用户 90% 的时间是在读信号，10% 才在调参。
+-->
 <template>
   <div>
-    <!-- 卡 1：信号扫描 -->
-    <PageCard icon="mdi-radar" title="信号扫描" :error="status.last_error">
-      <template #badges>
-        <v-chip size="small" variant="tonal" :color="status.running ? 'warning' : 'success'">
-          {{ status.running ? '扫描中' : '空闲' }}
-        </v-chip>
-        <v-chip size="small" variant="tonal" :color="status.enabled ? 'success' : 'grey'">
-          {{ status.enabled ? '扫描已启用' : '扫描已停用' }}
-        </v-chip>
-      </template>
+    <!-- 指标行：一眼看到「有多少信号 / 有没有出错 / 自动开仓开着没有」 -->
+    <v-row dense>
+      <v-col cols="6" sm="3">
+        <MetricCard
+          label="累计信号"
+          :value="status.emitted_count"
+          :hint="`已扫描 ${status.scanned_symbols} 个币种`"
+          icon="mdi-radar"
+        />
+      </v-col>
+      <v-col cols="6" sm="3">
+        <MetricCard
+          label="错误数"
+          :value="status.error_count"
+          :hint="status.last_error ? '存在最近错误，见下方提示' : '无错误'"
+          icon="mdi-alert-circle-outline"
+          :tone="status.error_count > 0 ? 'down' : 'neutral'"
+          :warning="status.error_count > 0"
+        />
+      </v-col>
+      <v-col cols="6" sm="3">
+        <MetricCard
+          label="纸面胜率"
+          :value="winRateText"
+          :hint="`样本 ${tracking.paper_stats.total} 笔`"
+          icon="mdi-flask-outline"
+          :tone="winRateTone"
+        />
+      </v-col>
+      <v-col cols="6" sm="3">
+        <MetricCard
+          label="自动开仓"
+          :value="config.signal_auto_trade_enabled ? '已启用' : '已停用'"
+          :hint="`最近：${lastAutoOpenText}`"
+          icon="mdi-robot"
+        />
+      </v-col>
+    </v-row>
 
-      <v-row dense align="center">
-        <v-col cols="12" sm="6" md="3">
-          <v-switch
-            :model-value="status.enabled"
-            :loading="savingScan"
-            label="启用信号扫描"
-            color="primary"
-            inset
-            hide-details
-            @update:model-value="onToggleScan"
-          ></v-switch>
-        </v-col>
-        <v-col cols="12" md="9">
-          <div class="d-flex flex-wrap ga-2 align-center">
-            <v-chip size="small" variant="tonal" prepend-icon="mdi-clock-outline">
-              上次扫描: {{ formatTime(status.last_scan_at) }}
-            </v-chip>
-            <v-chip size="small" variant="tonal" prepend-icon="mdi-timer-outline">
-              下次扫描: {{ formatTime(status.next_scan_at) }}
-            </v-chip>
-            <v-chip size="small" variant="tonal" prepend-icon="mdi-format-list-bulleted">
-              已扫描币种: {{ status.scanned_symbols }}
-            </v-chip>
-            <v-chip size="small" variant="tonal" prepend-icon="mdi-signal">
-              累计信号: {{ status.emitted_count }}
-            </v-chip>
-            <v-chip
-              size="small"
-              variant="tonal"
-              prepend-icon="mdi-robot"
-              :color="status.auto_trade_enabled ? 'success' : 'grey'"
-            >
-              自动开仓: {{ status.auto_trade_enabled ? '已启用' : '已停用' }}
-            </v-chip>
-            <v-chip
-              size="small"
-              variant="tonal"
-              :color="status.error_count > 0 ? 'error' : undefined"
-              prepend-icon="mdi-alert-circle-outline"
-            >
-              错误数: {{ status.error_count }}
-            </v-chip>
-          </div>
-        </v-col>
-      </v-row>
+    <!-- 状态条：运行态与时间戳，弱化为一行文字，不再占用 8 个 chip 的面积 -->
+    <div class="status-strip d-flex flex-wrap align-center ga-4 mt-3 mb-3">
+      <span class="dot-item">
+        <i class="dot" :class="status.running ? 'dot--on' : 'dot--off'"></i>
+        {{ status.running ? '扫描中' : '空闲' }}
+      </span>
+      <span class="dot-item">
+        <i class="dot" :class="status.enabled ? 'dot--on' : 'dot--off'"></i>
+        {{ status.enabled ? '扫描已启用' : '扫描已停用' }}
+      </span>
+      <span class="dot-item">
+        <i class="dot" :class="pushStatus.dingtalk_configured ? 'dot--on' : 'dot--warn'"></i>
+        钉钉{{ pushStatus.dingtalk_configured ? '已配置' : '未配置' }}
+      </span>
+      <span class="dot-item text-medium-emphasis">上次扫描 {{ formatTime(status.last_scan_at) }}</span>
+      <span class="dot-item text-medium-emphasis">下次扫描 {{ formatTime(status.next_scan_at) }}</span>
+    </div>
 
-      <div class="d-flex flex-wrap align-center ga-2 mt-3">
-        <v-btn
-          color="primary"
-          variant="tonal"
-          prepend-icon="mdi-magnify-scan"
-          :loading="scanning"
-          :disabled="scanning"
-          @click="scanNow"
-        >
-          立即扫描
-        </v-btn>
-        <v-btn
-          color="warning"
-          variant="tonal"
-          prepend-icon="mdi-broom"
-          :loading="clearing"
-          :disabled="clearing || signals.length === 0"
-          @click="clearSignals"
-        >
-          清空信号
-        </v-btn>
-        <v-spacer></v-spacer>
-        <span class="text-caption text-grey">每 10 秒自动刷新</span>
-        <v-btn variant="text" prepend-icon="mdi-refresh" :loading="loading" @click="refresh">
-          刷新
-        </v-btn>
-      </div>
-
-      <v-divider class="my-4"></v-divider>
-
-      <!-- 扫描范围：静态币 + Top N + 周期 -->
-      <div class="d-flex align-center flex-wrap ga-2 mb-3">
-        <v-icon size="18" color="primary">mdi-format-list-checks</v-icon>
-        <span class="text-subtitle-1 font-weight-medium">扫描范围</span>
-        <span class="text-caption text-grey">
-          静态币始终扫描并在钉钉实时推送，其余按成交额补足 Top N
-        </span>
-      </div>
-
-      <v-row dense>
-        <v-col cols="12" md="5">
-          <SmartSelect
-            :model-value="scanStaticSymbols"
-            :items="staticSymbolItems"
-            label="静态币种（始终扫描并实时推送）"
-            multiple
-            clearable
-            searchable
-            :hide-details="false"
-            hint="从备选池中搜索选择（始终扫描并在钉钉实时推送）"
-            @update:model-value="setStaticSymbols"
-          ></SmartSelect>
-        </v-col>
-        <v-col cols="12" sm="6" md="2">
-          <v-text-field
-            v-model.number="scopeTopN"
-            label="Top N 补足"
-            type="number"
-            min="1"
-            max="500"
-            density="compact"
-            variant="outlined"
-            hide-details
-            hint="按成交额排名补足"
-            persistent-hint
-            @update:model-value="scopeDirty = true"
-          ></v-text-field>
-        </v-col>
-        <v-col cols="12" sm="6" md="3">
-          <SmartSelect
-            v-model="scopeTimeframes"
-            :items="timeframeOptions"
-            label="扫描周期"
-            multiple
-            @update:model-value="scopeDirty = true"
-          ></SmartSelect>
-        </v-col>
-        <v-col cols="12" md="2" class="d-flex justify-end align-center">
-          <v-btn
-            color="primary"
-            variant="tonal"
-            prepend-icon="mdi-content-save"
-            :loading="savingScope"
-            :disabled="!scopeValid || savingScope"
-            @click="saveScanScope"
-          >
-            保存范围
-          </v-btn>
-        </v-col>
-      </v-row>
-    </PageCard>
-
-    <!-- 卡 2：推送与开仓（统一编排：先推送后开仓） -->
-    <PageCard icon="mdi-bell-ring-outline" title="推送与开仓" spaced>
-      <template #badges>
-        <v-chip size="small" variant="tonal" :color="autoTradeEnabled ? 'success' : 'grey'">
-      {{ autoTradeEnabled ? '自动开仓已启用' : '自动开仓已停用' }}
-        </v-chip>
-      </template>
-
-        <!-- A. 钉钉推送 -->
-        <div class="d-flex align-center flex-wrap ga-2 mb-3">
-          <v-icon size="18" color="primary">mdi-bell-ring-outline</v-icon>
-          <span class="text-subtitle-1 font-weight-medium">钉钉推送</span>
-          <v-chip
-            size="x-small"
-            variant="tonal"
-            :color="pushStatus.dingtalk_configured ? 'success' : 'warning'"
-          >
-            {{ pushStatus.dingtalk_configured ? 'Webhook 已配置' : '未配置 DINGTALK_WEBHOOK_URL' }}
-          </v-chip>
-        </div>
-
-        <v-row dense align="center">
-          <v-col cols="12" sm="6" md="3">
-            <v-switch
-              :model-value="pushStatus.signal_dingtalk_enabled"
-              :loading="savingDingtalkPush"
-              :disabled="!pushStatus.dingtalk_configured || !pushStatus.dingtalk_enabled"
-              label="币种信号推送"
-              color="primary"
-              inset
-              hide-details
-              @update:model-value="onToggleDingtalkPush"
-            ></v-switch>
-          </v-col>
-          <v-col cols="12" sm="6" md="3">
-            <v-text-field
-              v-model.number="pushVolumeInput"
-              label="非静态币推送量能倍数"
-              type="number"
-              min="0"
-              max="100"
-              step="0.5"
-              hint="当前量/动态基准 ≥ 该倍数才推送；0 = 不过滤"
-              persistent-hint
-              @update:model-value="pushVolumeDirty = true"
-            ></v-text-field>
-          </v-col>
-          <v-col cols="12" sm="6" md="2" class="d-flex justify-end">
-            <v-btn
-              color="primary"
-              variant="tonal"
-              prepend-icon="mdi-content-save"
-              :loading="savingPushConfig"
-              @click="savePushVolume"
-            >
-              保存
-            </v-btn>
-          </v-col>
-          <v-col cols="12" md="4">
-            <div class="text-caption text-grey">
-              静态币（{{ pushStatus.static_symbols.join(' / ') || '无' }}）始终实时推送；
-              其它币种需放量达标。此门槛只作用于推送，不影响信号列表与自动开仓。
-            </div>
-          </v-col>
-        </v-row>
-
-        <v-divider class="my-4"></v-divider>
-
-        <!-- B. 自动开仓 -->
-        <div class="d-flex align-center flex-wrap ga-2 mb-3">
-          <v-icon size="18" color="primary">mdi-robot</v-icon>
-          <span class="text-subtitle-1 font-weight-medium">信号自动开仓</span>
-          <span class="text-caption text-grey">最近自动开仓: {{ lastAutoOpenText }}</span>
-        </div>
-
-        <v-alert type="warning" variant="tonal" density="compact" class="mb-4 text-caption">
-          <div>· 信号为技术指标信号，不构成收益保证；自动开仓使用限价 post-only 单。</div>
-          <div>· 扫描与自动开仓默认关闭，开启后才会请求交易所行情并可能自动开仓（开仓后按现有 SL/TP 设置挂单）。</div>
-        </v-alert>
-
-        <v-row dense align="center" class="mb-1">
-          <v-col cols="12" sm="6" md="3">
-            <v-switch
-              :model-value="autoTradeEnabled"
-              :loading="savingAutoTrade"
-              label="启用自动开仓"
-              color="primary"
-              inset
-              hide-details
-              @update:model-value="onToggleAutoTrade"
-            ></v-switch>
-          </v-col>
-        </v-row>
-
-        <v-row dense>
-          <v-col cols="12" md="6">
-            <SmartSelect
-              v-model="autoForm.directions"
-              :items="directionOptions"
-              item-title="title"
-              item-value="value"
-              label="允许方向"
-              multiple
-              @update:model-value="markAutoFormDirty"
-            ></SmartSelect>
-          </v-col>
-          <v-col cols="12" md="6">
-            <SmartSelect
-              v-model="autoForm.timeframes"
-              :items="timeframeOptions"
-              label="允许周期"
-              multiple
-              @update:model-value="markAutoFormDirty"
-            ></SmartSelect>
-          </v-col>
-          <v-col cols="12">
-            <SmartSelect
-              v-model="autoForm.strategies"
-              :items="strategyOptions"
-              item-title="title"
-              item-value="value"
-              label="策略白名单（观望类策略不会自动开仓）"
-              multiple
-              @update:model-value="markAutoFormDirty"
-            ></SmartSelect>
-          </v-col>
-        </v-row>
-
-        <v-row dense class="mt-1">
-          <v-col cols="12" sm="6" md="4">
-            <v-text-field
-              v-model.number="autoForm.confirmations"
-              label="确认数"
-              type="number"
-              min="1"
-              density="compact"
-              variant="outlined"
-              hide-details
-              hint="同方向不同信号族数达到该值才开仓"
-              persistent-hint
-              @update:model-value="markAutoFormDirty"
-            ></v-text-field>
-          </v-col>
-          <v-col cols="12" sm="6" md="4">
-            <v-text-field
-              v-model.number="autoForm.confirmationWindowSeconds"
-              label="确认窗口 (秒)"
-              type="number"
-              min="1"
-              density="compact"
-              variant="outlined"
-              hide-details
-              hint="统计确认数的回溯窗口"
-              persistent-hint
-              @update:model-value="markAutoFormDirty"
-            ></v-text-field>
-          </v-col>
-          <v-col cols="12" sm="6" md="4">
-            <v-text-field
-              v-model.number="autoForm.cooldownSeconds"
-              label="冷却时间 (秒)"
-              type="number"
-              min="0"
-              density="compact"
-              variant="outlined"
-              hide-details
-              hint="同币种自动开仓最小间隔"
-              persistent-hint
-              @update:model-value="markAutoFormDirty"
-            ></v-text-field>
-          </v-col>
-          <v-col cols="12" sm="6" md="4">
-            <v-text-field
-              v-model.number="autoForm.valueUsd"
-              label="单笔金额 (USD)"
-              type="number"
-              min="1"
-              density="compact"
-              variant="outlined"
-              hide-details
-              hint="每次自动开仓的目标名义价值"
-              persistent-hint
-              @update:model-value="markAutoFormDirty"
-            ></v-text-field>
-          </v-col>
-          <v-col cols="12" sm="6" md="4">
-            <v-text-field
-              v-model.number="autoForm.maxPositions"
-              label="最大持仓数"
-              type="number"
-              min="1"
-              density="compact"
-              variant="outlined"
-              hide-details
-              hint="当前持仓达到该值后不再自动开仓"
-              persistent-hint
-              @update:model-value="markAutoFormDirty"
-            ></v-text-field>
-          </v-col>
-        </v-row>
-
-        <div class="d-flex align-center mt-4">
-          <span v-if="!autoFormValid" class="text-caption text-error">
-            请检查：方向/策略/周期至少各选一项，数字参数需大于 0。
-          </span>
-          <v-spacer></v-spacer>
-          <v-btn
-            color="primary"
-            variant="tonal"
-            prepend-icon="mdi-content-save"
-            :loading="savingAuto"
-            :disabled="!autoFormValid || savingAuto"
-            @click="saveAutoConfig"
-          >
-            保存自动开仓配置
-          </v-btn>
-        </div>
-    </PageCard>
-
-    <!-- 卡 3：出场层（实盘条件单 + 纸面跟踪共用一套规则） -->
-    <PageCard icon="mdi-chart-timeline-variant" title="出场层（实盘与纸面共用）" spaced>
-      <template #badges>
-        <v-chip size="small" variant="tonal" :color="paperEnabled ? 'success' : 'grey'">
-          {{ paperEnabled ? '纸面跟踪中' : '纸面未启用' }}
-        </v-chip>
-        <v-chip size="small" variant="tonal" :color="liveTimeoutEnabled ? 'warning' : 'grey'">
-          {{ liveTimeoutEnabled ? '实盘超时平仓' : '实盘不超时' }}
-        </v-chip>
-        <v-chip v-if="tracking.paper_stats.total > 0" size="small" variant="tonal" color="info">
-          已平仓 {{ tracking.paper_stats.total }} 笔 / 胜率 {{ tracking.paper_stats.win_rate }}%
-        </v-chip>
-      </template>
-
-        <v-alert type="info" variant="tonal" density="compact" class="mb-3 text-caption">
-          止盈止损的价格由 <code>core/exit_rules.py</code> <b>统一计算</b>：实盘条件单和纸面模拟读同一份实现，
-          改一个参数两边同时改。<b>ATR 口径会真实改变实盘挂单</b>（拿不到 ATR 时自动回退百分比，绝不裸奔）。
-        </v-alert>
-
-        <v-row dense align="center" class="mb-2">
-          <v-col cols="12" md="4">
-            <v-btn-toggle
-              :model-value="exitMode"
-              mandatory
-              divided
-              density="compact"
-              variant="outlined"
-              @update:model-value="onChangeExitMode"
-            >
-              <v-btn value="percent" size="small">百分比（现设）</v-btn>
-              <v-btn value="atr" size="small">ATR 止损</v-btn>
-            </v-btn-toggle>
-          </v-col>
-          <v-col cols="12" md="8" class="text-caption text-grey">
-            {{
-              exitMode === 'percent'
-                ? '价格距离 = 设置页的保证金百分比 ÷ 杠杆；实盘条件单与纸面模拟用的是同一套价格。'
-                : '止损 = N × ATR，止盈 = R × 止损距离；实盘条件单也按这个挂（ATR 取下方周期），拿不到 ATR 时回退百分比。'
-            }}
-          </v-col>
-        </v-row>
-
-        <v-row dense align="center">
-          <v-col cols="12" sm="6" md="3">
-            <v-switch
-              :model-value="paperEnabled"
-              :loading="savingPaperToggle"
-              label="启用纸面跟踪"
-              color="primary"
-              inset
-              hide-details
-              @update:model-value="onTogglePaper"
-            ></v-switch>
-          </v-col>
-          <v-col cols="12" sm="4" md="2">
-            <v-text-field
-              v-model.number="paperForm.slAtr"
-              label="止损 (ATR 倍数)"
-              type="number"
-              min="0.2"
-              max="10"
-              step="0.1"
-              density="compact"
-              variant="outlined"
-              hide-details
-              :disabled="exitMode !== 'atr'"
-              :hint="exitMode === 'atr' ? undefined : '仅在 ATR 模式生效'"
-              persistent-hint
-              @update:model-value="paperDirty = true"
-            ></v-text-field>
-          </v-col>
-          <v-col cols="12" sm="4" md="2">
-            <v-text-field
-              v-model.number="paperForm.tpR"
-              label="止盈 (R 倍数)"
-              type="number"
-              min="0.5"
-              max="10"
-              step="0.5"
-              density="compact"
-              variant="outlined"
-              hide-details
-              :disabled="exitMode !== 'atr'"
-              :hint="exitMode === 'atr' ? undefined : '仅在 ATR 模式生效'"
-              persistent-hint
-              @update:model-value="paperDirty = true"
-            ></v-text-field>
-          </v-col>
-          <v-col cols="12" sm="4" md="2">
-            <v-text-field
-              v-model.number="paperForm.maxBars"
-              label="最大持有 (根)"
-              type="number"
-              min="1"
-              max="100"
-              density="compact"
-              variant="outlined"
-              hide-details
-              @update:model-value="paperDirty = true"
-            ></v-text-field>
-          </v-col>
-          <v-col cols="12" md="3" class="d-flex justify-end">
-            <v-btn
-              color="primary"
-              variant="tonal"
-              prepend-icon="mdi-content-save"
-              :loading="savingPaperConfig"
-              :disabled="!paperFormValid || savingPaperConfig"
-              @click="savePaperConfig"
-            >
-              保存参数
-            </v-btn>
-          </v-col>
-        </v-row>
-
-        <!-- 实盘侧：ATR 取数周期 + 超时平仓开关（只作用于信号自动开的仓） -->
-        <v-divider class="my-3"></v-divider>
-        <v-row dense align="center">
-          <v-col cols="12" sm="6" md="3">
-            <v-select
-              v-model="paperForm.atrTimeframe"
-              :items="ATR_TIMEFRAMES"
-              label="实盘 ATR 周期"
-              density="compact"
-              variant="outlined"
-              hide-details
-              :disabled="exitMode !== 'atr'"
-              :hint="exitMode === 'atr' ? undefined : '仅 ATR 模式生效'"
-              persistent-hint
-              @update:model-value="paperDirty = true"
-            ></v-select>
-          </v-col>
-          <v-col cols="12" sm="6" md="4">
-            <v-switch
-              :model-value="liveTimeoutEnabled"
-              :loading="savingLiveTimeout"
-              label="实盘超时平仓"
-              color="warning"
-              inset
-              hide-details
-              @update:model-value="onToggleLiveTimeout"
-            ></v-switch>
-          </v-col>
-          <v-col cols="12" md="5" class="text-caption text-grey">
-            持有满「最大持有」根就市价平掉<b>信号自动开</b>的仓；手动仓不动。
-            回测里这是唯一不拖累收益的出场口径，但参数敏感，建议先纸面对照。
-          </v-col>
-        </v-row>
-
-        <!-- 止盈止损巡检：手动仓 + 自动仓一视同仁，缺止损自动补挂 -->
-        <v-row dense align="center" class="mt-1">
-          <v-col cols="12" sm="6" md="4">
-            <v-switch
-              :model-value="sltpGuardEnabled"
-              :loading="savingSltpGuard"
-              label="止损巡检（缺单自动补挂）"
-              color="success"
-              inset
-              hide-details
-              @update:model-value="onToggleSltpGuard"
-            ></v-switch>
-          </v-col>
-          <v-col cols="12" md="8" class="text-caption text-grey">
-            每 5 分钟核对所有持仓（<b>手动与自动开仓都算</b>）：发现某仓没有止损单就按当前口径自动补挂。
-            只补挂、不平仓；已有止损的仓位跳过，不会重复下单。
-          </v-col>
-        </v-row>
-
-        <v-row v-if="liveExit.positions.length > 0" dense class="mt-2">
-          <v-col cols="12">
-            <div class="text-subtitle-2 mb-1">实盘已登记（{{ liveExit.positions.length }}）</div>
-            <v-table density="compact">
-              <thead>
-                <tr>
-                  <th class="text-left">币种</th>
-                  <th class="text-left">方向</th>
-                  <th class="text-left">周期</th>
-                  <th class="text-left">已持有</th>
-                  <th class="text-left">上限</th>
-                  <th class="text-left">策略</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-for="row in liveExit.positions" :key="row.full_symbol || row.symbol">
-                  <td>{{ row.symbol }}</td>
-                  <td :class="directionColor(row.side)">{{ directionLabel(row.side) }}</td>
-                  <td>{{ row.timeframe || '—' }}</td>
-                  <td>{{ row.bars_held ?? '—' }} 根</td>
-                  <td>{{ row.max_bars }} 根</td>
-                  <td>{{ row.strategy || '—' }}</td>
-                </tr>
-              </tbody>
-            </v-table>
-          </v-col>
-        </v-row>
-
-        <v-row dense class="mt-3">
-          <v-col cols="12" md="7">
-            <div class="text-subtitle-2 mb-1">纸面持仓（{{ tracking.open_positions.length }}）</div>
-            <v-table v-if="tracking.open_positions.length > 0" density="compact">
-              <thead>
-                <tr>
-                  <th class="text-left">币种</th>
-                  <th class="text-left">方向</th>
-                  <th class="text-left">周期</th>
-                  <th class="text-left">入场</th>
-                  <th class="text-left">止损</th>
-                  <th class="text-left">止盈</th>
-                  <th class="text-left">开仓时间</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-for="position in tracking.open_positions" :key="position.id">
-                  <td class="font-weight-medium">{{ position.symbol }}</td>
-                  <td>
-                    <v-chip size="x-small" variant="tonal" :color="directionColor(position.direction)">
-                      {{ directionLabel(position.direction) }}
-                    </v-chip>
-                  </td>
-                  <td>{{ position.timeframe }}</td>
-                  <td>${{ formatPrice(position.entry_price) }}</td>
-                  <td class="text-error">${{ formatPrice(position.stop_loss) }}</td>
-                  <td class="text-success">${{ formatPrice(position.take_profit) }}</td>
-                  <td class="text-caption text-grey">{{ formatTime(position.opened_at) }}</td>
-                </tr>
-              </tbody>
-            </v-table>
-            <v-alert v-else type="info" variant="text" density="compact" class="text-caption">
-              暂无纸面持仓。启用后，通过过滤链的信号会在这里模拟建仓。
-            </v-alert>
-          </v-col>
-          <v-col cols="12" md="5">
-            <div class="text-subtitle-2 mb-1">已平仓统计</div>
-            <div v-if="tracking.paper_stats.total > 0" class="d-flex flex-wrap ga-2 mb-2">
-              <v-chip size="small" variant="tonal">样本 {{ tracking.paper_stats.total }}</v-chip>
-              <v-chip size="small" variant="tonal">胜率 {{ tracking.paper_stats.win_rate }}%</v-chip>
-              <v-chip size="small" variant="tonal">
-                均收益 {{ formatPct(tracking.paper_stats.avg_pnl_pct) }}
-              </v-chip>
-              <v-chip size="small" variant="tonal">累计 {{ formatPct(tracking.paper_stats.sum_pnl_pct) }}</v-chip>
-              <v-chip size="small" variant="tonal">均持有 {{ tracking.paper_stats.avg_bars }} 根</v-chip>
-            </div>
-            <div v-if="tracking.trades.length > 0" class="text-caption text-grey">
-              最近：
-              <span v-for="trade in tracking.trades.slice(0, 5)" :key="trade.id" class="mr-2">
-                {{ trade.symbol }}{{ directionLabel(trade.direction) }}
-                <span :class="trade.pnl_pct >= 0 ? 'text-success' : 'text-error'">
-                  {{ formatPct(trade.pnl_pct) }}
-                </span>
-                ({{ exitReasonLabel(trade.reason) }})
-              </span>
-            </div>
-            <div v-else class="text-caption text-grey">还没有平仓记录。</div>
-          </v-col>
-        </v-row>
-
-        <div class="text-subtitle-2 mt-4 mb-1">
-          信号前视收益（按周期 × 策略，扣成本前）
-        </div>
-        <v-table v-if="tracking.forward_stats.length > 0" density="compact">
-          <thead>
-            <tr>
-              <th class="text-left">周期</th>
-              <th class="text-left">策略</th>
-              <th class="text-left">样本</th>
-              <th v-for="bar in tracking.params.forward_bars" :key="bar" class="text-left">
-                T+{{ bar }}
-              </th>
-              <th class="text-left">胜率</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="row in tracking.forward_stats" :key="`${row.timeframe}-${row.strategy}`">
-              <td>{{ row.timeframe }}</td>
-              <td>{{ strategyLabel(row.strategy) }}</td>
-              <td>{{ row.samples }}</td>
-              <td v-for="bar in tracking.params.forward_bars" :key="bar">
-                <span :class="pctClass(row[`h${bar}`])">{{ formatPct(row[`h${bar}`]) }}</span>
-              </td>
-              <td>{{ row.h4_win ?? '—' }}%</td>
-            </tr>
-          </tbody>
-        </v-table>
-        <v-alert v-else type="info" variant="text" density="compact" class="text-caption">
-          还没有前视结果。信号产生后需要再走满 {{ tracking.params.forward_bars.join(' / ') }} 根 K 线才会回填。
-        </v-alert>
-    </PageCard>
-
-    <!-- 卡 4：信号列表 -->
-    <PageCard title="信号列表" spaced>
-      <template #badges>
-        <v-chip size="small" variant="tonal">
-      显示 {{ filteredSignals.length }} / 共 {{ signals.length }} 条
-        </v-chip>
-        <v-btn-toggle
-      :model-value="directionFilter"
-      mandatory
+    <v-alert
+      v-if="status.last_error"
+      type="error"
+      variant="tonal"
       density="compact"
-      variant="outlined"
-      divided
-      @update:model-value="onDirectionFilterChange"
-        >
-      <v-btn value="all" size="small">全部</v-btn>
-      <v-btn value="long" size="small">做多</v-btn>
-      <v-btn value="short" size="small">做空</v-btn>
-      <v-btn value="neutral" size="small">观望</v-btn>
-        </v-btn-toggle>
-      </template>
+      class="mb-3 text-caption"
+      closable
+    >
+      最近错误：{{ status.last_error }}
+    </v-alert>
 
-        <v-table v-if="filteredSignals.length > 0" density="compact" class="signal-table">
-          <thead>
-            <tr>
-              <th class="text-left">时间</th>
-              <th class="text-left">币种</th>
-              <th class="text-left">方向</th>
-              <th class="text-left">策略</th>
-              <th class="text-left">周期</th>
-              <th class="text-left">价格</th>
-              <th class="text-left">量能</th>
-              <th class="text-left">前视</th>
-              <th class="text-left">标题 / 说明</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="signal in filteredSignals" :key="signal.id">
-              <td class="text-caption text-no-wrap">{{ formatTime(signal.created_at) }}</td>
-              <td class="font-weight-medium text-no-wrap">{{ signal.symbol }}</td>
-              <td>
-                <v-chip
-                  size="small"
-                  variant="tonal"
-                  :color="directionColor(signal.direction)"
-                >
-                  {{ directionLabel(signal.direction) }}
-                </v-chip>
-              </td>
-              <td class="text-no-wrap">{{ strategyLabel(signal.strategy) }}</td>
-              <td class="text-no-wrap">{{ signal.timeframe }}</td>
-              <td class="text-no-wrap">${{ formatPrice(signal.price) }}</td>
-              <td class="text-no-wrap text-caption" :class="volumeClass(signal)">{{ volumeLabel(signal) }}</td>
-              <td class="text-no-wrap text-caption">{{ fwdLabel(signal) }}</td>
-              <td class="signal-title">
-                <div class="text-body-2">{{ signal.title }}</div>
-                <div class="text-caption text-grey signal-message">{{ plainMessage(signal.message) }}</div>
-              </td>
-            </tr>
-          </tbody>
-        </v-table>
-        <v-alert v-else type="info" variant="text" density="compact" class="text-caption">
-          暂无信号。启用扫描后，命中的技术指标信号会显示在这里；也可点击「立即扫描」手动触发一次。
-        </v-alert>
-    </PageCard>
+    <v-card variant="flat" class="signal-shell">
+      <v-tabs v-model="activeTab" class="tabs-quiet" show-arrows>
+        <v-tab value="list">
+          <v-icon start size="16">mdi-format-list-bulleted</v-icon>
+          信号列表
+          <v-chip v-if="signals.length" size="x-small" variant="tonal" class="ml-2">
+            {{ signals.length }}
+          </v-chip>
+        </v-tab>
+        <v-tab value="scope">
+          <v-icon start size="16">mdi-tune-variant</v-icon>
+          扫描范围
+        </v-tab>
+        <v-tab value="push">
+          <v-icon start size="16">mdi-bell-ring-outline</v-icon>
+          推送与开仓
+        </v-tab>
+        <v-tab value="exit">
+          <v-icon start size="16">mdi-chart-timeline-variant</v-icon>
+          出场与统计
+        </v-tab>
+      </v-tabs>
+
+      <v-card-text>
+        <v-window v-model="activeTab">
+          <v-window-item value="list">
+            <SignalListPanel
+              v-model:direction="directionFilter"
+              :signals="filteredSignals"
+              :total="signals.length"
+              :forward-bars="tracking.params.forward_bars"
+              :volume-threshold="pushStatus.signal_push_volume_multiplier"
+              :static-symbols="pushStatus.static_symbols"
+              :strategy-labels="strategyLabels"
+              :scanning="scanning"
+              :clearing="clearing"
+              :loading="loading"
+              @scan="scanNow"
+              @clear="clearSignals"
+              @refresh="refresh"
+            />
+          </v-window-item>
+
+          <v-window-item value="scope">
+            <ScanScopePanel
+              :enabled="status.enabled"
+              :saving-scan="savingScan"
+              :static-symbols="scanStaticSymbols"
+              :static-items="staticSymbolItems"
+              :top-n="scopeTopN"
+              :timeframes="scopeTimeframes"
+              :timeframe-options="timeframeOptions"
+              :valid="scopeValid"
+              :saving="savingScope"
+              :dirty="scopeDirty"
+              @update:static-symbols="setStaticSymbols"
+              @update:top-n="onScopeTopNChange"
+              @update:timeframes="onScopeTimeframesChange"
+              @toggle="onToggleScan"
+              @save="saveScanScope"
+            />
+          </v-window-item>
+
+          <v-window-item value="push">
+            <PushAutoPanel
+              :push-status="pushStatus"
+              :push-volume-input="pushVolumeInput"
+              :push-volume-dirty="pushVolumeDirty"
+              :saving-dingtalk-push="savingDingtalkPush"
+              :saving-push-config="savingPushConfig"
+              :auto-enabled="autoTradeEnabled"
+              :saving-auto-trade="savingAutoTrade"
+              :auto-form="autoForm"
+              :auto-valid="autoFormValid"
+              :saving-auto="savingAuto"
+              :last-auto-open-text="lastAutoOpenText"
+              :direction-options="directionOptions"
+              :timeframe-options="timeframeOptions"
+              :strategy-options="strategyOptions"
+              @update:push-volume-input="onPushVolumeChange"
+              @toggle-dingtalk="onToggleDingtalkPush"
+              @save-volume="savePushVolume"
+              @toggle-auto="onToggleAutoTrade"
+              @save-auto="saveAutoConfig"
+              @dirty="markAutoFormDirty"
+            />
+          </v-window-item>
+
+          <v-window-item value="exit">
+            <ExitStatsPanel
+              :exit-mode="exitMode"
+              :tracking="tracking"
+              :live-exit="liveExit"
+              :paper-form="paperForm"
+              :atr-timeframes="ATR_TIMEFRAMES"
+              :strategy-labels="strategyLabels"
+              :valid="paperFormValid"
+              :saving-paper-config="savingPaperConfig"
+              :saving-paper-toggle="savingPaperToggle"
+              :saving-live-timeout="savingLiveTimeout"
+              :saving-sltp-guard="savingSltpGuard"
+              @change-mode="onChangeExitMode"
+              @toggle-paper="onTogglePaper"
+              @save-paper="savePaperConfig"
+              @toggle-live-timeout="onToggleLiveTimeout"
+              @toggle-sltp-guard="onToggleSltpGuard"
+              @dirty="paperDirty = true"
+            />
+          </v-window-item>
+        </v-window>
+      </v-card-text>
+    </v-card>
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { useRoute } from 'vue-router'
 import api from '@/services/api'
 import { useSnackbarStore } from '@/stores/snackbar'
 import { useUiStore } from '@/stores/uiStore'
@@ -741,22 +208,15 @@ import type {
 } from '@/models/types'
 import { getErrorMessage, getErrorStatus } from '@/utils/errors'
 import { formatIsoTime as formatTime } from '@/utils/format'
-import SmartSelect from '@/components/SmartSelect.vue'
-import PageCard from '@/components/PageCard.vue'
+import { directionLabel } from '@/utils/tone'
+import MetricCard from '@/components/MetricCard.vue'
+import SignalListPanel from '@/components/signals/SignalListPanel.vue'
+import ScanScopePanel from '@/components/signals/ScanScopePanel.vue'
+import PushAutoPanel, { type AutoTradeForm } from '@/components/signals/PushAutoPanel.vue'
+import ExitStatsPanel, { type PaperForm } from '@/components/signals/ExitStatsPanel.vue'
 import { useSettingsStore } from '@/stores/settingsStore'
 
 const POLL_INTERVAL_MS = 10000
-
-interface AutoTradeForm {
-  directions: string[]
-  strategies: string[]
-  timeframes: string[]
-  confirmations: number
-  confirmationWindowSeconds: number
-  cooldownSeconds: number
-  valueUsd: number
-  maxPositions: number
-}
 
 const directionOptions = [
   { title: '做多', value: 'long' },
@@ -778,7 +238,10 @@ const strategyOptions = [
   { value: 'consecutive_candles', title: '连续 K 线警示（观望，不开仓）' },
 ]
 
-const strategyTitleMap = new Map(strategyOptions.map((option) => [option.value, option.title]))
+/** strategy 原始 key → 中文名，向下传给两个展示型面板 */
+const strategyLabels = Object.fromEntries(
+  strategyOptions.map((option) => [option.value, option.title]),
+) as Record<string, string>
 
 const defaultSignalStatus: SignalStatus = {
   enabled: false,
@@ -831,13 +294,17 @@ const defaultSignalConfig: SignalConfig = {
   signal_forward_bars: [4, 12],
 }
 
-const DIRECTION_FILTERS = ['all', 'long', 'short', 'neutral'] as const
-type DirectionFilter = (typeof DIRECTION_FILTERS)[number]
-
 const snackbarStore = useSnackbarStore()
 const uiStore = useUiStore()
 const settingsStore = useSettingsStore()
 
+// 支持 ?tab=list|scope|push|exit 深链，方便把某一页配置直接发给别人
+const route = useRoute()
+const activeTab = ref(
+  ['list', 'scope', 'push', 'exit'].includes(String(route.query.tab))
+    ? String(route.query.tab)
+    : 'list',
+)
 const status = ref<SignalStatus>({ ...defaultSignalStatus })
 const signals = ref<SignalRecord[]>([])
 const config = ref<SignalConfig>({ ...defaultSignalConfig })
@@ -847,7 +314,7 @@ const clearing = ref(false)
 const savingScan = ref(false)
 const savingAutoTrade = ref(false)
 const savingAuto = ref(false)
-const directionFilter = ref<DirectionFilter>('all')
+const directionFilter = ref<string>('all')
 const savingDingtalkPush = ref(false)
 const pushStatus = ref<SignalPushStatus>({
   dingtalk_configured: false,
@@ -888,11 +355,16 @@ const savingPaperConfig = ref(false)
 const savingPaperToggle = ref(false)
 const paperDirty = ref(false)
 const ATR_TIMEFRAMES = ['15m', '1h', '4h', '1d']
-const paperForm = ref({ slAtr: 1.5, tpR: 2, maxBars: 6, atrTimeframe: '4h' })
+const paperForm = ref<PaperForm>({ slAtr: 1.5, tpR: 2, maxBars: 6, atrTimeframe: '4h' })
 const paperEnabled = computed(() => tracking.value.params.enabled)
 
 // ------------------------------------------------- 实盘出场层（超时平仓 + 登记）
-const liveExit = ref<LiveExitStatus>({ enabled: false, guard_enabled: true, max_bars: 6, positions: [] })
+const liveExit = ref<LiveExitStatus>({
+  enabled: false,
+  guard_enabled: true,
+  max_bars: 6,
+  positions: [],
+})
 const savingLiveTimeout = ref(false)
 const savingSltpGuard = ref(false)
 const liveTimeoutEnabled = computed(() => liveExit.value.enabled)
@@ -931,6 +403,17 @@ const autoFormDirty = ref(false)
 let pollTimer: number | undefined
 
 const autoTradeEnabled = computed(() => config.value.signal_auto_trade_enabled)
+
+// ---- KPI 展示值 ----
+const winRateText = computed(() => {
+  const rate = tracking.value.paper_stats.win_rate
+  return rate == null ? '—' : `${rate}%`
+})
+const winRateTone = computed<'up' | 'down' | 'neutral'>(() => {
+  const rate = tracking.value.paper_stats.win_rate
+  if (rate == null) return 'neutral'
+  return rate >= 50 ? 'up' : 'down'
+})
 
 const scopeValid = computed(
   () =>
@@ -1178,19 +661,21 @@ const mergeTracking = (raw: unknown): SignalTracking => {
   }
 }
 
+// 用 Object.assign 只改字段、不换对象：
+// 子面板持有的是同一个对象引用，父组件整体替换会让子面板读写到旧对象。
 const syncPaperForm = (next: SignalTracking): void => {
   if (paperDirty.value) return
-  paperForm.value = {
+  Object.assign(paperForm.value, {
     slAtr: next.params.sl_atr,
     tpR: next.params.tp_r,
     maxBars: next.params.max_bars,
     atrTimeframe: config.value.signal_live_exit_timeframe,
-  }
+  })
 }
 
 const syncAutoForm = (nextConfig: SignalConfig): void => {
   if (autoFormDirty.value) return
-  autoForm.value = {
+  Object.assign(autoForm.value, {
     directions: [...nextConfig.signal_auto_trade_directions],
     strategies: [...nextConfig.signal_auto_trade_strategies],
     timeframes: [...nextConfig.signal_auto_trade_timeframes],
@@ -1199,7 +684,7 @@ const syncAutoForm = (nextConfig: SignalConfig): void => {
     cooldownSeconds: nextConfig.signal_auto_trade_cooldown_seconds,
     valueUsd: nextConfig.signal_auto_trade_value_usd,
     maxPositions: nextConfig.signal_auto_trade_max_positions,
-  }
+  })
 }
 
 const markAutoFormDirty = (): void => {
@@ -1218,7 +703,12 @@ const fetchSignals = async (silent: boolean): Promise<void> => {
     pushStatus.value = mergePushStatus(data.push)
     if (!pushVolumeDirty.value) pushVolumeInput.value = pushStatus.value.signal_push_volume_multiplier
     tracking.value = mergeTracking(data.tracking)
-    liveExit.value = data.live_exit ?? { enabled: false, guard_enabled: true, max_bars: 6, positions: [] }
+    liveExit.value = data.live_exit ?? {
+      enabled: false,
+      guard_enabled: true,
+      max_bars: 6,
+      positions: [],
+    }
     syncPaperForm(tracking.value)
     syncScopeForm(nextConfig)
     syncAutoForm(nextConfig)
@@ -1238,88 +728,19 @@ const refresh = (): void => {
   void fetchSignals(false)
 }
 
-const formatPrice = (value: number): string => {
-  const num = Number(value)
-  if (!Number.isFinite(num)) return '0'
-  if (num >= 1000) return num.toLocaleString('en-US', { maximumFractionDigits: 2 })
-  return num.toLocaleString('en-US', { maximumFractionDigits: 6 })
+const onScopeTopNChange = (value: number): void => {
+  scopeTopN.value = value
+  scopeDirty.value = true
 }
 
-const directionLabel = (direction: string): string => {
-  const labels: Record<string, string> = { long: '做多', short: '做空', neutral: '观望' }
-  return labels[direction] ?? direction
+const onScopeTimeframesChange = (value: unknown): void => {
+  scopeTimeframes.value = Array.isArray(value) ? value.map(String) : []
+  scopeDirty.value = true
 }
 
-const directionColor = (direction: string): string => {
-  // 用户偏好：红跌绿涨（做多绿、做空红）
-  if (direction === 'long') return 'green'
-  if (direction === 'short') return 'red'
-  return 'grey'
-}
-
-const strategyLabel = (strategy: string): string => strategyTitleMap.get(strategy) ?? strategy
-
-// 量能只记录不拦截：倍数照实展示，是否达到推送门槛用颜色区分（静态币始终推送）
-const formatPct = (value: unknown): string => {
-  const num = Number(value)
-  if (!Number.isFinite(num)) return '—'
-  return `${num >= 0 ? '+' : ''}${num.toFixed(2)}%`
-}
-
-const pctClass = (value: unknown): string => {
-  const num = Number(value)
-  if (!Number.isFinite(num)) return 'text-grey'
-  // 用户偏好：红跌绿涨
-  return num >= 0 ? 'text-success' : 'text-error'
-}
-
-const exitReasonLabel = (reason: string): string => {
-  const labels: Record<string, string> = { stop: '止损', target: '止盈', time: '超时' }
-  return labels[reason] ?? reason
-}
-
-const fwdLabel = (signal: SignalRecord): string => {
-  if (!signal.fwd) return '—'
-  const bars = tracking.value.params.forward_bars
-  const parts = bars
-    .map((bar) => (signal.fwd && signal.fwd[String(bar)] !== undefined
-      ? `T+${bar} ${formatPct(signal.fwd[String(bar)])}`
-      : ''))
-    .filter((part) => part.length > 0)
-  return parts.length > 0 ? parts.join(' / ') : '—'
-}
-
-const volumeLabel = (signal: SignalRecord): string =>
-  signal.volume_ratio == null ? '—' : `${signal.volume_ratio.toFixed(1)}x`
-
-const volumeClass = (signal: SignalRecord): string => {
-  if (signal.volume_ratio == null) return 'text-grey'
-  const threshold = pushStatus.value.signal_push_volume_multiplier || 2
-  const isStatic = pushStatus.value.static_symbols.includes(signal.symbol)
-  return signal.volume_ratio >= threshold || isStatic ? 'text-success font-weight-medium' : 'text-grey'
-}
-
-const plainMessage = (value: string): string =>
-  value
-    .replace(/^#+\s*/gm, '')
-    .replace(/\*\*(.*?)\*\*/g, '$1')
-    .replace(/`([^`]*)`/g, '$1')
-    .replace(/^>\s*/gm, '')
-    .replace(/^---+$/gm, '')
-    .replace(/\n{2,}/g, '\n')
-    .trim()
-
-const isDirectionFilter = (value: unknown): value is DirectionFilter =>
-  typeof value === 'string' && (DIRECTION_FILTERS as readonly string[]).includes(value)
-
-const onDirectionFilterChange = (value: unknown): void => {
-  if (isDirectionFilter(value)) {
-    directionFilter.value = value
-    return
-  }
-  if (value === null || value === undefined) {
-    directionFilter.value = 'all'
-  }
+const onPushVolumeChange = (value: number): void => {
+  pushVolumeInput.value = value
+  pushVolumeDirty.value = true
 }
 
 const pushLog = (message: string, level: 'info' | 'success' | 'warning' | 'error'): void => {
@@ -1373,9 +794,11 @@ const syncScopeForm = (nextConfig: SignalConfig): void => {
 const normalizeSymbolInput = (value: string): string =>
   value.trim().toUpperCase().split('/')[0].split(':')[0]
 
-// 下拉选项 = 备选总池 ∪ 已选（保证已选但不在池内的币种照常显示，与控制面板口径一致）
+// 下拉选项 = 备选总池 ∪ 已选（保证已选但不在池内的币种照常显示）
 const staticSymbolItems = computed<string[]>(() => {
-  const pool = (settingsStore.availableCoins ?? []).map((item) => normalizeSymbolInput(item)).filter(Boolean)
+  const pool = (settingsStore.availableCoins ?? [])
+    .map((item) => normalizeSymbolInput(item))
+    .filter(Boolean)
   return [...new Set([...scanStaticSymbols.value, ...pool])].sort()
 })
 
@@ -1752,21 +1175,35 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
-.signal-table :deep(th) {
+.status-strip {
+  font-size: 12px;
+  color: rgba(var(--v-theme-on-surface), 0.72);
+}
+.dot-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   white-space: nowrap;
 }
-.signal-table :deep(td) {
-  vertical-align: top;
+.dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex: 0 0 auto;
 }
-.signal-title {
-  max-width: 420px;
-  word-break: break-word;
+.dot--on {
+  background: rgb(var(--v-theme-long));
+  box-shadow: 0 0 0 3px rgba(var(--v-theme-long), 0.16);
 }
-.signal-message {
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-  white-space: pre-line;
+.dot--off {
+  background: rgba(var(--v-theme-on-surface), 0.34);
+}
+.dot--warn {
+  background: rgb(var(--v-theme-warning));
+  box-shadow: 0 0 0 3px rgba(var(--v-theme-warning), 0.16);
+}
+.signal-shell {
+  border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+  border-radius: 12px;
 }
 </style>

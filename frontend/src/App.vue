@@ -7,21 +7,22 @@
       <v-chip :color="uiStore.statusColor" class="mr-2" label>{{ uiStore.statusMessage }}</v-chip>
 
       <!-- 导航抽屉按钮：移到应用栏右侧，手机端不再使用底部导航 -->
-      <v-btn icon @click="drawer = !drawer" class="d-md-none">
+      <v-btn icon aria-label="打开导航菜单" class="d-md-none" @click="drawer = !drawer">
         <v-icon>mdi-menu</v-icon>
       </v-btn>
 
       <!-- 主题切换按钮 -->
       <v-btn
         icon
-        @click="uiStore.toggleTheme(theme)"
+        :aria-label="`切换到${uiStore.theme === 'dark' ? '浅色' : '深色'}模式`"
         :title="`切换到${uiStore.theme === 'dark' ? '浅色' : '深色'}模式`"
+        @click="uiStore.toggleTheme(theme)"
       >
         <v-icon>{{ themeIcon }}</v-icon>
       </v-btn>
 
       <!-- 日志按钮 -->
-      <v-btn icon @click="uiStore.toggleLogDrawer()">
+      <v-btn icon aria-label="打开运行日志" title="运行日志" @click="uiStore.toggleLogDrawer()">
         <v-badge
           :content="uiStore.logStore.logs.length"
           color="error"
@@ -33,7 +34,12 @@
     </v-app-bar>
 
     <v-navigation-drawer v-model="drawer" :permanent="$vuetify.display.mdAndUp" app>
-      <v-list nav>
+      <div class="drawer-brand px-4 py-3">
+        <span class="text-subtitle-1 font-weight-medium">交易终端</span>
+        <div class="text-caption text-medium-emphasis">Signals · Positions · Risk</div>
+      </div>
+      <v-divider />
+      <v-list nav density="compact">
         <v-list-item
           v-for="route in routes"
           :key="route.name?.toString()"
@@ -46,7 +52,7 @@
     </v-navigation-drawer>
 
     <v-main>
-      <v-container fluid>
+      <v-container fluid class="page-shell">
         <router-view />
       </v-container>
     </v-main>
@@ -143,5 +149,18 @@ watch(
 </script>
 
 <style>
-/* 保持样式为空，让 Vuetify 自动处理布局 */
+/* 页面外壳：统一最大宽度与内边距，超宽屏不会把表格拉到整行 */
+.page-shell {
+  max-width: 1600px;
+  margin: 0 auto;
+  padding: 16px 20px;
+}
+@media (max-width: 600px) {
+  .page-shell {
+    padding: 12px 12px;
+  }
+}
+.drawer-brand {
+  border-bottom: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+}
 </style>

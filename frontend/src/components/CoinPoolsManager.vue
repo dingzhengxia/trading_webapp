@@ -31,7 +31,7 @@
             添加
           </v-btn>
         </div>
-        <div class="text-caption text-grey mt-2">
+        <div class="text-caption text-medium-emphasis mt-2">
           添加到总池后，您就可以在下方的做多/做空备选池中选择它。
         </div>
       </v-card-text>

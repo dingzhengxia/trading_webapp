@@ -8,9 +8,10 @@
   },
   "scripts": {
     "dev": "vite",
-    "build": "npx vue-tsc --build --force && npx vite build",
+    "build": "npx vue-tsc --build --force && node scripts/check-contrast.mjs && npx vite build",
     "preview": "vite preview",
     "build-only": "vite build",
+    "check:contrast": "node scripts/check-contrast.mjs",
     "type-check": "vue-tsc --build",
     "lint": "eslint . --fix",
     "format": "prettier --write src/"

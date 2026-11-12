@@ -5,12 +5,12 @@
       <v-card-title class="text-h5 text-center pt-4">{{ dialogTitle }}</v-card-title>
       <v-card-text>
         <div class="text-center">
-          <div class="text-caption text-grey">请选择要平仓的仓位比例:</div>
+          <div class="text-caption text-medium-emphasis">请选择要平仓的仓位比例:</div>
         </div>
 
         <div class="text-center mt-4 mb-2">
-          <div class="text-caption">预计平仓价值</div>
-          <div class="text-h4 font-weight-bold text-amber-accent-3 my-1">
+          <div class="text-caption text-medium-emphasis">预计平仓价值</div>
+          <div class="text-h4 font-weight-bold num text-warning my-1">
             ${{
               closeValue.toLocaleString('en-US', {
                 minimumFractionDigits: 2,
@@ -49,7 +49,7 @@
         <v-spacer></v-spacer>
         <v-btn color="grey" variant="text" @click="closeDialog" class="mr-2"> 取消 </v-btn>
         <v-btn
-          color="red-darken-1"
+          color="error"
           variant="tonal"
           @click="executeClose"
           :disabled="closeRatio <= 0 || uiStore.isRunning"

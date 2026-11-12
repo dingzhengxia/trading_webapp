@@ -35,3 +35,30 @@ export function formatIsoTime(value: string | null | undefined): string {
   if (Number.isNaN(date.getTime())) return value
   return date.toLocaleString('zh-CN', { hour12: false })
 }
+
+/**
+ * 带符号的数值：**永远**给出 + 或 −。
+ *
+ * 盈亏必须带符号 —— 只靠红绿区分赚赔，等于把色弱用户（约 8% 男性）排除在外。
+ * 负号使用真正的减号 U+2212，等宽字体下比连字符窄且垂直居中，右对齐时列不会歪。
+ */
+export function formatSigned(value: number | string | null | undefined, digits = 2): string {
+  const num = Number(value)
+  if (!Number.isFinite(num)) return '—'
+  const body = Math.abs(num).toLocaleString('en-US', {
+    minimumFractionDigits: digits,
+    maximumFractionDigits: digits,
+  })
+  return num < 0 ? `−${body}` : `+${body}`
+}
+
+/** 带符号的百分比，与 formatSigned 同口径 */
+export function formatSignedPercent(
+  value: number | string | null | undefined,
+  digits = 2,
+): string {
+  const num = Number(value)
+  if (!Number.isFinite(num)) return '—'
+  const body = Math.abs(num).toFixed(digits)
+  return num < 0 ? `−${body}%` : `+${body}%`
+}

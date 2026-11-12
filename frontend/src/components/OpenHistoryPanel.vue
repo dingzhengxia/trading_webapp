@@ -15,15 +15,12 @@
     </v-card-title>
 
     <v-card-text>
-      <v-alert
+      <EmptyState
         v-if="!records.length && !loading"
-        type="info"
-        variant="tonal"
-        density="compact"
-      >
-        暂无开仓记录。每次「开始开仓 / 手动交易 / 再平衡 / 信号自动开仓」启动时就落一条记录
-        （长任务显示进行中，跑完自动更新结果），这里会保留当时的选币快照与每笔开仓结果。
-      </v-alert>
+        icon="mdi-clipboard-text-clock-outline"
+        title="暂无开仓记录"
+        description="每次「开始开仓 / 手动交易 / 再平衡 / 信号自动开仓」启动时会落一条记录，这里保留当时的选币快照与每笔结果。"
+      />
 
       <v-expansion-panels v-else v-model="openedPanel">
         <v-expansion-panel v-for="rec in records" :key="rec.id">
@@ -69,7 +66,7 @@
                 <tr v-for="(item, idx) in rec.items" :key="idx">
                   <td>{{ item.coin || '—' }}</td>
                   <td>
-                    <span :style="{ color: sideColor(item.side) }">{{ sideLabel(item) }}</span>
+                    <span :class="sideToneClass(item.side)">{{ sideLabel(item) }}</span>
                   </td>
                   <td class="text-right">
                     {{ item.target_value != null ? formatValue(item.target_value) : '—' }}
@@ -101,6 +98,8 @@ import { onMounted, onUnmounted, ref, watch } from 'vue'
 import apiClient from '@/services/api'
 import { useUiStore } from '@/stores/uiStore'
 import { getErrorMessage } from '@/utils/errors'
+import { positionSideTone } from '@/utils/tone'
+import EmptyState from '@/components/EmptyState.vue'
 
 interface OpenHistoryItem {
   coin?: string
@@ -204,12 +203,10 @@ const sideLabel = (item: OpenHistoryItem) => {
   return item.side || '—'
 }
 
-const sideColor = (side?: string) => {
-  // 配色约定：绿涨红跌；平仓用中性灰
-  const s = String(side || '').toLowerCase()
-  if (s === 'buy') return '#1D9E75'
-  if (s === 'sell') return '#E24B4A'
-  return '#888780'
+// 统一走 directionTone：buy/sell 归一化为做多/做空，平仓用中性灰
+const sideToneClass = (side?: string) => {
+  const tone = positionSideTone(side)
+  return tone.isClose ? 'text-medium-emphasis' : tone.textClass
 }
 
 const resultLabel = (item: OpenHistoryItem) => {
@@ -284,7 +281,7 @@ const snapshotDetail = (rec: OpenHistoryRecord) => {
 
 <style scoped>
 .open-history-table {
-  border: 0.5px solid rgba(0, 0, 0, 0.12);
+  border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
   border-radius: 8px;
 }
 </style>

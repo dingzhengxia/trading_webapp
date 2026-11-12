@@ -1,0 +1,139 @@
+/**
+ * 全局样式底座
+ *
+ * 只做三件事：
+ *   1. 字体栈与数字排版（中文 + 等宽数字）
+ *   2. 语义色工具类（text-long / text-short / text-up / text-down）
+ *   3. 少量 Vuetify 组件的全局校正（浮动层描边、触控尺寸、焦点可见）
+ *
+ * 注意：本文件在 main.ts 里于 'vuetify/styles' 之后引入，可覆盖其默认值。
+ */
+
+/* ---------------- 1. 字体与字号 ---------------- */
+
+.v-application {
+  font-family:
+    -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB',
+    'Microsoft YaHei', 'Noto Sans SC', Roboto, sans-serif;
+  font-feature-settings: 'tnum' 0;
+}
+
+/* 数字：等宽字形，避免表格刷新时数字宽度抖动（10 秒一次轮询，抖动是持续可见的） */
+.num,
+.num-cell,
+.kpi-value,
+.v-data-table td.text-right,
+.v-data-table td.text-end,
+.v-table td.text-right,
+.v-table td.text-end {
+  font-family:
+    'JetBrains Mono', 'SF Mono', 'Roboto Mono', ui-monospace, SFMono-Regular, Menlo, Consolas,
+    monospace;
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum' 1;
+}
+
+/* 说明文字不再掉到 10px：中文 12px 是可读下限 */
+.v-application .text-caption {
+  font-size: 12px;
+  line-height: 1.5;
+  letter-spacing: 0.01em;
+}
+
+/* ---------------- 2. 语义色 ---------------- */
+
+.text-long {
+  color: rgb(var(--v-theme-long)) !important;
+}
+.text-short {
+  color: rgb(var(--v-theme-short)) !important;
+}
+.text-up {
+  color: rgb(var(--v-theme-up)) !important;
+}
+.text-down {
+  color: rgb(var(--v-theme-down)) !important;
+}
+
+/* 方向徽章：图标 + 文案 + 浅底色，色盲也能靠箭头区分 */
+.dir-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 8px 1px 5px;
+  border-radius: 5px;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.6;
+  white-space: nowrap;
+}
+.dir-badge .v-icon {
+  font-size: 12px;
+}
+.dir-badge--long {
+  color: rgb(var(--v-theme-long));
+  background: rgba(var(--v-theme-long), 0.13);
+}
+.dir-badge--short {
+  color: rgb(var(--v-theme-short));
+  background: rgba(var(--v-theme-short), 0.13);
+}
+.dir-badge--neutral {
+  color: rgb(var(--v-theme-on-surface));
+  background: rgba(var(--v-theme-on-surface), 0.08);
+}
+
+/* ---------------- 3. 布局与浮层 ---------------- */
+
+/* 悬浮底栏的留白统一在这里给，页面里不再各自硬编码 paddingBottom */
+:root {
+  --dock-h: 80px;
+}
+.v-main {
+  padding-bottom: var(--dock-h) !important;
+}
+
+/* 浮层描边跟随主题：之前写死 rgba(255,255,255,.12)，浅色主题下这条线直接消失 */
+.app-dock,
+.progress-dock {
+  border-top: 1px solid rgba(var(--v-border-color), var(--v-border-opacity)) !important;
+}
+
+/* Tabs 不再整条铺饱和主色，只留底边指示条 */
+.v-tabs.tabs-quiet {
+  background: transparent !important;
+  border-bottom: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+}
+.v-tabs.tabs-quiet .v-tab {
+  letter-spacing: 0;
+  font-size: 13px;
+  font-weight: 500;
+  min-width: 0;
+}
+
+/* ---------------- 4. 无障碍 ---------------- */
+
+/* 触控目标不小于 44px（Vuetify 图标按钮默认 40px） */
+.v-app-bar .v-btn--icon,
+.app-dock .v-btn--icon,
+.v-dialog .v-btn--icon,
+.v-toolbar .v-btn--icon {
+  min-width: 44px;
+  min-height: 44px;
+}
+
+/* 键盘焦点必须可见：鼠标点击不显示，Tab 导航时给 2px 主色描边 */
+:where(a, button, .v-btn, .v-tab, .v-list-item, [tabindex]):focus-visible {
+  outline: 2px solid rgb(var(--v-theme-primary));
+  outline-offset: 2px;
+}
+
+/* 尊重系统「减少动态效果」偏好 */
+@media (prefers-reduced-motion: reduce) {
+  .v-btn,
+  .v-card,
+  .v-chip,
+  .v-expansion-panel {
+    transition: none !important;
+  }
+}

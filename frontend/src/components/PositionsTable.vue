@@ -6,14 +6,14 @@
       <v-toolbar-title class="text-h6">{{ title }}</v-toolbar-title>
       <v-spacer></v-spacer>
       <v-chip
-        :color="side === 'long' ? 'success' : 'error'"
+        :color="side === 'long' ? 'long' : 'short'"
         label
-        variant="flat"
+        variant="tonal"
         size="small"
         class="mr-2"
       >
-        <span class="font-weight-bold">
-          总价值: ${{
+        <span class="font-weight-medium num">
+          总价值 ${{
             totalNotional.toLocaleString('en-US', {
               minimumFractionDigits: 2,
               maximumFractionDigits: 2,
@@ -33,7 +33,7 @@
     <!-- 第二行操作栏 -->
     <v-toolbar density="compact" flat color="transparent" class="px-2 toolbar-wrap">
       <v-btn
-        color="warning"
+        color="error"
         variant="tonal"
         size="small"
         @click="handleCloseSelected"
@@ -44,8 +44,8 @@
       </v-btn>
       <v-spacer></v-spacer>
       <v-btn
-        color="blue-grey"
-        variant="tonal"
+        color="error"
+        variant="outlined"
         size="small"
         @click="handleCloseAll"
         prepend-icon="mdi-close-circle-multiple"
@@ -68,16 +68,19 @@
       :height="isMobile ? '45vh' : 'calc(50vh - 120px)'"
       no-data-text="无持仓数据"
     >
-      <template v-slot:item.notional="{ item }">${{ item.notional.toFixed(2) }}</template>
+      <template v-slot:item.notional="{ item }">
+        <span class="num">${{ item.notional.toFixed(2) }}</span>
+      </template>
       <template v-slot:item.pnl="{ item }">
-        <span :class="item.pnl >= 0 ? 'text-success' : 'text-error'">{{
-          item.pnl.toFixed(2)
-        }}</span>
+        <span class="num" :class="pnlClass(item.pnl)">{{ formatSigned(item.pnl) }}</span>
       </template>
       <template v-slot:item.pnl_percentage="{ item }">
-        <span :class="item.pnl_percentage >= 0 ? 'text-success' : 'text-error'">
-          {{ item.pnl_percentage > 0 ? '+' : '' }}{{ item.pnl_percentage.toFixed(2) }}%
+        <span class="num" :class="pnlClass(item.pnl_percentage)">
+          {{ formatSignedPercent(item.pnl_percentage) }}
         </span>
+      </template>
+      <template v-slot:item.entry_price="{ item }">
+        <span class="num">{{ Number(item.entry_price).toLocaleString('en-US', { maximumFractionDigits: 6 }) }}</span>
       </template>
       <template v-slot:item.actions="{ item }">
         <v-btn
@@ -112,7 +115,7 @@
             <span class="font-weight-bold">{{ reverseTarget.full_symbol }}</span>
             <v-icon size="small" class="mx-2">mdi-arrow-right-bold</v-icon>
             <v-chip
-              :color="reverseTarget.side === 'long' ? 'error' : 'success'"
+              :color="directionTone(reverseTarget.side === 'long' ? 'short' : 'long').color"
               size="small"
               label
             >
@@ -133,7 +136,7 @@
             :rules="[(v: number) => v > 0 || '价值必须大于 0']"
             hide-details="auto"
           ></v-text-field>
-          <div class="text-caption text-grey mt-1">
+          <div class="text-caption text-medium-emphasis mt-1">
             当前仓位名义价值 ${{ reverseTarget.notional.toFixed(2) }}（已预填）
           </div>
         </v-card-text>
@@ -160,6 +163,8 @@ import { useDisplay } from 'vuetify'
 import type { Position } from '@/models/types'
 import { useUiStore } from '@/stores/uiStore'
 import { usePositionStore } from '@/stores/positionStore'
+import { directionTone, pnlClass } from '@/utils/tone'
+import { formatSigned, formatSignedPercent } from '@/utils/format'
 
 type TDataTableHeader = {
   key: string
