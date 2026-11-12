@@ -28,13 +28,16 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     'enable_short_trades': True,
     'total_long_position_value': 1000.0,
     'total_short_position_value': 500.0,
-    'leverage': 20,
+    'leverage': 5,
     'enable_long_sl_tp': True,
-    'long_stop_loss_percentage': 50.0,
-    'long_take_profit_percentage': 100.0,
+    # percent 口径只是 ATR 不可用时的兜底。40% ÷ leverage=5 → 价格 -8%/+8%，
+    # 与回测最优的 atr 1.5/1R（中位止损 2.3%→约 8% 保证金占用）同一量级；
+    # 注意 percent 与 leverage 强耦合：改杠杆必须同步核对这些值，否则止损会悄悄变宽/变窄
+    'long_stop_loss_percentage': 40.0,
+    'long_take_profit_percentage': 40.0,
     'enable_short_sl_tp': True,
-    'short_stop_loss_percentage': 80.0,
-    'short_take_profit_percentage': 150.0,
+    'short_stop_loss_percentage': 40.0,
+    'short_take_profit_percentage': 40.0,
 
     # --- 新增：移动止盈止损配置 ---
     'enable_long_trailing_stop': False,
@@ -84,9 +87,10 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     'signal_auto_trade_directions': ['long', 'short'],
     'signal_auto_trade_strategies': [
         'ema_cross', 'ma_breakout', 'kdj_cross', 'level_breakout',
-        'rsi_divergence', 'trend_channel_breakout', 'ob_luxalgo', 'ob_fluxcharts',
+        'rsi_divergence', 'ob_luxalgo', 'ob_fluxcharts',
     ],
-    'signal_auto_trade_timeframes': ['1h', '4h'],
+    # 1h 回测净收益只有 ~6bp（4126 笔换手，16bp 成本即归零），只推信号不自动开仓
+    'signal_auto_trade_timeframes': ['4h'],
     'signal_auto_trade_confirmation_window_seconds': 300,
     'signal_auto_trade_confirmations': 1,
     'signal_auto_trade_cooldown_seconds': 900,
@@ -103,14 +107,17 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     # percent = 设置页的 {side}_stop_loss/take_profit_percentage ÷ leverage 折算价格距离；
     # atr     = N×ATR 止损 + R 倍数止盈（实盘取 signal_live_exit_timeframe 周期的 ATR，
     #           拿不到时自动回退 percent，绝不裸奔）
-    'signal_exit_mode': 'percent',
+    # atr 是回测唯一在前/后半段都为正的口径（+12.4/+30.5bp）；percent 各宽度均劣于它
+    'signal_exit_mode': 'atr',
     'signal_paper_sl_atr': 1.5,
-    'signal_paper_tp_r': 2.0,
+    # TP 必须 ≤1R：持有 6/8/12/16/20 根下 1R 恒 +25~30bp，2R 恒负、3R 恒更负
+    'signal_paper_tp_r': 1.0,
     'signal_paper_max_bars': 6,
     # 实盘 ATR 口径使用的周期（ATR 只影响「价格距离多大」，与持仓周期无关）
     'signal_live_exit_timeframe': '4h',
-    # 实盘超时平仓：持有满 signal_paper_max_bars 根就市价平掉「信号自动开」的仓；默认关闭
-    'signal_live_exit_timeout_enabled': False,
+    # 实盘超时平仓：持有满 signal_paper_max_bars 根就市价平掉「信号自动开」的仓；
+    # 回测里 19% 的交易靠超时退出，不开就少了这半边收益
+    'signal_live_exit_timeout_enabled': True,
     # 信号前视收益的持有期（单位：根 K 线），用于「信号发出后到底赚不赚」的统计
     'signal_forward_bars': [4, 12],
 
