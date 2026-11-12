@@ -98,7 +98,9 @@ def collect(sig, tf, offset, max_bars, config, dedupe=True):
         df = df.sort_values('entry_ts')
         occupied, keep = {}, []
         for idx, rec in zip(df.index, df.itertuples()):
-            if rec.entry_ts < occupied.get(rec.symbol, -1):
+            # 必须用 <=：持有 1 根时 exit_ts == entry_ts，用 < 会让同一根 K 线上的
+            # 其余信号全部逃脱约束，把 1 次交易重复计成 3~6 次（曾导致 +21.4bp 的假象）
+            if rec.entry_ts <= occupied.get(rec.symbol, -1):
                 continue
             occupied[rec.symbol] = rec.exit_ts
             keep.append(idx)

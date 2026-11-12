@@ -87,7 +87,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     'signal_auto_trade_directions': ['long', 'short'],
     'signal_auto_trade_strategies': [
         'ema_cross', 'ma_breakout', 'kdj_cross', 'level_breakout',
-        'rsi_divergence', 'ob_luxalgo', 'ob_fluxcharts',
+        'rsi_divergence', 'trend_channel_breakout', 'ob_luxalgo', 'ob_fluxcharts',
     ],
     # 1h 回测净收益只有 ~6bp（4126 笔换手，16bp 成本即归零），只推信号不自动开仓
     'signal_auto_trade_timeframes': ['4h'],
