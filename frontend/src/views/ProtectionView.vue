@@ -10,9 +10,15 @@
         <v-chip size="small" variant="tonal" :color="status.enabled ? 'success' : 'grey'">
           {{ status.enabled ? '已启用' : '已停用' }}
         </v-chip>
+        <v-chip size="small" variant="tonal" :color="isV2 ? 'primary' : 'grey'">
+          {{ isV2 ? 'v2 引擎' : 'v1 引擎' }}
+        </v-chip>
+        <v-chip v-if="isV2 && status.v2?.dry_run" size="small" variant="tonal" color="warning">
+          演练模式
+        </v-chip>
       </template>
       <v-row dense align="center">
-        <v-col cols="12" md="4">
+        <v-col cols="12" md="3">
           <v-switch
             :model-value="status.enabled"
             :loading="saving"
@@ -23,7 +29,18 @@
             @update:model-value="onToggleEnabled"
           ></v-switch>
         </v-col>
-        <v-col cols="12" md="8">
+        <v-col v-if="isV2" cols="12" md="3">
+          <v-switch
+            :model-value="Boolean(form.dry_run)"
+            :loading="saving"
+            label="演练模式（只记录不下单）"
+            color="warning"
+            inset
+            hide-details
+            @update:model-value="onToggleDryRun"
+          ></v-switch>
+        </v-col>
+        <v-col cols="12" :md="isV2 ? 6 : 9">
           <div class="d-flex flex-wrap ga-2">
             <v-chip size="small" variant="tonal" prepend-icon="mdi-timer-sand">
               周期: {{ status.timeframe ?? '—' }}
@@ -210,6 +227,139 @@
         </v-row>
     </PageCard>
 
+    <!-- v2 分档参数（结构 + ATR 四档） -->
+    <PageCard icon="mdi-layers-triple-outline" title="v2 分档参数（结构 + ATR）" spaced>
+      <template #badges>
+        <v-btn
+          size="small"
+          color="primary"
+          variant="tonal"
+          prepend-icon="mdi-content-save"
+          :loading="saving"
+          @click="saveConfig"
+        >
+          保存参数
+        </v-btn>
+      </template>
+      <v-row dense>
+        <v-col cols="12" sm="6" md="3">
+          <SmartSelect
+            v-model="form.engine_version"
+            :items="engineVersions"
+            label="风控引擎版本"
+          ></SmartSelect>
+        </v-col>
+        <v-col cols="12" sm="6" md="3">
+          <SmartSelect
+            v-model="form.v2_timeframe"
+            :items="timeframes"
+            label="v2 结构判定周期"
+          ></SmartSelect>
+        </v-col>
+        <v-col cols="12" sm="6" md="3">
+          <v-text-field
+            v-model.number="form.risk_min_pct"
+            type="number"
+            step="0.005"
+            min="0.001"
+            max="0.5"
+            label="最小单笔风险（占价格比例）"
+            density="compact"
+            variant="outlined"
+            hide-details
+          ></v-text-field>
+        </v-col>
+        <v-col cols="12" sm="6" md="3">
+          <v-text-field
+            v-model.number="form.risk_max_pct"
+            type="number"
+            step="0.01"
+            min="0.001"
+            max="0.5"
+            label="最大单笔风险（占价格比例）"
+            density="compact"
+            variant="outlined"
+            hide-details
+          ></v-text-field>
+        </v-col>
+      </v-row>
+      <v-row dense class="mt-1">
+        <v-col v-for="(_, i) in 4" :key="`tier-${i}`" cols="6" sm="3" md="3">
+          <v-text-field
+            v-model.number="form.tier_ratios[i]"
+            type="number"
+            step="0.05"
+            min="0"
+            max="1"
+            :label="`T${i + 1} 减仓比例${i === 3 ? '（全平档）' : ''}`"
+            density="compact"
+            variant="outlined"
+            hide-details
+          ></v-text-field>
+        </v-col>
+      </v-row>
+      <v-row dense class="mt-1">
+        <v-col v-for="(_, i) in 4" :key="`confirm-${i}`" cols="6" sm="3" md="3">
+          <v-text-field
+            v-model.number="form.tier_confirm_sec[i]"
+            type="number"
+            step="5"
+            min="0"
+            max="600"
+            :label="`T${i + 1} 持续确认（秒）`"
+            density="compact"
+            variant="outlined"
+            hide-details
+          ></v-text-field>
+        </v-col>
+      </v-row>
+      <v-row dense class="mt-1">
+        <v-col cols="12" sm="6" md="3">
+          <v-text-field
+            v-model.number="form.breakeven_trigger_r"
+            type="number"
+            step="0.1"
+            min="0.1"
+            max="100"
+            label="保本触发（R）"
+            density="compact"
+            variant="outlined"
+            hide-details
+          ></v-text-field>
+        </v-col>
+        <v-col cols="12" sm="6" md="3">
+          <v-text-field
+            v-model.number="form.trailing_atr_mult"
+            type="number"
+            step="0.5"
+            min="0.5"
+            max="20"
+            label="追踪止损（ATR 倍数）"
+            density="compact"
+            variant="outlined"
+            hide-details
+          ></v-text-field>
+        </v-col>
+        <v-col cols="12" sm="6" md="3">
+          <v-text-field
+            v-model.number="form.v2_poll_interval_sec"
+            type="number"
+            step="1"
+            min="1"
+            max="60"
+            label="巡检间隔（秒）"
+            density="compact"
+            variant="outlined"
+            hide-details
+          ></v-text-field>
+        </v-col>
+      </v-row>
+      <v-alert type="info" variant="tonal" density="compact" class="mt-3 text-caption">
+        四档合计应等于 100%：越破越重，T4 为全平档。交易所 STOP 只做兜底（灾难线再往外 1.5 ATR），
+        正常情况由这四档先动作；减一档，止损就推进到下一档。
+      </v-alert>
+    </PageCard>
+
     <!-- 守卫中的仓位 -->
     <!-- 守卫中的仓位 -->
     <PageCard icon="mdi-shield-account" title="守卫中的仓位" spaced>
@@ -238,6 +388,8 @@
               <th class="text-right">标记价</th>
               <th class="text-right">保护止损</th>
               <th class="text-right">TP1 / TP2 / 躺平</th>
+              <th v-if="isV2" class="text-right">四档减仓线</th>
+              <th v-if="isV2" class="text-right">灾难线</th>
               <th class="text-left">已触发</th>
             </tr>
           </thead>
@@ -265,6 +417,16 @@
                 {{ formatNumber(row.tp1_price) }} / {{ formatNumber(row.tp2_price) }} /
                 {{ formatNumber(row.tp3_price) }}
               </td>
+              <td v-if="isV2" class="text-right text-caption">
+                <span v-if="row.tier_levels?.length">
+                  {{ row.tier_levels.map((v) => formatNumber(v)).join(' / ') }}
+                </span>
+                <span v-else class="text-grey">—</span>
+              </td>
+              <td v-if="isV2" class="text-right text-caption">
+                <span v-if="row.disaster_stop">{{ formatNumber(row.disaster_stop) }}</span>
+                <span v-else class="text-grey">—</span>
+              </td>
               <td>
                 <div class="d-flex flex-wrap ga-1">
                   <v-chip v-if="row.tp1_done" size="x-small" variant="tonal" color="info">TP1</v-chip>
@@ -273,6 +435,7 @@
                   <v-chip v-if="row.t1_done" size="x-small" variant="tonal" color="warning">T1</v-chip>
                   <v-chip v-if="row.t2_done" size="x-small" variant="tonal" color="warning">T2</v-chip>
                   <v-chip v-if="row.t3_done" size="x-small" variant="tonal" color="warning">T3</v-chip>
+                  <v-chip v-if="row.t4_done" size="x-small" variant="tonal" color="error">T4</v-chip>
                   <span
                     v-if="!hasTriggered(row)"
                     class="text-caption text-grey"
@@ -286,11 +449,41 @@
           当前没有持仓，引擎处于待机巡检状态。
         </div>
     </PageCard>
+
+    <!-- v2 动作轨迹：什么时候、因为哪条线、减了多少 -->
+    <PageCard v-if="isV2" icon="mdi-history" title="最近保护动作" spaced>
+      <template #badges>
+        <v-chip size="small" variant="tonal">
+          第 {{ status.v2?.cycle_count ?? 0 }} 轮
+        </v-chip>
+      </template>
+      <div v-if="(status.v2?.recent_actions?.length ?? 0) === 0" class="text-caption text-grey">
+        最近没有触发减仓/止盈，引擎只在上移止损时保持安静。
+      </div>
+      <v-list v-else density="compact" lines="one">
+        <v-list-item
+          v-for="(item, idx) in status.v2?.recent_actions ?? []"
+          :key="`${item.ts}-${idx}`"
+        >
+          <template #prepend>
+            <v-icon
+              size="16"
+              :color="item.level === 'error' ? 'error' : item.level === 'warning' ? 'warning' : 'success'"
+            >
+              mdi-shield-alert-outline
+            </v-icon>
+          </template>
+          <v-list-item-title class="text-caption">
+            {{ new Date(item.ts * 1000).toLocaleTimeString() }} · {{ item.symbol }} · {{ item.text }}
+          </v-list-item-title>
+        </v-list-item>
+      </v-list>
+    </PageCard>
   </div>
 </template>
 
 <script setup lang="ts">
-import { onMounted, onUnmounted, reactive, ref } from 'vue'
+import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
 import api from '@/services/api'
 import { useSnackbarStore } from '@/stores/snackbar'
 import { getErrorMessage } from '@/utils/errors'
@@ -302,6 +495,11 @@ import type { ProtectionConfig, ProtectionPositionRow, ProtectionStatus } from '
 const snackbarStore = useSnackbarStore()
 
 const timeframes = ['15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d']
+
+const engineVersions = [
+  { title: 'v2（四档结构 + 一仓一行账本）', value: 'v2' },
+  { title: 'v1（旧引擎，仅回滚用）', value: 'v1' },
+]
 
 const emptyStatus = (): ProtectionStatus => ({
   enabled: false,
@@ -324,6 +522,16 @@ const emptyStatus = (): ProtectionStatus => ({
 const status = ref<ProtectionStatus>(emptyStatus())
 const saving = ref(false)
 const form = reactive({
+  engine_version: 'v2',
+  dry_run: false,
+  v2_timeframe: '2h',
+  v2_poll_interval_sec: 3,
+  tier_ratios: [0.15, 0.2, 0.25, 0.4] as number[],
+  tier_confirm_sec: [30, 45, 60, 0] as number[],
+  risk_min_pct: 0.015,
+  risk_max_pct: 0.08,
+  breakeven_trigger_r: 0.5,
+  trailing_atr_mult: 2.5,
   timeframe: '2h',
   tp1_r_multiple: 1,
   tp2_r_multiple: 2,
@@ -338,13 +546,39 @@ const form = reactive({
   hard_stop_min_distance_pct: 0.05,
 })
 
+const isV2 = computed(() =>
+  (status.value.engine_version ?? form.engine_version ?? 'v2') === 'v2',
+)
+
 let pollTimer: number | undefined
 
 const hasTriggered = (row: ProtectionPositionRow): boolean =>
-  row.tp1_done || row.tp2_done || row.tp3_done || row.t1_done || row.t2_done || row.t3_done
+  row.tp1_done || row.tp2_done || row.tp3_done ||
+  row.t1_done || row.t2_done || row.t3_done || Boolean(row.t4_done)
 
 const applyConfig = (config: Partial<ProtectionConfig>): void => {
   if (typeof config.timeframe === 'string') form.timeframe = config.timeframe
+  if (typeof config.engine_version === 'string') {
+    form.engine_version = config.engine_version === 'v1' ? 'v1' : 'v2'
+  }
+  if (typeof config.dry_run === 'boolean') form.dry_run = config.dry_run
+  if (typeof config.v2_timeframe === 'string') form.v2_timeframe = config.v2_timeframe
+  if (Array.isArray(config.tier_ratios) && config.tier_ratios.length === 4) {
+    form.tier_ratios = config.tier_ratios.map((x) => Number(x))
+  }
+  if (Array.isArray(config.tier_confirm_sec) && config.tier_confirm_sec.length === 4) {
+    form.tier_confirm_sec = config.tier_confirm_sec.map((x) => Number(x))
+  }
+  for (const key of [
+    'v2_poll_interval_sec',
+    'risk_min_pct',
+    'risk_max_pct',
+    'breakeven_trigger_r',
+    'trailing_atr_mult',
+  ] as const) {
+    const value = Number(config[key])
+    if (Number.isFinite(value)) form[key] = value
+  }
   for (const key of [
     'tp1_r_multiple',
     'tp2_r_multiple',
@@ -382,6 +616,25 @@ const saveConfig = async (): Promise<void> => {
   try {
     await api.post('/api/protection/config', { ...form })
     snackbarStore.show({ message: '仓位保护参数已保存并生效。', color: 'success' })
+    await fetchStatus()
+  } catch (error: unknown) {
+    snackbarStore.show({ message: getErrorMessage(error), color: 'error' })
+  } finally {
+    saving.value = false
+  }
+}
+
+const onToggleDryRun = async (value: boolean | null): Promise<void> => {
+  saving.value = true
+  try {
+    form.dry_run = value === true
+    await api.post('/api/protection/config', { dry_run: value === true })
+    snackbarStore.show({
+      message: value
+        ? '演练模式已开启：引擎照常判断并记录动作，但不会真实下单。'
+        : '演练模式已关闭：风控动作将真实执行。',
+      color: value ? 'warning' : 'success',
+    })
     await fetchStatus()
   } catch (error: unknown) {
     snackbarStore.show({ message: getErrorMessage(error), color: 'error' })

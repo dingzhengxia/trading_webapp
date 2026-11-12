@@ -307,11 +307,28 @@ export interface ProtectionPositionRow {
   t1_done: boolean
   t2_done: boolean
   t3_done: boolean
+  t4_done?: boolean
   tp1_done: boolean
   tp2_done: boolean
   tp3_done: boolean
   risk_cycle_started_at: number | null
   position_version: number | null
+  // v2 专属（v1 引擎不返回）
+  engine?: 'v1' | 'v2'
+  cycle_id?: string
+  risk?: number | null
+  tier_levels?: number[]
+  disaster_stop?: number | null
+  base_contracts?: number | null
+  updated_at?: number | null
+}
+
+export interface ProtectionActionRow {
+  ts: number
+  symbol: string
+  side: string
+  text: string
+  level: string
 }
 
 export interface ProtectionApiStats {
@@ -325,6 +342,16 @@ export interface ProtectionApiStats {
 
 export interface ProtectionConfig {
   enabled: boolean
+  engine_version?: 'v1' | 'v2'
+  dry_run?: boolean
+  v2_timeframe?: string
+  v2_poll_interval_sec?: number
+  tier_ratios?: number[]
+  tier_confirm_sec?: number[]
+  risk_min_pct?: number
+  risk_max_pct?: number
+  breakeven_trigger_r?: number
+  trailing_atr_mult?: number
   timeframe: string
   tp1_r_multiple: number
   tp2_r_multiple: number
@@ -354,9 +381,16 @@ export interface ProtectionStatus {
   started_at: number | null
   last_error: string | null
   timeframe: string | null
+  engine_version?: 'v1' | 'v2'
   positions: ProtectionPositionRow[]
   api: ProtectionApiStats
   config: ProtectionConfig
+  v2?: {
+    cycle_count: number
+    last_cycle_ts: number
+    recent_actions: ProtectionActionRow[]
+    dry_run: boolean
+  }
 }
 
 // ------------------------------------------------

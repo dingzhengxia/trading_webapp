@@ -25,7 +25,8 @@ from .paths import PROJECT_ROOT as _PROJECT_ROOT
 DB_PATH: Path = _PROJECT_ROOT / 'data' / 'app.db'
 
 # 允许使用的表名白名单，防止调用方拼接任意表名
-ALLOWED_TABLES = ('settings', 'coin_pools', 'signal_state', 'protection_state', 'open_history')
+ALLOWED_TABLES = ('settings', 'coin_pools', 'signal_state', 'protection_state',
+                  'open_history', 'protection_positions', 'protection_events')
 
 # 迁移用的旧 JSON 文件路径（由 config.py 注入，避免循环导入时仅作默认值）
 USER_SETTINGS_FILE = _PROJECT_ROOT / 'user_settings.json'
@@ -41,6 +42,9 @@ _CREATE_SQL = (
     "CREATE TABLE IF NOT EXISTS signal_state (key TEXT PRIMARY KEY, value TEXT)",
     "CREATE TABLE IF NOT EXISTS protection_state (key TEXT PRIMARY KEY, value TEXT)",
     "CREATE TABLE IF NOT EXISTS open_history (key TEXT PRIMARY KEY, value TEXT)",
+    # v2 仓位保护：一仓一行（symbol|side），避免整表 blob 并发覆盖；事件表做审计轨迹
+    "CREATE TABLE IF NOT EXISTS protection_positions (key TEXT PRIMARY KEY, value TEXT)",
+    "CREATE TABLE IF NOT EXISTS protection_events (key TEXT PRIMARY KEY, value TEXT)",
 )
 
 
@@ -104,6 +108,19 @@ def set_value(table: str, key: str, value) -> None:
         conn = _connect()
         try:
             conn.execute(f"INSERT OR REPLACE INTO {table} VALUES (?, ?)", (key, payload))
+            conn.commit()
+        finally:
+            conn.close()
+
+
+def delete_value(table: str, key: str) -> None:
+    """删除单个键（不存在时不报错）。"""
+    _check_table(table)
+    with _lock:
+        conn = _connect()
+        try:
+            key_col = _key_column(conn, table)
+            conn.execute(f"DELETE FROM {table} WHERE {key_col} = ?", (key,))
             conn.commit()
         finally:
             conn.close()

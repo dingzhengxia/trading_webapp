@@ -71,6 +71,12 @@ CLIENT_ALGO_PREFIX = "PM_WS_SL_"
 DEFAULT_CONFIG = {
     # 并入 WebApp 后默认关闭：只有前端「仓位保护」页打开开关才会轮询交易所
     "position_protection": {'enabled': False,
+ 'engine_version': 'v2',
+ 'dry_run': False,
+ 'v2_timeframe': '2h',
+ 'v2_poll_interval_sec': 3.0,
+ 'tier_ratios': [0.15, 0.20, 0.25, 0.40],
+ 'tier_confirm_sec': [30, 45, 60, 0],
  'timeframe': '2h',
  'ema_fast_period': 26,
  'ema_slow_period': 83,
