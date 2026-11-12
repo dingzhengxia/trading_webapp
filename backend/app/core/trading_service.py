@@ -268,6 +268,15 @@ class TradingService:
         }
         results: List[Dict[str, Any]] = []
 
+        # 任务一开始就落一条「进行中」记录，长任务也能在面板上看到；跑完用同 ID 更新结果
+        pending_items = [{'coin': item.get('coin'), 'side': item.get('side'),
+                          'target_value': item.get('value'), 'success': None}
+                         for item in order_plan]
+        pending_batch = record_batch('plan', '自动开仓', items=pending_items,
+                                     snapshot=snapshot,
+                                     allocations={'long': long_plan, 'short': short_plan})
+        pending_id = (pending_batch or {}).get('id')
+
         async with get_exchange_for_task() as exchange:
             async def worker(plan_item):
                 try:
@@ -285,8 +294,11 @@ class TradingService:
             try:
                 await self._run_task_loop(order_plan, worker, self.CONCURRENT_OPEN_TASKS, "自动开仓")
             finally:
-                record_batch('plan', '自动开仓', items=results, snapshot=snapshot,
-                             allocations={'long': long_plan, 'short': short_plan})
+                final_items = results or [
+                    {**item, 'success': False, 'error': '任务中断，无执行结果'} for item in pending_items]
+                record_batch('plan', '自动开仓', items=final_items, snapshot=snapshot,
+                             allocations={'long': long_plan, 'short': short_plan},
+                             record_id=pending_id)
 
     def dispatch_tasks(self, task_name: str, tasks_data: List[Tuple[str, float]], task_type: str,
                        config: Dict[str, Any], background_tasks: BackgroundTasks, request_id: Optional[str] = None):
@@ -414,6 +426,18 @@ class TradingService:
             position_map = {p.symbol: p.full_symbol for p in all_positions}
             results: List[Dict[str, Any]] = []
 
+            # 再平衡也是长任务：开始即落「进行中」记录，结束更新
+            pending_items = []
+            for order_item in plan.orders:
+                if order_item.action == 'CLOSE':
+                    pending_items.append({'coin': order_item.symbol, 'side': 'close',
+                                          'close_ratio': order_item.close_ratio, 'success': None})
+                elif order_item.action == 'OPEN':
+                    pending_items.append({'coin': order_item.symbol, 'side': order_item.side,
+                                          'target_value': order_item.value_to_trade, 'success': None})
+            pending_batch = record_batch('rebalance', '执行再平衡', items=pending_items)
+            pending_id = (pending_batch or {}).get('id')
+
             async def worker(order_item):
                 if self._stop_event.is_set():
                     return False
@@ -454,7 +478,9 @@ class TradingService:
             try:
                 await self._run_task_loop(plan.orders, worker, self.CONCURRENT_OPEN_TASKS, task_name)
             finally:
-                record_batch('rebalance', '执行再平衡', items=results)
+                final_items = results or [
+                    {**item, 'success': False, 'error': '任务中断，无执行结果'} for item in pending_items]
+                record_batch('rebalance', '执行再平衡', items=final_items, record_id=pending_id)
 
 
 trading_service = TradingService()

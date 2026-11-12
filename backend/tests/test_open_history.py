@@ -25,7 +25,7 @@ def test_record_batch_persists_snapshot_and_items(tmp_db):
         snapshot={'long_coin_list': ['AAPL', 'AMZN'], 'total_long_position_value': 5000},
         allocations={'long': {'AAPL': 2000.0, 'AMZN': 500.0}})
     assert rec is not None
-    assert rec['summary'] == {'total': 2, 'success': 1, 'failed': 1}
+    assert rec['summary'] == {'total': 2, 'success': 1, 'failed': 1, 'pending': 0}
 
     history = get_history()
     assert len(history) == 1
@@ -74,3 +74,73 @@ def test_corrupted_storage_returns_empty(tmp_db):
     database.set_value('open_history', HISTORY_KEY,
                        [None, "junk", {'id': 'x', 'ts': 'bad', 'items': []}])
     assert get_history()[0]['id'] == 'x'
+
+
+def test_record_batch_upsert_by_id(tmp_db):
+    """长任务：开始时先落「进行中」记录，跑完按同 ID 更新，不产生重复行。"""
+    pending = record_batch(
+        'plan', '自动开仓',
+        items=[{'coin': 'BTC', 'side': 'buy', 'target_value': 100.0, 'success': None},
+               {'coin': 'ETH', 'side': 'buy', 'target_value': 100.0, 'success': None}],
+        snapshot={'long_coin_list': ['BTC', 'ETH']})
+    assert pending is not None
+    assert pending['summary']['pending'] == 2
+
+    rid = pending['id']
+    updated = record_batch(
+        'plan', '自动开仓',
+        items=[{'coin': 'BTC', 'side': 'buy', 'target_value': 100.0, 'success': True},
+               {'coin': 'ETH', 'side': 'buy', 'target_value': 100.0, 'success': False,
+                'error': '下单失败'}],
+        record_id=rid)
+    assert updated is not None and updated['id'] == rid
+    assert updated['summary'] == {'total': 2, 'success': 1, 'failed': 1, 'pending': 0}
+
+    history = get_history()
+    assert len(history) == 1  # 更新而不是新增
+    assert history[0]['id'] == rid
+    assert history[0]['items'][1]['error'] == '下单失败'
+
+
+def test_record_batch_upsert_missing_id_creates_new(tmp_db):
+    """record_id 找不到（例如被环形清理）时按新增处理，不丢数据。"""
+    rec = record_batch('manual', '手动交易',
+                       items=[{'coin': 'SOL', 'side': 'buy', 'target_value': 50.0, 'success': True}],
+                       record_id='nonexistent-id')
+    assert rec is not None and rec['id'] == 'nonexistent-id'
+    assert len(get_history()) == 1
+
+
+def test_record_batch_upsert_by_id(tmp_db):
+    """长任务：开始时先落「进行中」记录，跑完按同 ID 更新，不产生重复行。"""
+    pending = record_batch(
+        'plan', '自动开仓',
+        items=[{'coin': 'BTC', 'side': 'buy', 'target_value': 100.0, 'success': None},
+               {'coin': 'ETH', 'side': 'buy', 'target_value': 100.0, 'success': None}],
+        snapshot={'long_coin_list': ['BTC', 'ETH']})
+    assert pending is not None
+    assert pending['summary']['pending'] == 2
+
+    rid = pending['id']
+    updated = record_batch(
+        'plan', '自动开仓',
+        items=[{'coin': 'BTC', 'side': 'buy', 'target_value': 100.0, 'success': True},
+               {'coin': 'ETH', 'side': 'buy', 'target_value': 100.0, 'success': False,
+                'error': '下单失败'}],
+        record_id=rid)
+    assert updated is not None and updated['id'] == rid
+    assert updated['summary'] == {'total': 2, 'success': 1, 'failed': 1, 'pending': 0}
+
+    history = get_history()
+    assert len(history) == 1  # 更新而不是新增
+    assert history[0]['id'] == rid
+    assert history[0]['items'][1]['error'] == '下单失败'
+
+
+def test_record_batch_upsert_missing_id_creates_new(tmp_db):
+    """record_id 找不到（例如被环形清理）时按新增处理，不丢数据。"""
+    rec = record_batch('manual', '手动交易',
+                       items=[{'coin': 'SOL', 'side': 'buy', 'target_value': 50.0, 'success': True}],
+                       record_id='nonexistent-id')
+    assert rec is not None and rec['id'] == 'nonexistent-id'
+    assert len(get_history()) == 1
