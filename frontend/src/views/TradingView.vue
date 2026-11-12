@@ -15,92 +15,57 @@
         </v-col>
       </v-row>
 
-      <v-row>
-        <v-col cols="12">
-          <PositionsTable
-            title="▲ 多头仓位"
-            side="long"
-            :positions="positionStore.longPositions"
-            :loading="positionStore.loading"
-            @refresh="positionStore.fetchPositions()"
-          />
-        </v-col>
-      </v-row>
-
-      <v-row>
-        <v-col cols="12">
-          <PositionsTable
-            title="▼ 空头仓位"
-            side="short"
-            :positions="positionStore.shortPositions"
-            :loading="positionStore.loading"
-            @refresh="positionStore.fetchPositions()"
-          />
-        </v-col>
-      </v-row>
+      <!-- 多空仓位（共享面板）：反手 / 平仓都在这里的每一行上操作 -->
+      <PositionsPanel />
     </v-container>
   </div>
 
-  <v-footer
-    style="
-      position: fixed;
-      bottom: 0;
-      right: 0;
-      z-index: 1000;
-      border-top: 1px solid rgba(255, 255, 255, 0.12);
-    "
-    class="pa-0"
-    :style="footerStyle"
-  >
-    <v-card flat tile class="d-flex align-center px-4 w-100" height="64px">
-      <v-spacer></v-spacer>
+  <AppDockFooter>
+    <template v-if="activeTab === 'general'">
+      <v-btn
+        color="info"
+        variant="tonal"
+        @click="handleSyncSlTp"
+        :disabled="uiStore.isRunning"
+        class="mr-3"
+      >
+        校准 SL/TP
+      </v-btn>
+      <v-btn
+        color="success"
+        variant="tonal"
+        prepend-icon="mdi-play"
+        @click="handleStartTrading"
+        :loading="uiStore.isRunning"
+        :disabled="uiStore.isRunning"
+      >
+        开始开仓
+      </v-btn>
+    </template>
 
-      <template v-if="activeTab === 'general'">
-        <v-btn
-          color="info"
-          variant="tonal"
-          @click="handleSyncSlTp"
-          :disabled="uiStore.isRunning"
-          class="mr-3"
-        >
-          校准 SL/TP
-        </v-btn>
-        <v-btn
-          color="success"
-          variant="tonal"
-          prepend-icon="mdi-play"
-          @click="handleStartTrading"
-          :loading="uiStore.isRunning"
-          :disabled="uiStore.isRunning"
-        >
-          开始开仓
-        </v-btn>
-      </template>
-
-      <template v-if="activeTab === 'rebalance'">
-        <v-btn
-          color="primary"
-          variant="tonal"
-          @click="onGenerateRebalancePlan"
-          :loading="isGeneratingPlan"
-          :disabled="uiStore.isRunning || isGeneratingPlan"
-        >
-          生成再平衡计划
-        </v-btn>
-      </template>
-    </v-card>
-  </v-footer>
+    <template v-if="activeTab === 'rebalance'">
+      <v-btn
+        color="primary"
+        variant="tonal"
+        @click="onGenerateRebalancePlan"
+        :loading="isGeneratingPlan"
+        :disabled="uiStore.isRunning || isGeneratingPlan"
+      >
+        生成再平衡计划
+      </v-btn>
+    </template>
+  </AppDockFooter>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue'
-import { useDisplay, useLayout } from 'vuetify'
+import { ref, onMounted } from 'vue'
 import { useUiStore } from '@/stores/uiStore'
 import { usePositionStore } from '@/stores/positionStore'
 import { useSettingsStore } from '@/stores/settingsStore'
 import ControlPanel from '@/components/ControlPanel.vue'
-import PositionsTable from '@/components/PositionsTable.vue'
+import PositionsPanel from '@/components/PositionsPanel.vue'
 import PnlSummary from '@/components/PnlSummary.vue'
+import AppDockFooter from '@/components/AppDockFooter.vue'
 import apiClient from '@/services/api'
 import type { RebalanceCriteria } from '@/models/types'
 import { getErrorMessage } from '@/utils/errors'
@@ -108,22 +73,9 @@ import { getErrorMessage } from '@/utils/errors'
 const uiStore = useUiStore()
 const positionStore = usePositionStore()
 const settingsStore = useSettingsStore()
-const vuetifyDisplay = useDisplay()
-const vuetifyLayout = useLayout()
 
 const activeTab = ref('general')
 const isGeneratingPlan = ref(false)
-
-const footerStyle = computed(() => {
-  const styles: { bottom: string; left: string } = {
-    bottom: '0px',
-    left: '0px',
-  }
-  if (vuetifyDisplay.mdAndUp.value) {
-    styles.left = `${vuetifyLayout.mainRect.value.left}px`
-  }
-  return styles
-})
 
 const handleStartTrading = () => {
   if (settingsStore.settings) {

@@ -7,6 +7,7 @@
   由 SignalStore 的异步消费 task 落库并触发自动开仓。
 """
 import queue
+import threading
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List
 from uuid import uuid4
@@ -15,7 +16,8 @@ from ..core import database
 
 ALERT_STATES_KEY = 'alerted_states'
 
-# 全局共享状态（线程安全操作由使用方保证）
+# 全局共享状态：dict 单项读写靠 GIL 原子，但遍历/清理需要锁（策略在线程池并发执行）
+_alert_states_lock = threading.Lock()
 alerted_states: Dict[str, datetime] = {}
 cached_top_symbols: List[str] = []
 
@@ -51,10 +53,11 @@ def save_alert_states() -> None:
     """把未过期的冷却状态写回 SQLite（单行原子写；原地清理过期条目）。"""
     try:
         now_utc = datetime.now(timezone.utc)
-        expired = [k for k, v in alerted_states.items() if v <= now_utc]
-        for key in expired:
-            del alerted_states[key]
-        payload = {k: v.isoformat() for k, v in alerted_states.items()}
+        with _alert_states_lock:
+            expired = [k for k, v in alerted_states.items() if v <= now_utc]
+            for key in expired:
+                del alerted_states[key]
+            payload = {k: v.isoformat() for k, v in alerted_states.items()}
         database.set_value('signal_state', ALERT_STATES_KEY, payload)
     except Exception as e:
         print(f"--- [ERROR] 保存信号冷却状态失败: {e} ---")

@@ -254,38 +254,48 @@ class SignalScanner:
             logger.info("本轮无目标币种（TopN 与静态列表均为空），跳过。")
             return {'scanned_symbols': 0, 'error_count': error_count, 'last_error': last_error}
 
-        # 3. K 线扫描：每个 (symbol, timeframe) 只拉一次
+        # 3. K 线扫描：同周期内并发拉取（REST 速率由 RestGuardian 统一限制：
+        #    并发 3 + 80ms 最小间隔 + 429/418 退避），每个 (symbol, timeframe) 只发一次请求
+        async def _scan_one(timeframe: str, full_symbol: str) -> List[str]:
+            """单个 (symbol, timeframe) 的拉取 + 全部策略计算；返回错误列表。"""
+            errors: List[str] = []
+            if self._stop_event.is_set():
+                return errors
+            try:
+                raw_ohlcv = await self._market_data.get_ohlcv(full_symbol, timeframe, ohlcv_limit)
+            except Exception as e:
+                return [f"获取 {full_symbol} {timeframe} K线失败: {e}"]
+            if not raw_ohlcv:
+                return errors
+            df = pd.DataFrame(raw_ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+            if df.empty:
+                return errors
+            for name, func, _limit, params, index in enabled:
+                if self._stop_event.is_set():
+                    break
+                try:
+                    # 策略会往 df 写指标列，逐策略拷贝隔离
+                    await asyncio.to_thread(func, full_symbol, timeframe, config, df.copy(), params, index)
+                except Exception as e:
+                    errors.append(f"策略 {name} @ {full_symbol} {timeframe}: {e}")
+            return errors
+
         for timeframe in timeframes:
             enabled = _enabled_param_sets(config, timeframe)
             if not enabled:
                 continue
             ohlcv_limit = max(limit for _, _, limit, _, _ in enabled)
-
-            for full_symbol in symbols:
-                if self._stop_event.is_set():
-                    break
-                try:
-                    raw_ohlcv = await self._market_data.get_ohlcv(full_symbol, timeframe, ohlcv_limit)
-                except Exception as e:
+            results = await asyncio.gather(
+                *(_scan_one(timeframe, symbol) for symbol in symbols),
+                return_exceptions=True,
+            )
+            for item in results:
+                if isinstance(item, BaseException):
                     error_count += 1
-                    last_error = f"获取 {full_symbol} {timeframe} K线失败: {e}"
-                    logger.warning(last_error)
-                    continue
-                if not raw_ohlcv:
-                    continue
-                df = pd.DataFrame(raw_ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-                if df.empty:
-                    continue
-
-                for name, func, _limit, params, index in enabled:
-                    # 单个策略异常只记录，不中断整轮
-                    try:
-                        await asyncio.to_thread(
-                            func, full_symbol, timeframe, config, df.copy(), params, index)
-                    except Exception as e:
-                        error_count += 1
-                        last_error = f"策略 {name} @ {full_symbol} {timeframe}: {e}"
-                        logger.error(last_error)
+                    last_error = str(item)
+                elif item:
+                    error_count += len(item)
+                    last_error = item[-1]
 
         return {'scanned_symbols': len(symbols), 'error_count': error_count, 'last_error': last_error}
 

@@ -1,0 +1,13 @@
+/* frontend/src/styles/selection-wrapper.css */
+/* 币种选择区的通用布局：多选胶囊换行 + 展开态限高滚动（CoinPoolsManager / ControlPanel 共用） */
+.selection-wrapper {
+  display: flex;
+  flex-wrap: wrap;
+  width: 100%;
+  align-items: center;
+}
+
+.selection-wrapper.is-expanded {
+  max-height: 150px;
+  overflow-y: auto;
+}

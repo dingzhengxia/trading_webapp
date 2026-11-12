@@ -12,6 +12,7 @@
 - 开关：全局 dingtalk_enabled（与报告共用）且 signal_dingtalk_enabled（信号子开关，默认开）。
 """
 import asyncio
+import time
 from typing import Any, Dict, List, Optional, Tuple
 
 from loguru import logger
@@ -21,6 +22,9 @@ from ..reports import dingtalk
 
 MAX_BATCH = 20          # 单条合并消息最多包含的信号数
 MAX_ITEM_CHARS = 1200   # 单条信号正文上限（超出截断，保留整体可读性）
+
+# 钉钉机器人限流 20 条/分钟：批间强制最小间隔（推送 task 串行排队，短时突发自动合并节奏）
+MIN_PUSH_INTERVAL_SEC = 5.0
 
 DEFAULT_PUSH_VOLUME_MULTIPLIER = 2.0  # 非静态币推送所需的成交量倍数默认值
 
@@ -135,9 +139,18 @@ def format_signal_batch(records: List[Dict[str, Any]]) -> Tuple[str, str]:
     return title, '\n'.join(parts)
 
 
+# 推送节流状态（同一事件循环内串行化；跨 loop 复用时惰性重建）
+_push_lock: Optional[asyncio.Lock] = None
+_last_push_at = 0.0
+
+
 async def push_signal_batch(records: List[Dict[str, Any]],
                             settings: Optional[Dict[str, Any]] = None) -> bool:
-    """推送一批信号到钉钉；任何异常都吞掉，绝不影响扫描/自动开仓主流程。"""
+    """推送一批信号到钉钉；任何异常都吞掉，绝不影响扫描/自动开仓主流程。
+
+    推送按 MIN_PUSH_INTERVAL_SEC 节流（钉钉机器人 20 条/分钟），短时多批自动排队。
+    """
+    global _push_lock, _last_push_at
     if not records:
         return False
     try:
@@ -148,8 +161,15 @@ async def push_signal_batch(records: List[Dict[str, Any]],
         if not records:
             logger.debug('📡 [信号] 本批信号全部未达推送量能门槛，跳过钉钉推送')
             return False
-        title, text = format_signal_batch(records)
-        sent = await dingtalk.send_markdown(title, text)
+        if _push_lock is None:
+            _push_lock = asyncio.Lock()
+        async with _push_lock:
+            wait = MIN_PUSH_INTERVAL_SEC - (time.monotonic() - _last_push_at)
+            if wait > 0:
+                await asyncio.sleep(wait)
+            title, text = format_signal_batch(records)
+            sent = await dingtalk.send_markdown(title, text)
+            _last_push_at = time.monotonic()
         if sent:
             logger.info(f"📡 [信号] 钉钉推送成功（{len(records)} 条）")
         else:

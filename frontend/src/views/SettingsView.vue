@@ -81,53 +81,24 @@
     </v-container>
   </div>
 
-  <!-- REFACTOR: 新增悬浮在底部的 v-footer -->
-  <v-footer
-    style="
-      position: fixed;
-      bottom: 0;
-      right: 0;
-      z-index: 1000;
-      border-top: 1px solid rgba(255, 255, 255, 0.12);
-    "
-    class="pa-0"
-    :style="footerStyle"
-  >
-    <v-card flat tile class="d-flex align-center px-4 w-100" height="64px">
-      <v-spacer></v-spacer>
-      <!-- REFACTOR: 将保存按钮移动到这里 -->
-      <v-btn color="success" variant="tonal" @click="handleSave">
-        <v-icon left>mdi-content-save</v-icon>
-        手动保存
-      </v-btn>
-    </v-card>
-  </v-footer>
+  <!-- 固定悬浮底栏（共享组件）：保存按钮 -->
+  <AppDockFooter>
+    <v-btn color="success" variant="tonal" @click="handleSave">
+      <v-icon left>mdi-content-save</v-icon>
+      手动保存
+    </v-btn>
+  </AppDockFooter>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue'
-import { useDisplay, useLayout } from 'vuetify' // REFACTOR: 导入 useDisplay/useLayout
+import { ref, onMounted } from 'vue'
 import { useSettingsStore } from '@/stores/settingsStore'
 import CoinPoolsManager from '@/components/CoinPoolsManager.vue'
+import AppDockFooter from '@/components/AppDockFooter.vue'
 
 const settingsStore = useSettingsStore()
 const activeTab = ref('general')
 const coinPoolsManagerRef = ref<InstanceType<typeof CoinPoolsManager> | null>(null)
-
-// REFACTOR: 增加用于动态计算 footer 位置的逻辑
-// useDisplay() 上没有 application，侧边栏宽度需从 useLayout().mainRect 获取
-const vuetifyDisplay = useDisplay()
-const vuetifyLayout = useLayout()
-const footerStyle = computed(() => {
-  const styles: { bottom: string; left: string } = {
-    bottom: vuetifyDisplay.smAndDown.value ? '56px' : '0px',
-    left: '0px',
-  }
-  if (vuetifyDisplay.mdAndUp.value) {
-    styles.left = `${vuetifyLayout.mainRect.value.left}px`
-  }
-  return styles
-})
 
 // handleSave 函数本身是正确的，无需修改
 const handleSave = () => {

@@ -87,27 +87,9 @@
       </v-dialog>
     </template>
 
-    <v-autocomplete
-      v-else-if="searchable"
-      :model-value="modelValue"
-      :items="items"
-      :item-title="itemTitle"
-      :item-value="itemValue"
-      :label="label"
-      :multiple="multiple"
-      :chips="multiple"
-      :closable-chips="multiple"
-      :disabled="disabled"
-      :clearable="clearable"
-      :density="density"
-      :variant="variant"
-      :hide-details="hideDetails"
-      :hint="hint"
-      :persistent-hint="!!hint"
-      @update:model-value="onSelect"
-    ></v-autocomplete>
-
-    <v-select
+    <!-- v-select 与 v-autocomplete 的 props 完全同构，用动态组件收敛为一份 -->
+    <component
+      :is="searchable ? 'v-autocomplete' : 'v-select'"
       v-else
       :model-value="modelValue"
       :items="items"
@@ -125,7 +107,7 @@
       :hint="hint"
       :persistent-hint="!!hint"
       @update:model-value="onSelect"
-    ></v-select>
+    ></component>
   </div>
 </template>
 

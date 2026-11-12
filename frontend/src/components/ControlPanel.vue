@@ -482,17 +482,6 @@ watch(
 </script>
 
 <style scoped>
-.selection-wrapper {
-  display: flex;
-  flex-wrap: wrap;
-  width: 100%;
-  align-items: center;
-}
-
-.selection-wrapper.is-expanded {
-  max-height: 150px;
-  overflow-y: auto;
-}
 .disabled-overlay {
   opacity: 0.5;
   pointer-events: none;

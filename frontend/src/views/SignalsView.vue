@@ -2,410 +2,370 @@
 <template>
   <div>
     <!-- 卡 1：信号扫描 -->
-    <v-row>
-      <v-col cols="12">
-        <v-card>
-          <v-card-title class="text-h6 d-flex align-center flex-wrap ga-2">
-            <v-icon start>mdi-radar</v-icon>
-            <span>信号扫描</span>
-            <v-spacer></v-spacer>
-            <v-chip size="small" variant="tonal" :color="status.running ? 'warning' : 'success'">
-              {{ status.running ? '扫描中' : '空闲' }}
+    <PageCard icon="mdi-radar" title="信号扫描" :error="status.last_error">
+      <template #badges>
+        <v-chip size="small" variant="tonal" :color="status.running ? 'warning' : 'success'">
+          {{ status.running ? '扫描中' : '空闲' }}
+        </v-chip>
+        <v-chip size="small" variant="tonal" :color="status.enabled ? 'success' : 'grey'">
+          {{ status.enabled ? '扫描已启用' : '扫描已停用' }}
+        </v-chip>
+      </template>
+
+      <v-row dense align="center">
+        <v-col cols="12" sm="6" md="3">
+          <v-switch
+            :model-value="status.enabled"
+            :loading="savingScan"
+            label="启用信号扫描"
+            color="primary"
+            inset
+            hide-details
+            @update:model-value="onToggleScan"
+          ></v-switch>
+        </v-col>
+        <v-col cols="12" md="9">
+          <div class="d-flex flex-wrap ga-2 align-center">
+            <v-chip size="small" variant="tonal" prepend-icon="mdi-clock-outline">
+              上次扫描: {{ formatTime(status.last_scan_at) }}
             </v-chip>
-            <v-chip size="small" variant="tonal" :color="status.enabled ? 'success' : 'grey'">
-              {{ status.enabled ? '扫描已启用' : '扫描已停用' }}
+            <v-chip size="small" variant="tonal" prepend-icon="mdi-timer-outline">
+              下次扫描: {{ formatTime(status.next_scan_at) }}
             </v-chip>
-          </v-card-title>
-          <v-divider></v-divider>
-          <v-card-text>
-            <v-row dense align="center">
-              <v-col cols="12" sm="6" md="3">
-                <v-switch
-                  :model-value="status.enabled"
-                  :loading="savingScan"
-                  label="启用信号扫描"
-                  color="primary"
-                  inset
-                  hide-details
-                  @update:model-value="onToggleScan"
-                ></v-switch>
-              </v-col>
-              <v-col cols="12" md="9">
-                <div class="d-flex flex-wrap ga-2 align-center">
-                  <v-chip size="small" variant="tonal" prepend-icon="mdi-clock-outline">
-                    上次扫描: {{ formatTime(status.last_scan_at) }}
-                  </v-chip>
-                  <v-chip size="small" variant="tonal" prepend-icon="mdi-timer-outline">
-                    下次扫描: {{ formatTime(status.next_scan_at) }}
-                  </v-chip>
-                  <v-chip size="small" variant="tonal" prepend-icon="mdi-format-list-bulleted">
-                    已扫描币种: {{ status.scanned_symbols }}
-                  </v-chip>
-                  <v-chip size="small" variant="tonal" prepend-icon="mdi-signal">
-                    累计信号: {{ status.emitted_count }}
-                  </v-chip>
-                  <v-chip
-                    size="small"
-                    variant="tonal"
-                    prepend-icon="mdi-robot"
-                    :color="status.auto_trade_enabled ? 'success' : 'grey'"
-                  >
-                    自动开仓: {{ status.auto_trade_enabled ? '已启用' : '已停用' }}
-                  </v-chip>
-                  <v-chip
-                    size="small"
-                    variant="tonal"
-                    :color="status.error_count > 0 ? 'error' : undefined"
-                    prepend-icon="mdi-alert-circle-outline"
-                  >
-                    错误数: {{ status.error_count }}
-                  </v-chip>
-                </div>
-              </v-col>
-            </v-row>
-
-            <v-alert
-              v-if="status.last_error"
-              type="error"
-              variant="tonal"
-              density="compact"
-              class="mt-3 text-caption"
-            >
-              最近一次扫描错误: {{ status.last_error }}
-            </v-alert>
-
-            <div class="d-flex flex-wrap align-center ga-2 mt-3">
-              <v-btn
-                color="primary"
-                variant="tonal"
-                prepend-icon="mdi-magnify-scan"
-                :loading="scanning"
-                :disabled="scanning"
-                @click="scanNow"
-              >
-                立即扫描
-              </v-btn>
-              <v-btn
-                color="warning"
-                variant="tonal"
-                prepend-icon="mdi-broom"
-                :loading="clearing"
-                :disabled="clearing || signals.length === 0"
-                @click="clearSignals"
-              >
-                清空信号
-              </v-btn>
-              <v-spacer></v-spacer>
-              <span class="text-caption text-grey">每 10 秒自动刷新</span>
-              <v-btn variant="text" prepend-icon="mdi-refresh" :loading="loading" @click="refresh">
-                刷新
-              </v-btn>
-            </div>
-          </v-card-text>
-        </v-card>
-      </v-col>
-    </v-row>
-
-    <!-- 卡 2：推送与开仓（统一编排：先推送后开仓） -->
-    <v-row>
-      <v-col cols="12">
-        <v-card class="mt-2">
-          <v-card-title class="text-h6 d-flex align-center flex-wrap ga-2">
-            <v-icon start>mdi-bell-ring-outline</v-icon>
-            <span>推送与开仓</span>
-            <v-spacer></v-spacer>
+            <v-chip size="small" variant="tonal" prepend-icon="mdi-format-list-bulleted">
+              已扫描币种: {{ status.scanned_symbols }}
+            </v-chip>
+            <v-chip size="small" variant="tonal" prepend-icon="mdi-signal">
+              累计信号: {{ status.emitted_count }}
+            </v-chip>
             <v-chip
               size="small"
               variant="tonal"
-              :color="autoTradeEnabled ? 'success' : 'grey'"
+              prepend-icon="mdi-robot"
+              :color="status.auto_trade_enabled ? 'success' : 'grey'"
             >
-              {{ autoTradeEnabled ? '自动开仓已启用' : '自动开仓已停用' }}
+              自动开仓: {{ status.auto_trade_enabled ? '已启用' : '已停用' }}
             </v-chip>
-          </v-card-title>
-          <v-divider></v-divider>
-          <v-card-text>
-            <!-- A. 钉钉推送 -->
-            <div class="d-flex align-center flex-wrap ga-2 mb-3">
-              <v-icon size="18" color="primary">mdi-bell-ring-outline</v-icon>
-              <span class="text-subtitle-1 font-weight-medium">钉钉推送</span>
-              <v-chip
-                size="x-small"
-                variant="tonal"
-                :color="pushStatus.dingtalk_configured ? 'success' : 'warning'"
-              >
-                {{ pushStatus.dingtalk_configured ? 'Webhook 已配置' : '未配置 DINGTALK_WEBHOOK_URL' }}
-              </v-chip>
-            </div>
-
-            <v-row dense align="center">
-              <v-col cols="12" sm="6" md="3">
-                <v-switch
-                  :model-value="pushStatus.signal_dingtalk_enabled"
-                  :loading="savingDingtalkPush"
-                  :disabled="!pushStatus.dingtalk_configured || !pushStatus.dingtalk_enabled"
-                  label="币种信号推送"
-                  color="primary"
-                  inset
-                  hide-details
-                  @update:model-value="onToggleDingtalkPush"
-                ></v-switch>
-              </v-col>
-              <v-col cols="12" sm="6" md="3">
-                <v-text-field
-                  v-model.number="pushVolumeInput"
-                  label="非静态币推送量能倍数"
-                  type="number"
-                  min="0"
-                  max="100"
-                  step="0.5"
-                  hint="当前量/动态基准 ≥ 该倍数才推送；0 = 不过滤"
-                  persistent-hint
-                  @update:model-value="pushVolumeDirty = true"
-                ></v-text-field>
-              </v-col>
-              <v-col cols="12" sm="6" md="2" class="d-flex justify-end">
-                <v-btn
-                  color="primary"
-                  variant="tonal"
-                  prepend-icon="mdi-content-save"
-                  :loading="savingPushConfig"
-                  @click="savePushVolume"
-                >
-                  保存
-                </v-btn>
-              </v-col>
-              <v-col cols="12" md="4">
-                <div class="text-caption text-grey">
-                  静态币（{{ pushStatus.static_symbols.join(' / ') || '无' }}）始终实时推送；
-                  其它币种需放量达标。此门槛只作用于推送，不影响信号列表与自动开仓。
-                </div>
-              </v-col>
-            </v-row>
-
-            <v-divider class="my-4"></v-divider>
-
-            <!-- B. 自动开仓 -->
-            <div class="d-flex align-center flex-wrap ga-2 mb-3">
-              <v-icon size="18" color="primary">mdi-robot</v-icon>
-              <span class="text-subtitle-1 font-weight-medium">信号自动开仓</span>
-              <span class="text-caption text-grey">最近自动开仓: {{ lastAutoOpenText }}</span>
-            </div>
-
-            <v-alert type="warning" variant="tonal" density="compact" class="mb-4 text-caption">
-              <div>· 信号为技术指标信号，不构成收益保证；自动开仓使用限价 post-only 单。</div>
-              <div>· 扫描与自动开仓默认关闭，开启后才会请求交易所行情并可能自动开仓（开仓后按现有 SL/TP 设置挂单）。</div>
-            </v-alert>
-
-            <v-row dense align="center" class="mb-1">
-              <v-col cols="12" sm="6" md="3">
-                <v-switch
-                  :model-value="autoTradeEnabled"
-                  :loading="savingAutoTrade"
-                  label="启用自动开仓"
-                  color="primary"
-                  inset
-                  hide-details
-                  @update:model-value="onToggleAutoTrade"
-                ></v-switch>
-              </v-col>
-            </v-row>
-
-            <v-row dense>
-              <v-col cols="12" md="6">
-                <SmartSelect
-                  v-model="autoForm.directions"
-                  :items="directionOptions"
-                  item-title="title"
-                  item-value="value"
-                  label="允许方向"
-                  multiple
-                  @update:model-value="markAutoFormDirty"
-                ></SmartSelect>
-              </v-col>
-              <v-col cols="12" md="6">
-                <SmartSelect
-                  v-model="autoForm.timeframes"
-                  :items="timeframeOptions"
-                  label="允许周期"
-                  multiple
-                  @update:model-value="markAutoFormDirty"
-                ></SmartSelect>
-              </v-col>
-              <v-col cols="12">
-                <SmartSelect
-                  v-model="autoForm.strategies"
-                  :items="strategyOptions"
-                  item-title="title"
-                  item-value="value"
-                  label="策略白名单（观望类策略不会自动开仓）"
-                  multiple
-                  @update:model-value="markAutoFormDirty"
-                ></SmartSelect>
-              </v-col>
-            </v-row>
-
-            <v-row dense class="mt-1">
-              <v-col cols="12" sm="6" md="4">
-                <v-text-field
-                  v-model.number="autoForm.confirmations"
-                  label="确认数"
-                  type="number"
-                  min="1"
-                  density="compact"
-                  variant="outlined"
-                  hide-details
-                  hint="同方向不同策略数达到该值才开仓"
-                  persistent-hint
-                  @update:model-value="markAutoFormDirty"
-                ></v-text-field>
-              </v-col>
-              <v-col cols="12" sm="6" md="4">
-                <v-text-field
-                  v-model.number="autoForm.confirmationWindowSeconds"
-                  label="确认窗口 (秒)"
-                  type="number"
-                  min="1"
-                  density="compact"
-                  variant="outlined"
-                  hide-details
-                  hint="统计确认数的回溯窗口"
-                  persistent-hint
-                  @update:model-value="markAutoFormDirty"
-                ></v-text-field>
-              </v-col>
-              <v-col cols="12" sm="6" md="4">
-                <v-text-field
-                  v-model.number="autoForm.cooldownSeconds"
-                  label="冷却时间 (秒)"
-                  type="number"
-                  min="0"
-                  density="compact"
-                  variant="outlined"
-                  hide-details
-                  hint="同币种自动开仓最小间隔"
-                  persistent-hint
-                  @update:model-value="markAutoFormDirty"
-                ></v-text-field>
-              </v-col>
-              <v-col cols="12" sm="6" md="4">
-                <v-text-field
-                  v-model.number="autoForm.valueUsd"
-                  label="单笔金额 (USD)"
-                  type="number"
-                  min="1"
-                  density="compact"
-                  variant="outlined"
-                  hide-details
-                  hint="每次自动开仓的目标名义价值"
-                  persistent-hint
-                  @update:model-value="markAutoFormDirty"
-                ></v-text-field>
-              </v-col>
-              <v-col cols="12" sm="6" md="4">
-                <v-text-field
-                  v-model.number="autoForm.maxPositions"
-                  label="最大持仓数"
-                  type="number"
-                  min="1"
-                  density="compact"
-                  variant="outlined"
-                  hide-details
-                  hint="当前持仓达到该值后不再自动开仓"
-                  persistent-hint
-                  @update:model-value="markAutoFormDirty"
-                ></v-text-field>
-              </v-col>
-            </v-row>
-
-            <div class="d-flex align-center mt-4">
-              <span v-if="!autoFormValid" class="text-caption text-error">
-                请检查：方向/策略/周期至少各选一项，数字参数需大于 0。
-              </span>
-              <v-spacer></v-spacer>
-              <v-btn
-                color="primary"
-                variant="tonal"
-                prepend-icon="mdi-content-save"
-                :loading="savingAuto"
-                :disabled="!autoFormValid || savingAuto"
-                @click="saveAutoConfig"
-              >
-                保存自动开仓配置
-              </v-btn>
-            </div>
-          </v-card-text>
-        </v-card>
-      </v-col>
-    </v-row>
-
-    <!-- 信号表 -->
-    <v-row>
-      <v-col cols="12">
-        <v-card class="mt-2">
-          <v-card-title class="text-h6 d-flex align-center flex-wrap ga-2">
-            <span>信号列表</span>
-            <v-chip size="small" variant="tonal">
-              显示 {{ filteredSignals.length }} / 共 {{ signals.length }} 条
+            <v-chip
+              size="small"
+              variant="tonal"
+              :color="status.error_count > 0 ? 'error' : undefined"
+              prepend-icon="mdi-alert-circle-outline"
+            >
+              错误数: {{ status.error_count }}
             </v-chip>
-            <v-spacer></v-spacer>
-            <v-btn-toggle
-              :model-value="directionFilter"
-              mandatory
+          </div>
+        </v-col>
+      </v-row>
+
+      <div class="d-flex flex-wrap align-center ga-2 mt-3">
+        <v-btn
+          color="primary"
+          variant="tonal"
+          prepend-icon="mdi-magnify-scan"
+          :loading="scanning"
+          :disabled="scanning"
+          @click="scanNow"
+        >
+          立即扫描
+        </v-btn>
+        <v-btn
+          color="warning"
+          variant="tonal"
+          prepend-icon="mdi-broom"
+          :loading="clearing"
+          :disabled="clearing || signals.length === 0"
+          @click="clearSignals"
+        >
+          清空信号
+        </v-btn>
+        <v-spacer></v-spacer>
+        <span class="text-caption text-grey">每 10 秒自动刷新</span>
+        <v-btn variant="text" prepend-icon="mdi-refresh" :loading="loading" @click="refresh">
+          刷新
+        </v-btn>
+      </div>
+    </PageCard>
+
+    <!-- 卡 2：推送与开仓（统一编排：先推送后开仓） -->
+    <PageCard icon="mdi-bell-ring-outline" title="推送与开仓" spaced>
+      <template #badges>
+        <v-chip size="small" variant="tonal" :color="autoTradeEnabled ? 'success' : 'grey'">
+      {{ autoTradeEnabled ? '自动开仓已启用' : '自动开仓已停用' }}
+        </v-chip>
+      </template>
+
+        <!-- A. 钉钉推送 -->
+        <div class="d-flex align-center flex-wrap ga-2 mb-3">
+          <v-icon size="18" color="primary">mdi-bell-ring-outline</v-icon>
+          <span class="text-subtitle-1 font-weight-medium">钉钉推送</span>
+          <v-chip
+            size="x-small"
+            variant="tonal"
+            :color="pushStatus.dingtalk_configured ? 'success' : 'warning'"
+          >
+            {{ pushStatus.dingtalk_configured ? 'Webhook 已配置' : '未配置 DINGTALK_WEBHOOK_URL' }}
+          </v-chip>
+        </div>
+
+        <v-row dense align="center">
+          <v-col cols="12" sm="6" md="3">
+            <v-switch
+              :model-value="pushStatus.signal_dingtalk_enabled"
+              :loading="savingDingtalkPush"
+              :disabled="!pushStatus.dingtalk_configured || !pushStatus.dingtalk_enabled"
+              label="币种信号推送"
+              color="primary"
+              inset
+              hide-details
+              @update:model-value="onToggleDingtalkPush"
+            ></v-switch>
+          </v-col>
+          <v-col cols="12" sm="6" md="3">
+            <v-text-field
+              v-model.number="pushVolumeInput"
+              label="非静态币推送量能倍数"
+              type="number"
+              min="0"
+              max="100"
+              step="0.5"
+              hint="当前量/动态基准 ≥ 该倍数才推送；0 = 不过滤"
+              persistent-hint
+              @update:model-value="pushVolumeDirty = true"
+            ></v-text-field>
+          </v-col>
+          <v-col cols="12" sm="6" md="2" class="d-flex justify-end">
+            <v-btn
+              color="primary"
+              variant="tonal"
+              prepend-icon="mdi-content-save"
+              :loading="savingPushConfig"
+              @click="savePushVolume"
+            >
+              保存
+            </v-btn>
+          </v-col>
+          <v-col cols="12" md="4">
+            <div class="text-caption text-grey">
+              静态币（{{ pushStatus.static_symbols.join(' / ') || '无' }}）始终实时推送；
+              其它币种需放量达标。此门槛只作用于推送，不影响信号列表与自动开仓。
+            </div>
+          </v-col>
+        </v-row>
+
+        <v-divider class="my-4"></v-divider>
+
+        <!-- B. 自动开仓 -->
+        <div class="d-flex align-center flex-wrap ga-2 mb-3">
+          <v-icon size="18" color="primary">mdi-robot</v-icon>
+          <span class="text-subtitle-1 font-weight-medium">信号自动开仓</span>
+          <span class="text-caption text-grey">最近自动开仓: {{ lastAutoOpenText }}</span>
+        </div>
+
+        <v-alert type="warning" variant="tonal" density="compact" class="mb-4 text-caption">
+          <div>· 信号为技术指标信号，不构成收益保证；自动开仓使用限价 post-only 单。</div>
+          <div>· 扫描与自动开仓默认关闭，开启后才会请求交易所行情并可能自动开仓（开仓后按现有 SL/TP 设置挂单）。</div>
+        </v-alert>
+
+        <v-row dense align="center" class="mb-1">
+          <v-col cols="12" sm="6" md="3">
+            <v-switch
+              :model-value="autoTradeEnabled"
+              :loading="savingAutoTrade"
+              label="启用自动开仓"
+              color="primary"
+              inset
+              hide-details
+              @update:model-value="onToggleAutoTrade"
+            ></v-switch>
+          </v-col>
+        </v-row>
+
+        <v-row dense>
+          <v-col cols="12" md="6">
+            <SmartSelect
+              v-model="autoForm.directions"
+              :items="directionOptions"
+              item-title="title"
+              item-value="value"
+              label="允许方向"
+              multiple
+              @update:model-value="markAutoFormDirty"
+            ></SmartSelect>
+          </v-col>
+          <v-col cols="12" md="6">
+            <SmartSelect
+              v-model="autoForm.timeframes"
+              :items="timeframeOptions"
+              label="允许周期"
+              multiple
+              @update:model-value="markAutoFormDirty"
+            ></SmartSelect>
+          </v-col>
+          <v-col cols="12">
+            <SmartSelect
+              v-model="autoForm.strategies"
+              :items="strategyOptions"
+              item-title="title"
+              item-value="value"
+              label="策略白名单（观望类策略不会自动开仓）"
+              multiple
+              @update:model-value="markAutoFormDirty"
+            ></SmartSelect>
+          </v-col>
+        </v-row>
+
+        <v-row dense class="mt-1">
+          <v-col cols="12" sm="6" md="4">
+            <v-text-field
+              v-model.number="autoForm.confirmations"
+              label="确认数"
+              type="number"
+              min="1"
               density="compact"
               variant="outlined"
-              divided
-              @update:model-value="onDirectionFilterChange"
-            >
-              <v-btn value="all" size="small">全部</v-btn>
-              <v-btn value="long" size="small">做多</v-btn>
-              <v-btn value="short" size="small">做空</v-btn>
-              <v-btn value="neutral" size="small">观望</v-btn>
-            </v-btn-toggle>
-          </v-card-title>
-          <v-divider></v-divider>
-          <v-card-text>
-            <v-table v-if="filteredSignals.length > 0" density="compact" class="signal-table">
-              <thead>
-                <tr>
-                  <th class="text-left">时间</th>
-                  <th class="text-left">币种</th>
-                  <th class="text-left">方向</th>
-                  <th class="text-left">策略</th>
-                  <th class="text-left">周期</th>
-                  <th class="text-left">价格</th>
-                  <th class="text-left">标题 / 说明</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-for="signal in filteredSignals" :key="signal.id">
-                  <td class="text-caption text-no-wrap">{{ formatTime(signal.created_at) }}</td>
-                  <td class="font-weight-medium text-no-wrap">{{ signal.symbol }}</td>
-                  <td>
-                    <v-chip
-                      size="small"
-                      variant="tonal"
-                      :color="directionColor(signal.direction)"
-                    >
-                      {{ directionLabel(signal.direction) }}
-                    </v-chip>
-                  </td>
-                  <td class="text-no-wrap">{{ strategyLabel(signal.strategy) }}</td>
-                  <td class="text-no-wrap">{{ signal.timeframe }}</td>
-                  <td class="text-no-wrap">${{ formatPrice(signal.price) }}</td>
-                  <td class="signal-title">
-                    <div class="text-body-2">{{ signal.title }}</div>
-                    <div class="text-caption text-grey signal-message">{{ plainMessage(signal.message) }}</div>
-                  </td>
-                </tr>
-              </tbody>
-            </v-table>
-            <v-alert v-else type="info" variant="text" density="compact" class="text-caption">
-              暂无信号。启用扫描后，命中的技术指标信号会显示在这里；也可点击「立即扫描」手动触发一次。
-            </v-alert>
-          </v-card-text>
-        </v-card>
-      </v-col>
-    </v-row>
+              hide-details
+              hint="同方向不同策略数达到该值才开仓"
+              persistent-hint
+              @update:model-value="markAutoFormDirty"
+            ></v-text-field>
+          </v-col>
+          <v-col cols="12" sm="6" md="4">
+            <v-text-field
+              v-model.number="autoForm.confirmationWindowSeconds"
+              label="确认窗口 (秒)"
+              type="number"
+              min="1"
+              density="compact"
+              variant="outlined"
+              hide-details
+              hint="统计确认数的回溯窗口"
+              persistent-hint
+              @update:model-value="markAutoFormDirty"
+            ></v-text-field>
+          </v-col>
+          <v-col cols="12" sm="6" md="4">
+            <v-text-field
+              v-model.number="autoForm.cooldownSeconds"
+              label="冷却时间 (秒)"
+              type="number"
+              min="0"
+              density="compact"
+              variant="outlined"
+              hide-details
+              hint="同币种自动开仓最小间隔"
+              persistent-hint
+              @update:model-value="markAutoFormDirty"
+            ></v-text-field>
+          </v-col>
+          <v-col cols="12" sm="6" md="4">
+            <v-text-field
+              v-model.number="autoForm.valueUsd"
+              label="单笔金额 (USD)"
+              type="number"
+              min="1"
+              density="compact"
+              variant="outlined"
+              hide-details
+              hint="每次自动开仓的目标名义价值"
+              persistent-hint
+              @update:model-value="markAutoFormDirty"
+            ></v-text-field>
+          </v-col>
+          <v-col cols="12" sm="6" md="4">
+            <v-text-field
+              v-model.number="autoForm.maxPositions"
+              label="最大持仓数"
+              type="number"
+              min="1"
+              density="compact"
+              variant="outlined"
+              hide-details
+              hint="当前持仓达到该值后不再自动开仓"
+              persistent-hint
+              @update:model-value="markAutoFormDirty"
+            ></v-text-field>
+          </v-col>
+        </v-row>
+
+        <div class="d-flex align-center mt-4">
+          <span v-if="!autoFormValid" class="text-caption text-error">
+            请检查：方向/策略/周期至少各选一项，数字参数需大于 0。
+          </span>
+          <v-spacer></v-spacer>
+          <v-btn
+            color="primary"
+            variant="tonal"
+            prepend-icon="mdi-content-save"
+            :loading="savingAuto"
+            :disabled="!autoFormValid || savingAuto"
+            @click="saveAutoConfig"
+          >
+            保存自动开仓配置
+          </v-btn>
+        </div>
+    </PageCard>
+
+    <!-- 卡 3：信号列表 -->
+    <PageCard title="信号列表" spaced>
+      <template #badges>
+        <v-chip size="small" variant="tonal">
+      显示 {{ filteredSignals.length }} / 共 {{ signals.length }} 条
+        </v-chip>
+        <v-btn-toggle
+      :model-value="directionFilter"
+      mandatory
+      density="compact"
+      variant="outlined"
+      divided
+      @update:model-value="onDirectionFilterChange"
+        >
+      <v-btn value="all" size="small">全部</v-btn>
+      <v-btn value="long" size="small">做多</v-btn>
+      <v-btn value="short" size="small">做空</v-btn>
+      <v-btn value="neutral" size="small">观望</v-btn>
+        </v-btn-toggle>
+      </template>
+
+        <v-table v-if="filteredSignals.length > 0" density="compact" class="signal-table">
+          <thead>
+            <tr>
+              <th class="text-left">时间</th>
+              <th class="text-left">币种</th>
+              <th class="text-left">方向</th>
+              <th class="text-left">策略</th>
+              <th class="text-left">周期</th>
+              <th class="text-left">价格</th>
+              <th class="text-left">标题 / 说明</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="signal in filteredSignals" :key="signal.id">
+              <td class="text-caption text-no-wrap">{{ formatTime(signal.created_at) }}</td>
+              <td class="font-weight-medium text-no-wrap">{{ signal.symbol }}</td>
+              <td>
+                <v-chip
+                  size="small"
+                  variant="tonal"
+                  :color="directionColor(signal.direction)"
+                >
+                  {{ directionLabel(signal.direction) }}
+                </v-chip>
+              </td>
+              <td class="text-no-wrap">{{ strategyLabel(signal.strategy) }}</td>
+              <td class="text-no-wrap">{{ signal.timeframe }}</td>
+              <td class="text-no-wrap">${{ formatPrice(signal.price) }}</td>
+              <td class="signal-title">
+                <div class="text-body-2">{{ signal.title }}</div>
+                <div class="text-caption text-grey signal-message">{{ plainMessage(signal.message) }}</div>
+              </td>
+            </tr>
+          </tbody>
+        </v-table>
+        <v-alert v-else type="info" variant="text" density="compact" class="text-caption">
+          暂无信号。启用扫描后，命中的技术指标信号会显示在这里；也可点击「立即扫描」手动触发一次。
+        </v-alert>
+    </PageCard>
   </div>
 </template>
 
@@ -425,6 +385,7 @@ import type {
 import { getErrorMessage, getErrorStatus } from '@/utils/errors'
 import { formatIsoTime as formatTime } from '@/utils/format'
 import SmartSelect from '@/components/SmartSelect.vue'
+import PageCard from '@/components/PageCard.vue'
 
 const POLL_INTERVAL_MS = 10000
 
