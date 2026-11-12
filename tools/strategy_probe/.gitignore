@@ -1,3 +1,6 @@
 # 回测生成物（脚本可复现，不入库）
 *_out.txt
 tcb_signals.csv
+gbdt_4h.txt
+pnl_summary.csv
+spot_rank.json
