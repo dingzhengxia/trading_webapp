@@ -162,6 +162,47 @@ def _is_new_cycle(state: Optional[Dict[str, Any]], side: str, entry: float,
     return False
 
 
+def _maybe_replan(state: Dict[str, Any], plan: Dict[str, Any], structure,
+                 atr: float, price: float, conf: Dict[str, Any],
+                 now: float) -> Optional[Tuple[Dict[str, Any], str]]:
+    """E 重估触发器：定时 / 波动率剧变，先到先触发；冷却期内一律跳过。
+
+    返回 (new_plan, reason) 或 None。约束与重算范围见 risk_model.replan_plan。
+    """
+    if not bool(conf.get('replan_enabled', True)):
+        return None
+    if int(_f(plan.get('replan_count'))) >= 30:
+        return None
+    reference = _f(plan.get('replanned_at')) or _f(plan.get('built_at'))
+    cooldown = max(0.0, _f(conf.get('replan_cooldown_sec'), 3600.0))
+    if reference > 0 and now - reference < cooldown:
+        return None
+
+    atr_plan = _f(plan.get('atr_at_plan'))
+    reason: Optional[str] = None
+    if atr > 0 and atr_plan > 0:
+        ratio = atr / atr_plan
+        if ratio >= max(1.0, _f(conf.get('replan_atr_up_ratio'), 1.5)):
+            reason = 'atr_jump'
+        elif 0 < ratio <= max(0.01, _f(conf.get('replan_atr_down_ratio'), 0.6)):
+            reason = 'atr_drop'
+    if reason is None and reference > 0 \
+            and now - reference >= max(cooldown, _f(conf.get('replan_interval_sec'), 86400.0)):
+        reason = 'scheduled'
+    if reason is None:
+        return None
+
+    try:
+        new_plan = risk_model.replan_plan(
+            plan, str(state.get('side') or plan.get('side') or 'long'),
+            structure, atr, price, conf, now,
+            risk_model._ints(state.get('tiers_done')), reason=reason)
+    except Exception as exc:  # noqa: BLE001 - 重估失败不影响本轮守护
+        logger.warning(f'replan 异常，跳过: {exc}')
+        return None
+    return (new_plan, reason) if new_plan else None
+
+
 async def _prepare(exchange, conf: Dict[str, Any], symbol: str, side: str,
                    pos: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     now = time.time()
@@ -222,6 +263,31 @@ async def _prepare(exchange, conf: Dict[str, Any], symbol: str, side: str,
     else:
         plan = state['plan']
         atr = atr or _f(plan.get('atr_at_plan'))
+        # E 结构重估：定时 / ATR 剧变触发（先到先触发），重算未触发档位线与灾难线。
+        # 约束（冻结/只外移/最小间距/R 锁定）全部在 risk_model.replan_plan 内实现；
+        # dry_run 时只记事件不落盘，便于先观察重算结果是否合理。
+        replan = _maybe_replan(state, plan, structure, atr, price, conf, now)
+        if replan is not None:
+            new_plan, reason = replan
+            old_levels = [_f(x) for x in (plan.get('levels') or [])]
+            old_disaster = _f(plan.get('disaster_stop'))
+            moved = ' '.join(
+                f'T{i + 1} {o:.6g}->{n:.6g}'
+                for i, (o, n) in enumerate(zip(old_levels, new_plan['levels'])) if o != n)
+            summary = f'重估#{new_plan["replan_count"]}({reason}): {moved or "档位未变"} ' \
+                      f'灾难 {old_disaster:.6g}->{new_plan["disaster_stop"]:.6g} ATR {plan.get("atr_at_plan"):.6g}->{atr:.6g}'
+            if bool(conf.get('dry_run', False)):
+                ledger.log_event(symbol, side, 'replan_dry', f'{summary}（dry_run，未落盘）',
+                                 level='info', old_levels=old_levels,
+                                 new_levels=new_plan['levels'])
+            else:
+                state['plan'] = new_plan
+                plan = new_plan
+                logger.info(f'[{symbol}/{side}] 🔁 {summary}')
+                ledger.log_event(symbol, side, 'replan', summary, level='info',
+                                 old_levels=old_levels, new_levels=new_plan['levels'],
+                                 old_disaster=old_disaster,
+                                 new_disaster=new_plan['disaster_stop'])
 
     # 双轨治理（每轮检查，幂等 + 60s 节流）：接管开仓端遗留 SL/TP/TS 条件单。
     # -1 = 守护端 STOP 未就位（标志不置，节流后下轮重试）；>=0 = 接管流程完成。
@@ -394,11 +460,18 @@ async def _apply_reduce(exchange, conf: Dict[str, Any], bundle: Dict[str, Any],
         int(_f(state.get('position_version'), 1)), state,
         max_retries=int(_f(conf.get('tier_maker_retries'), 3)),
         check_interval_sec=1.0, timeout_sec=10.0,
-        allow_market_fallback=not maker_only, maker_only=maker_only,
+        marketable_retries=int(_f(conf.get('tier_marketable_retries'), 3)),
+        # B 三级降级：maker(GTX) → 吃单价 → 市价兜底。市价只在最后一级，
+        # 不再因 T1/T2 永久禁市价（reduce_market_fallback 开关可关回旧行为）。
+        allow_market_fallback=bool(conf.get('reduce_market_fallback', True)),
+        maker_only=maker_only,
     )
 
     if after >= current - max(1e-12, current * 1e-8):
         logger.warning(f'[{symbol}] {tag} 未成交（{current} -> {after}），保留档位下轮重试')
+        # C 冷却分级：未成交 ≠ 交易所异常。行情在跑，未成交用短冷却快速重试；
+        # 交易所报错走异常路径，仍按 action_retry_cooldown_sec(90s) 冷却。
+        attempts[tag] = now - cooldown + max(1.0, _f(conf.get('reduce_retry_fast_sec'), 10.0))
         ledger.save(symbol, side, state)
         return
 

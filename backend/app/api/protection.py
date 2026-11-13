@@ -64,6 +64,12 @@ NUMERIC_RANGES: Dict[str, tuple] = {
     'action_retry_cooldown_sec': (0, 3600, False),
     'tier_maker_retries': (1, 10, True),
     'tier_maker_only_until': (0, 4, True),
+    'tier_marketable_retries': (0, 10, True),
+    'reduce_retry_fast_sec': (1, 600, False),
+    'replan_interval_sec': (0, 604800, False),
+    'replan_atr_up_ratio': (1.0, 10, False),
+    'replan_atr_down_ratio': (0.01, 1.0, False),
+    'replan_cooldown_sec': (0, 86400, False),
     'tp_keep_ratio': (0, 0.9, False),
     'emergency_check_interval_sec': (5, 300, False),
     'flat_confirm_sec': (0, 600, False),
@@ -114,6 +120,11 @@ def _validate(conf: Dict[str, Any]) -> None:
         raise HTTPException(status_code=400, detail="dry_run 必须是布尔值。")
     if 'take_over_external_stops' in conf and not isinstance(conf['take_over_external_stops'], bool):
         raise HTTPException(status_code=400, detail="take_over_external_stops 必须是布尔值。")
+    if 'replan_enabled' in conf and not isinstance(conf['replan_enabled'], bool):
+        raise HTTPException(status_code=400, detail="replan_enabled 必须是布尔值。")
+    for _bool_key in ('tp_one_level_per_round', 'reduce_market_fallback'):
+        if _bool_key in conf and not isinstance(conf[_bool_key], bool):
+            raise HTTPException(status_code=400, detail=f"{_bool_key} 必须是布尔值。")
 
     mode = conf.get('trailing_stop_mode')
     if mode is not None and str(mode).lower() not in ('step', 'continuous'):
@@ -150,6 +161,31 @@ def _validate(conf: Dict[str, Any]) -> None:
             conf['tier_confirm_sec'] = [max(0.0, float(x)) for x in confirm]
         except (TypeError, ValueError):
             raise HTTPException(status_code=400, detail="tier_confirm_sec 存在非数值元素。")
+
+    # A 破位深度分级：深度阈值数组（严格递增）与确认乘数数组（0~1 之间）
+    depths = conf.get('tier_fast_depth_atr')
+    if depths is not None:
+        if not isinstance(depths, (list, tuple)) or len(depths) != 3:
+            raise HTTPException(status_code=400, detail="tier_fast_depth_atr 必须是长度 3 的数组。")
+        try:
+            dvals = [float(x) for x in depths]
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="tier_fast_depth_atr 存在非数值元素。")
+        if not (0 < dvals[0] < dvals[1] < dvals[2]):
+            raise HTTPException(status_code=400, detail="tier_fast_depth_atr 必须严格递增且大于 0。")
+        conf['tier_fast_depth_atr'] = dvals
+
+    fmults = conf.get('tier_fast_confirm_mult')
+    if fmults is not None:
+        if not isinstance(fmults, (list, tuple)) or len(fmults) != 4:
+            raise HTTPException(status_code=400, detail="tier_fast_confirm_mult 必须是长度 4 的数组。")
+        try:
+            mvals = [float(x) for x in fmults]
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="tier_fast_confirm_mult 存在非数值元素。")
+        if any(not (0.0 <= v <= 1.0) for v in mvals):
+            raise HTTPException(status_code=400, detail="tier_fast_confirm_mult 每个乘数必须在 0~1 之间。")
+        conf['tier_fast_confirm_mult'] = mvals
 
     mults = conf.get('tp_r_multiples')
     if mults is not None:

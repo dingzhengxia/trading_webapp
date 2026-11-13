@@ -1,0 +1,35 @@
+{
+  "current_7_26_83": {
+    "events": 853,
+    "bounce_rate": 0.5826,
+    "random_bounce_rate": 0.5236,
+    "edge": 0.059,
+    "per_tier": {
+      "T1": 0.5667,
+      "T2": 0.5926,
+      "T3": 0.626
+    }
+  },
+  "short_5_13_34": {
+    "events": 1109,
+    "bounce_rate": 0.5753,
+    "random_bounce_rate": 0.5299,
+    "edge": 0.0454,
+    "per_tier": {
+      "T1": 0.5802,
+      "T2": 0.5703,
+      "T3": 0.5714
+    }
+  },
+  "long_12_48_120": {
+    "events": 638,
+    "bounce_rate": 0.594,
+    "random_bounce_rate": 0.5483,
+    "edge": 0.0457,
+    "per_tier": {
+      "T1": 0.5927,
+      "T2": 0.5893,
+      "T3": 0.6092
+    }
+  }
+}

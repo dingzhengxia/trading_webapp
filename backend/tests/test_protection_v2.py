@@ -168,11 +168,34 @@ def test_take_profit_hits_tp1_then_tp2():
 
 
 def test_take_profit_leaves_keep_ratio_when_gapped():
+    """跳空直接越过全部 TP：默认单轮单档（D），本轮只卖第一档，后续轮次逐档推进。"""
     state = _state()
     tp3 = state["plan"]["tp_prices"][2]
     actions = _apply(state, risk_model.decide(state, _snap(price=tp3 + 0.01, now=1000.0), CONF))
     reduce = [a for a in actions if a["type"] == "reduce"][0]
-    # 三个 TP 合计 85%，剩 15% 留给追踪止损
+    assert reduce["tps"] == [0]
+    assert reduce["ratio"] == pytest.approx(0.25)
+    # 价格维持高位，后续轮次继续卖 TP2/TP3（各 30%），合计仍是 85%
+    state["tp_done"] = [0]
+    actions = _apply(state, risk_model.decide(state, _snap(price=tp3 + 0.01, now=1003.0), CONF))
+    reduce = [a for a in actions if a["type"] == "reduce"][0]
+    assert reduce["tps"] == [1]
+    state["tp_done"] = [0, 1]
+    actions = _apply(state, risk_model.decide(state, _snap(price=tp3 + 0.01, now=1006.0), CONF))
+    reduce = [a for a in actions if a["type"] == "reduce"][0]
+    assert reduce["tps"] == [2]
+    assert reduce["ratio"] == pytest.approx(0.30)
+
+
+def test_take_profit_multi_level_merge_when_disabled():
+    """关闭 tp_one_level_per_round：恢复多档合并旧行为（85% 一轮打光）。"""
+    conf = dict(CONF)
+    conf["tp_one_level_per_round"] = False
+    state = _state()
+    tp3 = state["plan"]["tp_prices"][2]
+    actions = _apply(state, risk_model.decide(state, _snap(price=tp3 + 0.01, now=1000.0), conf))
+    reduce = [a for a in actions if a["type"] == "reduce"][0]
+    assert reduce["tps"] == [0, 1, 2]
     assert reduce["ratio"] == pytest.approx(0.85)
 
 

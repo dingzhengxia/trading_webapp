@@ -44,12 +44,27 @@ V2_DEFAULTS: Dict[str, Any] = {
     'tier_min_gap_atr': 0.8,
     # 每档的「持续确认」秒数；0 = 立即触发（灾难档）
     'tier_confirm_sec': [30, 45, 60, 0],
+    # 破位深度分级（A）：实时价越过档位线 X 个 ATR 时，按档衰减确认秒数。
+    # 深度 >= fast_depth_atr[k] -> 确认秒数 *= fast_confirm_mult[k+1]。
+    # 2026-11 历史标定（BTC/ETH/SOL/DOGE 1m 回放，tools/sl_calibration/）：
+    # 破 T1 后 30s 内继续深入 >=1.5 ATR 的概率 8%（T2 12%），p90 额外损失 1.4 ATR——
+    # 该尾部即急速破位，直接跳过确认；<0.5 ATR 的浅破位维持原确认防噪声。
+    'tier_fast_depth_atr': [0.5, 1.0, 1.5],
+    'tier_fast_confirm_mult': [1.0, 0.5, 0.25, 0.0],
     'risk_min_pct': 0.015,
     'risk_max_pct': 0.08,
     # 交易所 STOP 只做兜底：放在灾难线再往外 1.5 ATR，保证内部四档先动作
     'disaster_atr_buffer': 1.5,
     'tp_r_multiples': [1.0, 2.0, 3.0],
     'tp_ratios': [0.25, 0.30, 0.30],
+    # TP 单轮单档（D）：同一轮巡检最多触发一个 TP 档。
+    # 标定：首次触 TP 的 1m 里 ~50% 是插针（收盘回线下），且插针后 4h 内 93~96% 会再次触及——
+    # 单轮单档让插针只卖掉第一档、保留阶梯，真突破也只多等 3s/档。
+    'tp_one_level_per_round': True,
+    # 执行层（B/C）：
+    'tier_marketable_retries': 3,     # maker 失败后吃单价重试次数
+    'reduce_market_fallback': True,   # 吃单价也失败后允许市价兜底（三级降级最后一级）
+    'reduce_retry_fast_sec': 10.0,    # 减仓未成交的快速重试冷却（交易所异常仍用 90s）
     'breakeven_trigger_r': 0.5,
     'breakeven_buffer_pct': 0.002,
     'profit_lock_buffer_pct': 0.001,
@@ -67,6 +82,13 @@ V2_DEFAULTS: Dict[str, Any] = {
     'emergency_atr_period': 14,
     'emergency_structure_lookback': 4,
     'flat_confirm_sec': 30.0,
+    # E 结构重估（docs/v2-replan-design.md）：持仓期间周期性重算档位线/灾难线。
+    # 已触发档冻结、未触发档只许外移（评审定稿）、灾难线与现价保持 buffer*ATR。
+    'replan_enabled': True,
+    'replan_interval_sec': 86400.0,   # 定时触发：距上次重估/建仓 24h
+    'replan_atr_up_ratio': 1.5,       # 波动率放大触发
+    'replan_atr_down_ratio': 0.6,     # 波动率萎缩触发
+    'replan_cooldown_sec': 3600.0,    # 重估后 1h 内不再重估（防抖）
 }
 
 
@@ -225,6 +247,88 @@ def build_plan(side: str, entry: float, atr: float,
     }
 
 
+# ---------------------------------------------------------------------------
+# E 结构重估：持仓期间重算档位线与灾难线（docs/v2-replan-design.md）
+# ---------------------------------------------------------------------------
+def replan_plan(plan: Dict[str, Any], side: str, structure: Sequence[float],
+                atr: float, current_price: float, conf: Dict[str, Any],
+                now: float, tiers_done: Sequence[int],
+                reason: str = 'scheduled') -> Optional[Dict[str, Any]]:
+    """重算未触发档位线与灾难线，返回新的 plan 副本；无需/不安全重估时返回 None。
+
+    硬约束（评审定稿，逐条可单测）：
+    1. 已触发档位冻结，不参与重算；
+    2. 未触发档位只许外移（long：新线 <= 旧线；short 对称）——内移会在重算瞬间
+       造成「价格已在线外」的假破位，等于自动在回调低点触发减仓；
+    3. 档位间保持单调 + 最小间距；灾难线与现价保持 disaster_atr_buffer*ATR；
+    4. entry/risk/tp_prices 等 R 语义字段终身锁定，一律沿用旧 plan；
+    5. 重估本身只返回 plan，不发任何交易动作。
+    """
+    if not bool(conf.get('replan_enabled', True)):
+        return None
+    entry = _f(plan.get('entry'))
+    risk = _f(plan.get('risk'))
+    old_levels = [_f(x) for x in (plan.get('levels') or [])]
+    if entry <= 0 or risk <= 0 or atr <= 0 or current_price <= 0 or len(old_levels) != 4:
+        return None
+    if len(structure) != 3 or len(set(float(x) for x in structure)) < 2:
+        return None  # 结构退化（ATR 兜底路径），重算无意义
+    if int(_f(plan.get('replan_count'))) >= 30:
+        return None  # 异常熔断：正常 24h 一次远用不到
+
+    try:
+        fresh = build_plan(side, entry, atr, structure, conf, now=_f(plan.get('built_at')))
+    except Exception:
+        return None
+
+    done = set(_ints(tiers_done))
+    merged = list(old_levels)
+    for i in range(4):
+        if i in done:
+            continue  # 约束 1：已触发档冻结
+        new_lv = _f(fresh['levels'][i])
+        # 约束 2：只许外移（远离现价），内移沿用旧线
+        if side == 'long' and new_lv < merged[i]:
+            merged[i] = new_lv
+        elif side == 'short' and new_lv > merged[i]:
+            merged[i] = new_lv
+
+    # 约束 3：单调 + 最小间距（从浅到深逐档推；未触发档不得被推回内移方向）
+    unit = atr * max(0.1, _f(conf.get('tier_min_gap_atr'), 0.8))
+    for i in (1, 2, 3):
+        if side == 'long':
+            if merged[i] > merged[i - 1] - unit * 0.5:
+                merged[i] = merged[i - 1] - unit * 0.5
+            if i not in done and merged[i] > old_levels[i]:
+                merged[i] = old_levels[i]
+        else:
+            if merged[i] < merged[i - 1] + unit * 0.5:
+                merged[i] = merged[i - 1] + unit * 0.5
+            if i not in done and merged[i] < old_levels[i]:
+                merged[i] = old_levels[i]
+
+    # 灾难线：跟新 T4 重建，且与现价保持最小距离（防止重估把它拉到现价附近误杀全平）
+    buffer = max(0.0, _f(conf.get('disaster_atr_buffer'), 1.5))
+    if side == 'long':
+        disaster = min(merged[3] - atr * buffer, current_price - atr * buffer)
+    else:
+        disaster = max(merged[3] + atr * buffer, current_price + atr * buffer)
+
+    changed = merged != old_levels or abs(disaster - _f(plan.get('disaster_stop'))) > EPS
+    atr_changed = abs(atr - _f(plan.get('atr_at_plan'))) > atr * 0.01
+    if not changed and not atr_changed:
+        return None
+
+    new_plan = dict(plan)
+    new_plan['levels'] = [float(x) for x in merged]
+    new_plan['disaster_stop'] = float(disaster)
+    new_plan['atr_at_plan'] = float(atr)
+    new_plan['replanned_at'] = float(now)
+    new_plan['replan_count'] = int(_f(plan.get('replan_count'))) + 1
+    new_plan['replan_reason'] = str(reason)
+    return new_plan
+
+
 def new_state(cycle_id: str, side: str, entry: float, base_contracts: float,
               plan: Dict[str, Any], now: float) -> Dict[str, Any]:
     return {
@@ -302,7 +406,10 @@ def decide(state: Dict[str, Any], snap: Snapshot, conf: Dict[str, Any]) -> Dict[
             'patch': patch,
         }
 
-    # ---------- 2. 结构档位：实时价 + 持续确认 ----------
+    # ---------- 2. 结构档位：实时价 + 持续确认（深度分级加速，见 A） ----------
+    atr_now = _f(snap.atr) or _f(plan.get('atr_at_plan'))
+    fast_depths = _floats(conf.get('tier_fast_depth_atr'), V2_DEFAULTS['tier_fast_depth_atr'])
+    fast_mults = _floats(conf.get('tier_fast_confirm_mult'), V2_DEFAULTS['tier_fast_confirm_mult'])
     breached: List[int] = []
     for i, level in enumerate(levels):
         if i in tiers_done:
@@ -312,6 +419,12 @@ def decide(state: Dict[str, Any], snap: Snapshot, conf: Dict[str, Any]) -> Dict[
             pending.pop(str(i), None)  # 回到线内，确认计时清零
             continue
         confirm = confirm_secs[i] if i < len(confirm_secs) else 0.0
+        if confirm > 0 and atr_now > 0:
+            # 破位深度（ATR 归一）：越深确认越短，急速破位直接跳过
+            depth = ((level - price) if side == 'long' else (price - level)) / atr_now
+            for j, th in enumerate(fast_depths):
+                if depth >= th:
+                    confirm *= fast_mults[j + 1] if j + 1 < len(fast_mults) else 0.0
         if confirm <= 0:
             breached.append(i)
             continue
@@ -340,6 +453,9 @@ def decide(state: Dict[str, Any], snap: Snapshot, conf: Dict[str, Any]) -> Dict[
         hits = [i for i, p in enumerate(tp_prices)
                 if i not in tp_done and p > 0 and (
                     price >= p if side == 'long' else price <= p)]
+        # D 单轮单档：插针扫过多档时只卖第一档，保留阶梯等回触（标定 93~96% 4h 内回触）
+        if hits and bool(conf.get('tp_one_level_per_round', True)):
+            hits = hits[:1]
         if hits:
             ratio = sum(tp_ratios[i] for i in hits if i < len(tp_ratios))
             ratio = min(ratio, max(0.0, remaining - MIN_REMAINING))

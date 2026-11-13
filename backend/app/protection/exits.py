@@ -184,9 +184,17 @@ async def _market_reduce_and_confirm(exchange, symbol, side, position, requested
 
 async def _limit_reduce_with_maker_retry(
     exchange, symbol, side, position, requested_qty, reason, conf, expected_version, pos_state,
-    max_retries=15, check_interval_sec=1.0, timeout_sec=10.0, allow_market_fallback=True, maker_only=False
+    max_retries=15, check_interval_sec=1.0, timeout_sec=10.0, allow_market_fallback=True, maker_only=False,
+    marketable_retries=0,
 ):
-    """非紧急减仓：限价挂单循环。maker_only=True 时禁止市价保底。max_retries<=0 表示持续循环。"""
+    """非紧急减仓：三级降级挂单循环。
+
+    第一级 maker：限价挂在本方价（maker_only 时 GTX Post-Only，会被立即成交则拒单重试）；
+    第二级吃单价（marketable_retries>0 时）：限价挂到对手价立即吃单成交（taker）；
+    第三级市价：allow_market_fallback 时兜底全平剩余。
+    maker_only 只控制第一级是否用 GTX，不再禁止后两级（B：破位减仓不再永久禁市价）。
+    max_retries<=0 表示持续循环。
+    """
     raw_ps = _raw_position_side(position)
     before = _position_size(position)
     if int(pos_state.get("position_version", 0)) != expected_version:
@@ -270,13 +278,67 @@ async def _limit_reduce_with_maker_retry(
         if remaining_qty <= 0:
             break
 
+    if remaining_qty > 0 and int(marketable_retries) > 0:
+        # B 三级降级 · 第二级：吃单价（marketable limit）——挂到对手价立即成交。
+        crossing_params = dict(params)
+        crossing_params.pop("timeInForce", None)  # 去掉 GTX，允许吃单
+        for attempt in range(int(marketable_retries)):
+            if remaining_qty <= 0:
+                break
+            ticker = await _fetch_ticker(exchange, symbol, conf, priority="HIGH", force=True)
+            # 卖出挂 bid / 买入挂 ask：直接与对手价成交（taker）
+            if order_side == "sell":
+                limit_price = ticker.get("bid") or ticker.get("last") or ticker.get("close")
+            else:
+                limit_price = ticker.get("ask") or ticker.get("last") or ticker.get("close")
+            price_str = exchange.price_to_precision(symbol, limit_price)
+            q_str = exchange.amount_to_precision(symbol, remaining_qty)
+            logger.warning(
+                f"[{symbol}] ⚡ {reason}【吃单价】第 {attempt + 1}/{int(marketable_retries)} 次 | "
+                f"挂单价: {price_str} | 数量: {q_str}")
+            order_id = None
+            try:
+                order = await _rest(
+                    exchange, "create_limit_order", symbol, order_side, q_str, price_str,
+                    priority="HIGH", conf=conf, params=crossing_params
+                )
+                order_id = order.get("id")
+            except Exception as e:
+                logger.error(f"[{symbol}] 吃单价下发失败: {e}")
+                await asyncio.sleep(1)
+                continue
+            # 吃单价应立即成交；短暂确认 3 秒
+            for _ in range(3):
+                await asyncio.sleep(check_interval_sec)
+                try:
+                    fetched_order = await _rest(exchange, "fetch_order", order_id, symbol, priority="HIGH", conf=conf)
+                    status = str(fetched_order.get("status")).upper()
+                    filled = _f(fetched_order.get("filled"), 0.0)
+                    if status in ("CLOSED", "FILLED") or filled >= remaining_qty:
+                        remaining_qty = 0.0
+                        break
+                    if status == "CANCELED":
+                        remaining_qty = max(0.0, remaining_qty - filled)
+                        break
+                except Exception as e:
+                    logger.warning(f"[{symbol}] 查询吃单价状态异常: {e}")
+            if remaining_qty <= 0:
+                break
+            try:
+                await _rest(exchange, "cancel_order", order_id, symbol, priority="HIGH", conf=conf)
+                fetched_order = await _rest(exchange, "fetch_order", order_id, symbol, priority="HIGH", conf=conf)
+                remaining_qty = max(0.0, remaining_qty - _f(fetched_order.get("filled"), 0.0))
+                logger.info(f"[{symbol}] 吃单价未成交，撤单重试。剩余: {remaining_qty}")
+            except Exception as e:
+                logger.warning(f"[{symbol}] 撤销吃单价失败: {e}")
+
     if remaining_qty > 0 and allow_market_fallback:
-        logger.warning(f"[{symbol}] 限价单重试 {max_retries} 次后仍剩余 {remaining_qty}，启动市价单保底平仓")
+        logger.warning(f"[{symbol}] 限价与吃单价均未成交，剩余 {remaining_qty}，启动市价单保底平仓")
         await _market_reduce_and_confirm(
             exchange, symbol, side, position, remaining_qty, f"{reason}(保底市价)", conf, expected_version, pos_state
         )
     elif remaining_qty > 0:
-        logger.info(f"[{symbol}] 🔁 {reason} Maker挂单仍有 {remaining_qty} 未成交，保持循环挂单，不吃单。")
+        logger.info(f"[{symbol}] 🔁 {reason} 挂单仍有 {remaining_qty} 未成交，保持循环挂单，不吃单。")
 
     fresh = await _position_fresh(exchange, symbol, side, conf, priority="HIGH")
     after = _position_size(fresh)
