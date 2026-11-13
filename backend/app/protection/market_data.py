@@ -20,6 +20,43 @@ def _closed_df(rows):
     return df.iloc[:-1].copy()
 
 
+def _tradable_df(df, conf=None, period=14):
+    """剔除「静默 K 线」：成交量与振幅同时远低于该标的常态的 K 线。
+
+    股票代币（AAPL/TQQQ/NVDA…）在美股休市时段仍 24/7 报价，产出量极小、振幅极小的
+    K 线。它们把 ATR 与均量同时压到极低，使盘中一根正常回落成为「数倍 ATR」：
+    2026-11-13 TQQQ 实测 ATR 0.096（真实约 0.6），1.7% 的横盘波动即被判「放量加速」
+    市价全平；同日 AAPL 的 3×ATR 只有 0.63%，一根 0.67% 的回落同样被杀。
+
+    双条件同时满足才剔除，缺一不可：
+    · 只看量会误删「缩量插针」——量小但振幅大，是有效信息；
+    · 只看振幅会误删「低波动整理期」——振幅小但量正常，也是有效信息。
+    基准取该标的自身分布而非固定数值，所以加密、小币、高价股代币共用一套参数。
+    """
+    conf = conf or {}
+    min_keep = max(period + 2, int(_f(conf.get("tradable_min_bars"), 16)))
+    if len(df) < min_keep * 2:
+        return df  # 样本太短，分位数不可靠，不如不过滤
+    vol_ratio = _f(conf.get("tradable_volume_ratio"), 0.10)
+    range_ratio = _f(conf.get("tradable_range_ratio"), 0.25)
+    # 基准只在「有过成交」的 K 线上取分位：静默 K 线占多数时，连 75 分位都会被拉到 0，
+    # 过滤会整体失效（第一版即踩此坑：50 根休市 + 9 根盘前，vol_ref 直接算成 0）。
+    active = df[df["volume"] > 0]
+    if len(active) < min_keep:
+        return active  # 有成交的本来就少，除了零成交没什么可剔
+    vol_ref = float(active["volume"].quantile(0.75))
+    range_ref = float((active["high"] - active["low"]).quantile(0.75))
+    if vol_ref <= 0 or range_ref <= 0:
+        return df
+    rng = df["high"] - df["low"]
+    dead = (df["volume"] <= 0) | (
+        (df["volume"] < vol_ref * vol_ratio) & (rng < range_ref * range_ratio)
+    )
+    # 不在「剩余不足」时退回原序列：那等于把污染数据重新喂回统计量。剔除后剩多少
+    # 就返回多少，由调用方判断够不够（黑天鹅侧不够就不判定，EMA 侧会退化到 ATR 兜底）。
+    return df[~dead]
+
+
 def _atr_from_df(df, period):
     if len(df) < period + 1:
         return None
@@ -49,7 +86,7 @@ def _ema_value(series, period):
 
 
 def _ema_structure_from_rows(rows, fast_period=26, slow_period=83, atr_period=14,
-                             lookback=12, buffer_atr=0.50):
+                             lookback=12, buffer_atr=0.50, conf=None):
     """只使用已收盘K线计算 EMA + 结构位，避免当前未收盘K线造成假触发。"""
     df = _closed_df(rows)
     need = max(slow_period + 2, atr_period + 2, lookback + 2)
@@ -58,7 +95,12 @@ def _ema_structure_from_rows(rows, fast_period=26, slow_period=83, atr_period=14
 
     ema_fast = _ema_value(df["close"], fast_period)
     ema_slow = _ema_value(df["close"], slow_period)
-    atr = _atr_from_df(df, atr_period)
+    # ATR 用剔除静默 K 线后的序列：休市时段的「量小 + 振幅小」会把 ATR 压到真实值的
+    # 1/6，而 ATR 决定档位缓冲(tier_atr_buffer)、最小间距与灾难线位置——ATR 偏小等于
+    # 所有保护线整体贴到价格上，一次正常波动就逐档触发。
+    # EMA 仍用完整序列：EMA 需要连续时间轴，剔除会打乱间隔；且 120 根 2h 剔除约 70%
+    # 后不足 EMA83 所需的 85 根，直接算不出来。
+    atr = _atr_from_df(_tradable_df(df, conf, atr_period), atr_period)
     if not ema_fast or not ema_slow or not atr:
         raise RuntimeError("EMA/ATR 无效")
 
@@ -180,13 +222,11 @@ async def _emergency_signal(exchange, symbol, side, conf, live_rows=None):
 
     df = pd.DataFrame(rows, columns=["timestamp", "open", "high", "low", "close", "volume"])
     closed = df.iloc[:-1].copy()
-    # 股票代币等非 24h 合约在休市时段会产出 O=H=L=C、volume=0 的 K 线，
-    # 把 ATR 与 20 根均量同时拉到极低，导致盘中一次正常回调就被判成「放量加速」
-    # （2026-11-13 TQQQ 即在横盘中因 1.7% 回落被市价全平）。基准只用有成交的 K 线：
-    # 加密 24h 连续交易几乎没有零成交 K 线，此过滤对加密标的不产生实质影响。
-    traded = closed[closed["volume"] > 0]
+    # 基准统计量（ATR / 均量）只用「可交易 K 线」：零成交与「量小 + 振幅小」的静默
+    # K 线会被一并剔除，见 _tradable_df 的说明（2026-11-13 TQQQ/AAPL 误杀根因）。
+    traded = _tradable_df(closed, conf, period)
     if len(traded) < period + 2:
-        # 有成交 K 线不足（长休市/停牌/新上市）：此时任何 ATR 都是被零成交污染的，
+        # 可交易 K 线不足（长休市/停牌/新上市）：此时任何 ATR 都是被静默 K 线污染的，
         # 拿它判定等于随机开枪。宁可不动手——没有成交也就不存在需要躲的闪崩。
         return False, None
     atr = _atr_from_df(traded, period)

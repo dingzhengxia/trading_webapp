@@ -13,7 +13,8 @@ def _strategy_levels_from_rows(rows, conf):
     lookback = int(conf.get("structure_lookback", 12))
     return _ema_structure_from_rows(
         rows, fast_period=fast, slow_period=slow, atr_period=atr_period,
-        lookback=lookback, buffer_atr=float(conf.get("structure_buffer_atr", 0.50))
+        lookback=lookback, buffer_atr=float(conf.get("structure_buffer_atr", 0.50)),
+        conf=conf,
     )
 
 
