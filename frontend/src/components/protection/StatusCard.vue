@@ -9,9 +9,6 @@
       <v-chip size="small" variant="tonal" :color="status.enabled ? 'success' : 'grey'">
         {{ status.enabled ? '已启用' : '已停用' }}
       </v-chip>
-      <v-chip size="small" variant="tonal" :color="isV2 ? 'primary' : 'grey'">
-        {{ isV2 ? 'v2 引擎' : 'v1 引擎' }}
-      </v-chip>
       <v-chip v-if="isV2 && status.v2?.dry_run" size="small" variant="tonal" color="warning">
         演练模式
       </v-chip>

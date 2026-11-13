@@ -58,6 +58,16 @@
         class="mr-1 mobile-switch"
       ></v-switch>
       <v-btn
+        color="warning"
+        variant="outlined"
+        size="small"
+        @click="handleReverseAll"
+        :disabled="positions.length === 0"
+        prepend-icon="mdi-swap-horizontal-multiple"
+      >
+        批量反手 (全部)
+      </v-btn>
+      <v-btn
         color="error"
         variant="outlined"
         size="small"
@@ -243,6 +253,63 @@
         </v-card-actions>
       </v-card>
     </v-dialog>
+    <!-- 批量反手确认弹窗：本表全部仓位逐个先全平再反向开仓（限价 post-only） -->
+    <v-dialog v-model="batchReverseDialog" max-width="560" persistent>
+      <v-card>
+        <v-card-title class="text-subtitle-1 font-weight-medium">
+          <v-icon color="warning" class="mr-2">mdi-swap-horizontal-multiple</v-icon>
+          确认批量反手（{{ props.side === 'long' ? '多头' : '空头' }}全部）
+        </v-card-title>
+        <v-card-text>
+          <v-alert type="warning" variant="tonal" density="compact" class="mb-3">
+            将对下列 <strong>{{ batchReverseItems.length }}</strong> 个仓位逐一<strong>先全平、再反向开仓</strong>
+            （限价 post-only，有 USDC 合约自动走 USDC）。执行中不可撤销。
+          </v-alert>
+          <div
+            v-for="(item, index) in batchReverseItems"
+            :key="item.symbol"
+            class="d-flex align-center ga-3 py-1"
+          >
+            <span class="batch-reverse__symbol">{{ item.symbol }}</span>
+            <v-chip :color="directionTone(item.fromSide).color" size="x-small" label>
+              {{ directionTone(item.fromSide).label }}
+            </v-chip>
+            <v-icon size="small" class="text-medium-emphasis">mdi-arrow-right-bold</v-icon>
+            <v-chip :color="directionTone(item.toSide).color" size="x-small" label>
+              {{ directionTone(item.toSide).label }}
+            </v-chip>
+            <v-spacer></v-spacer>
+            <span class="text-caption text-medium-emphasis">现价 ${{ formatFixed(item.notional, 2) }}</span>
+            <v-text-field
+              v-model.number="item.value"
+              type="number"
+              min="1"
+              step="1"
+              label="目标价值 (USD)"
+              variant="outlined"
+              density="compact"
+              hide-details
+              class="batch-reverse__value"
+            ></v-text-field>
+          </div>
+          <div class="text-caption text-medium-emphasis mt-2">
+            目标价值已按当前名义价值预填，可逐项调整；后端会逐币校验（如该币多空并存则该项跳过并报错，不影响其它币）。
+          </div>
+        </v-card-text>
+        <v-card-actions>
+          <v-spacer></v-spacer>
+          <v-btn variant="text" @click="batchReverseDialog = false">取消</v-btn>
+          <v-btn
+            color="warning"
+            variant="tonal"
+            :disabled="!batchReverseValid || uiStore.isRunning"
+            @click="confirmBatchReverse"
+          >
+            确认批量反手
+          </v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
   </v-card>
 </template>
 
@@ -350,6 +417,44 @@ const confirmReverse = () => {
   reverseDialog.value = false
 }
 
+// --- 批量反手（本表 side 全部仓位：先全平、再反向开仓，一次请求下发全部 items） ---
+type BatchReverseItem = { symbol: string; fromSide: 'long' | 'short'; toSide: 'long' | 'short'; notional: number; value: number }
+const batchReverseDialog = ref(false)
+const batchReverseItems = ref<BatchReverseItem[]>([])
+
+const batchReverseValid = computed(() =>
+  batchReverseItems.value.length > 0 && batchReverseItems.value.every((item) => item.value > 0),
+)
+
+const handleReverseAll = () => {
+  batchReverseItems.value = props.positions.map((position) => ({
+    symbol: position.full_symbol,
+    fromSide: position.side,
+    toSide: position.side === 'long' ? 'short' : 'long',
+    notional: position.notional,
+    value: Math.max(1, Math.round(position.notional * 100) / 100),
+  }))
+  batchReverseDialog.value = true
+}
+
+const confirmBatchReverse = () => {
+  if (!batchReverseValid.value) return
+  const count = batchReverseItems.value.length
+  uiStore.launchTask(
+    ENDPOINTS.tradingManual,
+    {
+      items: batchReverseItems.value.map((item) => ({
+        symbol: item.symbol,
+        action: 'reverse',
+        value: Number(item.value),
+      })),
+    },
+    `批量反手 ${props.side === 'long' ? '多头' : '空头'} ×${count}`,
+    1,
+  )
+  batchReverseDialog.value = false
+}
+
 const headers: TDataTableHeader[] = [
   { title: '合约', key: 'full_symbol', sortable: true, width: '20%' },
   { title: '名义价值', key: 'notional', sortable: true, width: '15%' },
@@ -408,5 +513,17 @@ const headers: TDataTableHeader[] = [
 .mobile-switch {
   flex: 0 0 auto;
   transform: translateY(-4px);
+}
+
+/* 批量反手弹窗：币种不挤压、价值输入固定宽 */
+.batch-reverse__symbol {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.batch-reverse__value {
+  flex: 0 0 130px;
 }
 </style>

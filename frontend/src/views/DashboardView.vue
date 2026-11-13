@@ -133,9 +133,6 @@
       <div v-else-if="!protectionStatus" class="pa-4 text-caption text-medium-emphasis">
         风控状态获取失败或加载中，请检查后端服务。
       </div>
-      <div v-else-if="!protectionIsV2" class="pa-4 text-caption text-medium-emphasis">
-        当前为 v1 引擎，不提供动作轨迹；切到 v2 后这里会显示最近的减仓 / 止盈动作。
-      </div>
       <div v-else class="pa-4 text-caption text-medium-emphasis">
         最近没有触发减仓 / 止盈，引擎只在上移止损时保持安静。
       </div>
@@ -194,7 +191,6 @@ const totalNotional = computed(() => positionStore.longNotional + positionStore.
 // 连接健康度直接复用 uiStore 的既有状态色推导（已连接 / 准备就绪 / 任务运行中均视为正常）
 const connectionOk = computed(() => uiStore.statusColor !== 'error')
 
-const protectionIsV2 = computed(() => (protectionStatus.value?.engine_version ?? 'v2') === 'v2')
 const recentActions = computed<ProtectionActionRow[]>(
   () => protectionStatus.value?.v2?.recent_actions?.slice(0, 3) ?? [],
 )

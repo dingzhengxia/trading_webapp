@@ -1,6 +1,5 @@
 <!-- frontend/src/components/protection/ConfigForm.vue -->
-<!-- 参数设置：控件收进两组折叠面板（v2 分档参数 / 执行开关），标题行带当前值摘要。
-     v1 专属的 TP 阶梯与结构回看参数已随 v1 参数组移除（守护端自动化，无需手配）。
+<!-- 参数设置：控件收进两组折叠面板（分档参数 / 执行开关），标题行带当前值摘要。
      保存只允许走 useProtectionConfig.saveConfig（配置域唯一写路径）。 -->
 <template>
   <PageCard icon="mdi-tune" title="参数设置" spaced>
@@ -18,28 +17,21 @@
     </template>
 
     <v-expansion-panels>
-      <!-- 组 1：v2 分档参数（结构 + ATR 四档） -->
+      <!-- 组 1：分档参数（结构 + ATR 四档） -->
       <v-expansion-panel>
         <v-expansion-panel-title>
           <div class="d-flex flex-wrap align-baseline ga-2">
-            <span class="text-subtitle-2 font-weight-medium">v2 分档参数</span>
-            <span class="text-caption text-medium-emphasis">{{ v2Summary }}</span>
+            <span class="text-subtitle-2 font-weight-medium">分档参数</span>
+            <span class="text-caption text-medium-emphasis">{{ tierSummary }}</span>
           </div>
         </v-expansion-panel-title>
         <v-expansion-panel-text>
           <v-row dense>
             <v-col cols="12" sm="6" md="3">
               <SmartSelect
-                v-model="form.engine_version"
-                :items="engineVersions"
-                label="风控引擎版本"
-              ></SmartSelect>
-            </v-col>
-            <v-col cols="12" sm="6" md="3">
-              <SmartSelect
                 v-model="form.v2_timeframe"
                 :items="timeframes"
-                label="v2 结构判定周期"
+                label="结构判定周期"
               ></SmartSelect>
             </v-col>
             <v-col cols="12" sm="6" md="3">
@@ -258,16 +250,11 @@ const { form, saving, saveConfig } = useProtectionConfig()
 
 const timeframes = ['15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d']
 
-const engineVersions = [
-  { title: 'v2（四档结构 + 一仓一行账本）', value: 'v2' },
-  { title: 'v1（旧引擎，仅回滚用）', value: 'v1' },
-]
-
 // ---- 折叠面板标题行的当前值摘要（收起状态也能读到关键值） ----
 const onOff = (value: boolean): string => (value ? '开' : '关')
-const v2Summary = computed(
+const tierSummary = computed(
   () =>
-    `引擎 ${form.engine_version.toUpperCase()} / 风险 ${form.risk_min_pct}–${form.risk_max_pct} / 追踪 ${form.trailing_atr_mult} ATR / 巡检 ${form.v2_poll_interval_sec}s`,
+    `风险 ${form.risk_min_pct}–${form.risk_max_pct} / 追踪 ${form.trailing_atr_mult} ATR / 巡检 ${form.v2_poll_interval_sec}s`,
 )
 const switchSummary = computed(
   () =>
