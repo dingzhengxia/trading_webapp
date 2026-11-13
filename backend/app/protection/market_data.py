@@ -169,7 +169,7 @@ async def _emergency_signal(exchange, symbol, side, conf, live_rows=None):
         return False, None
     period = int(conf.get("emergency_atr_period", 14))
     mult = float(conf.get("emergency_atr_multiplier", 3.0))
-    volmult = float(conf.get("emergency_vol_multiplier", 1.0))
+    volmult = float(conf.get("emergency_vol_multiplier", 3.0))
     lookback = int(conf.get("emergency_structure_lookback", 4))
     limit = max(period + lookback + 25, 60)
 
@@ -179,11 +179,21 @@ async def _emergency_signal(exchange, symbol, side, conf, live_rows=None):
 
     df = pd.DataFrame(rows, columns=["timestamp", "open", "high", "low", "close", "volume"])
     closed = df.iloc[:-1].copy()
-    atr = _atr_from_df(closed, period)
+    # 股票代币等非 24h 合约在休市时段会产出 O=H=L=C、volume=0 的 K 线，
+    # 把 ATR 与 20 根均量同时拉到极低，导致盘中一次正常回调就被判成「放量加速」
+    # （2026-11-13 TQQQ 即在横盘中因 1.7% 回落被市价全平）。基准只用有成交的 K 线：
+    # 加密 24h 连续交易几乎没有零成交 K 线，此过滤对加密标的不产生实质影响。
+    traded = closed[closed["volume"] > 0]
+    if len(traded) < period + 2:
+        # 有成交 K 线不足（长休市/停牌/新上市）：此时任何 ATR 都是被零成交污染的，
+        # 拿它判定等于随机开枪。宁可不动手——没有成交也就不存在需要躲的闪崩。
+        return False, None
+    atr = _atr_from_df(traded, period)
     if not atr:
         return False, None
 
-    vol_ma = closed["volume"].rolling(20).mean().iloc[-1]
+    # 窗口自适应：过滤后可能不足 20 根，固定 20 会让 vol_ma 变 NaN、放量分支永不触发
+    vol_ma = traded["volume"].rolling(min(20, len(traded))).mean().iloc[-1]
 
     live = df.iloc[-1]
     ws_price = float(live["close"])

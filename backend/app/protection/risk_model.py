@@ -81,6 +81,9 @@ V2_DEFAULTS: Dict[str, Any] = {
     'emergency_atr_multiplier': 3.0,
     'emergency_atr_period': 14,
     'emergency_structure_lookback': 4,
+    # 「放量」门槛：本根 15m 量需超过过去 20 根（有成交 K 线）均量的倍数。
+    # 原默认 1.0 等于「高于平均即算放量」，几乎不过滤——2026-11-13 TQQQ/NVDA 误杀即由此来。
+    'emergency_vol_multiplier': 3.0,
     'flat_confirm_sec': 30.0,
     # E 结构重估（docs/v2-replan-design.md）：持仓期间周期性重算档位线/灾难线。
     # 已触发档冻结、未触发档只许外移（评审定稿）、灾难线与现价保持 buffer*ATR。

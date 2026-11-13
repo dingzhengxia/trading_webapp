@@ -388,7 +388,11 @@ async def _check_emergency(exchange, conf: Dict[str, Any], symbol: str, side: st
     ok, _ = await engine._two_source_price_ok(exchange, symbol, details.get('ws_price', 0), side, conf)
     if not ok:
         return None
-    reason = f"黑天鹅 {details.get('reason', '异常波动')}"
+    # 带上实际位移与阈值：出问题时这一条就能自证，不必再翻容器日志
+    reason = (
+        f"黑天鹅 {details.get('reason', '异常波动')}"
+        f"（本根位移 {_f(details.get('move')):.4g} / 阈值 {_f(details.get('threshold')):.4g}）"
+    )
     return {'type': 'exit', 'ratio': 1.0, 'tag': 'emergency', 'level': 'error', 'reason': reason}
 
 
@@ -437,12 +441,26 @@ async def _apply_reduce(exchange, conf: Dict[str, Any], bundle: Dict[str, Any],
     base = _f(state.get('base_contracts'), current) or current
 
     if act['type'] == 'exit' or _f(act.get('ratio')) >= 0.999:
+        reason = str(act.get('reason') or '保护性全平')
         success, _ = await engine._full_exit_with_revalidation(
-            exchange, symbol, side, fresh, act.get('reason', '保护性全平'), conf, state)
+            exchange, symbol, side, fresh, reason, conf, state)
         if success:
-            ledger.log_event(symbol, side, 'exit', act.get('reason', '全平'), level='error')
+            ledger.log_event(symbol, side, 'exit', reason, level='error',
+                             before=current, after=0.0, tag=tag)
             ledger.delete(symbol, side)
-            V2.note_action(symbol, side, act.get('reason', '全平'), 'error')
+            V2.note_action(symbol, side, reason, 'error')
+            # 全平是仓位保护里最重的动作，必须外发：此前这里只写台账，
+            # 钉钉与前端日志都收不到，用户只能事后从交易所账单里发现仓位没了。
+            send_alert(conf, f"风控警告: {reason}",
+                       f"[{symbol}] {side} 已市价全平 {current:.6g} → 0", symbol=symbol)
+        else:
+            # 全平失败 = 仓位仍在裸奔，同样必须外发，不能静默
+            logger.error(f'[{symbol}] 全平未完成（{reason}），仓位仍在 {current:.6g}，下轮重试')
+            ledger.log_event(symbol, side, 'error', f'{reason} 全平未完成，仓位仍为 {current:.6g}',
+                             level='error', before=current, tag=tag)
+            send_alert(conf, f"风控警告: {reason} 全平未完成",
+                       f"[{symbol}] {side} 全平未成交，仓位仍为 {current:.6g}，请人工确认",
+                       symbol=symbol)
         return
 
     qty = min(current, base * _f(act.get('ratio')))
