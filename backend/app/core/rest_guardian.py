@@ -18,6 +18,7 @@ import random
 import time
 from typing import Any, Callable, Dict, Optional
 
+import ccxt.async_support as ccxt  # 仅用异常类型做错误分类，不发网络请求
 from loguru import logger
 
 DEFAULT_API_LIMIT: Dict[str, Any] = {
@@ -30,6 +31,34 @@ DEFAULT_API_LIMIT: Dict[str, Any] = {
     "api_429_base_backoff_sec": 2,
     "api_429_max_backoff_sec": 30,
 }
+
+# 交易所业务错误的文本兜底（fake/旧实现抛普通 Exception 时仍能识别）。
+# 这些错误是「订单/参数层面」的确定性拒绝：重试结果必然相同，且不代表交易所故障。
+BUSINESS_ERROR_MARKERS = (
+    "-2011", "unknown order sent",   # 撤单打空：订单已成交/已撤销
+    "-2013", "order does not exist", # 订单不存在
+    "-1013", "-1021",                # 价格/时间戳等参数类业务错误
+    "order would immediately trigger",
+    "-4164", "notional",             # 名义价值过小等下单参数拒绝
+)
+
+
+def _is_business_error(exc: Exception, text: str, is_rate_limit: bool) -> bool:
+    """判断是否交易所业务错误（非故障、非限流）。
+
+    业务错误不计入熔断计数、不重试——否则一次撤单打空（-2011）×
+    调用方重试就能把断路器打到 OPEN，反向阻断正常下单（本末倒置）。
+    """
+    if is_rate_limit:
+        return False
+    try:
+        # ccxt 的 ExchangeError = 交易所明确返回的错误响应（业务层拒绝）；
+        # NetworkError/Timeout 是它的兄弟分支，不会命中。
+        if isinstance(exc, ccxt.ExchangeError):
+            return True
+    except Exception:  # noqa: BLE001 - 类型判断失败时退回文本匹配
+        pass
+    return any(marker in text for marker in BUSINESS_ERROR_MARKERS)
 
 
 class CircuitBreakerException(Exception):
@@ -159,13 +188,20 @@ class RestGuardian:
                 self.failures = 0
                 return result
 
-            except Exception as exc:  # noqa: BLE001 - 需要分类 429/418
+            except Exception as exc:  # noqa: BLE001 - 需要分类 429/418/业务错误
                 last_exc = exc
-                self.failures += 1
                 self.error_count += 1
                 text = str(exc).lower()
                 is_429 = "429" in text or "too many requests" in text or "rate limit" in text
                 is_418 = "418" in text or "ip banned" in text
+
+                # 业务错误（订单不存在/参数拒绝等）：重试结果确定相同，
+                # 立即抛给调用方；不计入熔断计数，绝不因撤单打空而熔断交易链路。
+                if _is_business_error(exc, text, is_429 or is_418):
+                    raise
+
+                # 网络/限流类故障才计入熔断连续失败计数。
+                self.failures += 1
 
                 if is_418:
                     cool_sec = max(1.0, float(merged["api_418_cooldown_sec"]))

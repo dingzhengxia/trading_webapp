@@ -142,3 +142,70 @@ def test_418_long_cooldown(fast_sleep):
         asyncio.run(guardian.call(banned))
     # 418 冷却 60s > 普通 429 退避
     assert guardian.cooldown_until - time.monotonic() > 50
+
+
+# ---------------------------------------------------------------------------
+# 业务错误分类（-2011 撤单打空等）：不计熔断、不重试
+# ---------------------------------------------------------------------------
+def test_business_error_no_retry_no_failure(fast_sleep):
+    """-2011 撤单打空：确定性业务错误，只调 1 次（不重试）、不计 failures。"""
+    guardian = RestGuardian({"api_min_interval_sec": 0, "api_max_retries": 3})
+
+    def cancel_gone():
+        raise Exception('binanceusdm {"code":-2011,"msg":"Unknown order sent."}')
+
+    with pytest.raises(Exception, match="Unknown order"):
+        asyncio.run(guardian.call(cancel_gone))
+    assert guardian.failures == 0
+    assert guardian.error_count == 1          # 观测计数照记
+    assert not guardian.is_circuit_open()     # 绝不触发熔断
+
+
+def test_business_errors_never_open_circuit(fast_sleep):
+    """连续多次业务错误：failures 归零逻辑不受影响，NORMAL 不被熔断拦截。"""
+    guardian = RestGuardian({"api_min_interval_sec": 0, "api_max_retries": 1,
+                             "api_failure_threshold": 3})
+
+    def cancel_gone():
+        raise Exception('{"code":-2011,"msg":"Unknown order sent."}')
+
+    for _ in range(10):
+        with pytest.raises(Exception, match="Unknown order"):
+            asyncio.run(guardian.call(cancel_gone))
+
+    assert guardian.failures == 0
+    assert not guardian.is_circuit_open()
+
+    # 正常请求不受任何影响
+    assert asyncio.run(guardian.call(lambda: "ok")) == "ok"
+
+
+def test_ccxt_exchange_error_is_business(fast_sleep):
+    """ccxt.ExchangeError 实例（如 InsufficientFunds）：立即抛、不计数、不重试。"""
+    import ccxt.async_support as ccxt
+
+    guardian = RestGuardian({"api_min_interval_sec": 0, "api_max_retries": 3})
+
+    def insufficient():
+        raise ccxt.InsufficientFunds("binance insufficient balance")
+
+    with pytest.raises(ccxt.InsufficientFunds):
+        asyncio.run(guardian.call(insufficient))
+    assert guardian.failures == 0
+    assert not guardian.is_circuit_open()
+
+
+def test_rate_limit_still_counts_after_business_fix(fast_sleep):
+    """限流类错误仍计入熔断（业务错误修复不得放松限流保护）。"""
+    guardian = RestGuardian({"api_min_interval_sec": 0, "api_max_retries": 1,
+                             "api_failure_threshold": 2,
+                             "api_circuit_breaker_cooldown_sec": 30})
+
+    def throttled():
+        raise Exception("HTTP 429 too many requests")
+
+    for _ in range(2):
+        with pytest.raises(Exception):
+            asyncio.run(guardian.call(throttled))
+    assert guardian.failures >= 2
+    assert guardian.is_circuit_open()

@@ -34,6 +34,7 @@ from .exits import (  # noqa: F401  facade re-export
     _create_full_close_stop, _ensure_disaster_stop, _find_stop_orders,
     _full_exit_with_revalidation, _get_open_algo_orders, _is_program_stop,
     _limit_reduce_with_maker_retry, _make_client_algo_id, _market_reduce_and_confirm,
+    _take_over_external_stops,
 )
 from .market_data import (  # noqa: F401  facade re-export
     _atr_from_df, _atr_from_rows, _closed_atr, _closed_df, _ema_structure_from_rows,
@@ -82,6 +83,133 @@ async def cleanup_orphaned_state_and_orders(exchange, conf):
 # ---------------------------------------------------------------------------
 # Per-position guardian
 # ---------------------------------------------------------------------------
+
+async def _execute_tp_reduce(exchange, symbol, side, pos_state, fresh, current_price,
+                             current_contracts, level, conf, full_config):
+    """TP1/TP2/TP3 阶梯止盈减仓的共用执行逻辑（消除 watch_symbol_position 内三档重复分支）。
+
+    调用方需已持有 RUNTIME.action_lock。返回减仓后剩余仓位（<=1e-10 表示已清空）。
+    """
+    key = _state_key(symbol, side)
+    base = _f(pos_state.get("base_contracts"), current_contracts)
+    if level == 3:
+        if not _try_lock_risk_action(symbol, side, pos_state, "TP3"):
+            return current_contracts
+        tp3_keep = _tp3_remaining_ratio(conf)
+        pos_state["tp3_triggered"] = True
+        state = _load_state(); state[key] = pos_state; _save_state(state)
+        if tp3_keep <= 0:
+            qty = current_contracts
+            msg = (f"[{symbol}] 🎯 躺平达到{conf.get('tp3_r_multiple',3.0):g}R，执行全部止盈！ "
+                   f"周期:{pos_state.get('risk_cycle_id')} | 当前:{current_price:.8f} | "
+                   f"躺平:{_f(pos_state.get('tp3_price')):.8f} | 模式:Maker挂单循环全平")
+            alert_title = "止盈提示: 躺平 全平"
+            reason = "躺平止盈"
+        else:
+            reduce_ratio = max(0.0, 1.0 - tp3_keep)
+            qty = min(current_contracts, base * reduce_ratio)
+            msg = (f"[{symbol}] 🎯 躺平达到{conf.get('tp3_r_multiple',3.0):g}R，执行躺平止盈，保留{tp3_keep:.0%}仓位继续吃利润！ "
+                   f"周期:{pos_state.get('risk_cycle_id')} | 当前:{current_price:.8f} | 躺平:{_f(pos_state.get('tp3_price')):.8f} | "
+                   f"本次减仓:{qty:.8f} | 模式:Maker挂单循环")
+            alert_title = "止盈提示: 躺平 分批止盈"
+            reason = "躺平止盈"
+    elif level == 2:
+        if pos_state.get("tp2_triggered") or not _try_lock_risk_action(symbol, side, pos_state, "TP2"):
+            return current_contracts
+        pos_state["tp2_triggered"] = True
+        ratio = float(conf.get("tp2_ratio", 0.30))
+        qty = min(current_contracts, base * ratio)
+        msg = (f"[{symbol}] 🎯 TP2达到{conf.get('tp2_r_multiple',2.0):g}R，执行{int(ratio*100)}%止盈并锁定利润！ "
+               f"周期:{pos_state.get('risk_cycle_id')} | 当前:{current_price:.8f} | TP2:{_f(pos_state.get('tp2_price')):.8f}")
+        alert_title = "止盈提示: TP2 减仓"
+        reason = "TP2止盈"
+    else:
+        if pos_state.get("tp1_triggered") or not _try_lock_risk_action(symbol, side, pos_state, "TP1"):
+            return current_contracts
+        pos_state["tp1_triggered"] = True
+        ratio = float(conf.get("tp1_ratio", 0.20))
+        qty = min(current_contracts, base * ratio)
+        msg = (f"[{symbol}] 🎯 TP1达到{conf.get('tp1_r_multiple',1.0):g}R，执行{int(ratio*100)}%止盈并启动保本保护！ "
+               f"周期:{pos_state.get('risk_cycle_id')} | 当前:{current_price:.8f} | TP1:{_f(pos_state.get('tp1_price')):.8f}")
+        alert_title = "止盈提示: TP1 减仓"
+        reason = "TP1止盈"
+
+    state = _load_state(); state[key] = pos_state; _save_state(state)
+
+    logger.success(msg)
+    send_alert(full_config, alert_title, msg, symbol=symbol)
+
+    if qty > 0:
+        _, after = await _limit_reduce_with_maker_retry(
+            exchange, symbol, side, fresh, qty, reason, conf,
+            int(pos_state.get("position_version", 0)), pos_state,
+            max_retries=int(conf.get("tp_limit_max_retries", 0)),
+            check_interval_sec=float(conf.get("tp_limit_check_interval_sec", 1.0)),
+            timeout_sec=float(conf.get("tp_limit_timeout_sec", 10.0)),
+            allow_market_fallback=False,
+            maker_only=bool(conf.get("tp_maker_only", True)),
+        )
+        pos_state["contracts"] = after
+    else:
+        after = current_contracts
+
+    if level == 3:
+        pos_state["tp_protection_stage"] = 3 if tp3_keep > 0 else 0
+        if tp3_keep > 0:
+            logger.success(f"[{symbol}] 🔐 躺平完成：剩余{after}仓位继续由移动STOP保护利润")
+    elif level == 2:
+        pos_state["tp_protection_stage"] = 2
+        logger.success(f"[{symbol}] 🔐 TP2完成：下一轮交易所STOP抬到 TP1 上方锁定利润")
+    else:
+        pos_state["tp_protection_stage"] = 1
+        logger.success(f"[{symbol}] 🔐 TP1完成：下一轮交易所STOP抬到保本上方保护本金")
+
+    state = _load_state(); state[key] = pos_state; _save_state(state)
+    if after <= 1e-10:
+        state.pop(key, None); _save_state(state)
+    return after
+
+
+async def _execute_tiered_reduce(exchange, symbol, side, pos_state, fresh, current_contracts,
+                                 tier, qty, msg, alert_title, reason, conf, full_config):
+    """T1/T2 分级结构减仓的共用执行逻辑（限价 maker 减仓，消除 watch_symbol_position 内重复分支）。
+
+    调用方需已持有 RUNTIME.action_lock。返回减仓后剩余仓位。
+    """
+    key = _state_key(symbol, side)
+    action_key = (symbol, side, str(pos_state.get("risk_cycle_id")), tier)
+    if action_key in RUNTIME.risk_action_latches:
+        logger.warning(f"[{symbol}/{side}] 🛑 {tier}本风险周期已执行/已锁定，跳过重复动作。")
+        return current_contracts
+    if _risk_action_on_cooldown(symbol, side, tier, conf):
+        logger.warning(
+            f"[{symbol}/{side}] ⏳ {tier} 距上次减仓不足 "
+            f"{_f(conf.get('risk_action_min_interval_sec'), 0.0):.0f}s"
+            f"（疑似风险周期被异常重建），本次跳过，不落闩。")
+        return current_contracts
+    RUNTIME.risk_action_latches.add(action_key)
+    if tier == "T2":
+        pos_state["t2_triggered"] = True
+    else:
+        pos_state["t1_triggered"] = True
+    state = _load_state(); state[key] = pos_state; _save_state(state)
+
+    logger.warning(msg)
+    send_alert(full_config, alert_title, msg, symbol=symbol)
+
+    _, after = await _limit_reduce_with_maker_retry(
+        exchange, symbol, side, fresh, qty, reason, conf,
+        int(pos_state.get("position_version", 0)), pos_state)
+    pos_state["contracts"] = after
+    if tier == "T2":
+        pos_state["t2_done"] = True
+    else:
+        pos_state["t1_done"] = True
+    pos_state["last_program_reduce_ts"] = int(time.time())
+    _mark_risk_action_done(symbol, side, tier)
+    state = _load_state(); state[key] = pos_state; _save_state(state)
+    return after
+
 
 async def watch_symbol_position(exchange, symbol, side):
     last_heartbeat_time = 0
@@ -185,6 +313,18 @@ async def watch_symbol_position(exchange, symbol, side):
                     state[key] = pos_state
                     _save_state(state)
 
+                # 双轨治理：守护端接管开仓端遗留的 SL/TP/TS 条件单。
+                # 幂等：每风险周期只执行一次（新周期 pop 状态后标志自动重置）。
+                if bool(conf.get("take_over_external_stops", False)) \
+                        and not pos_state.get("external_stops_taken_over"):
+                    try:
+                        await _take_over_external_stops(exchange, symbol, side, pos, conf)
+                        pos_state["external_stops_taken_over"] = True
+                        state[key] = pos_state
+                        _save_state(state)
+                    except Exception as take_over_exc:
+                        logger.warning(f"[{symbol}] 接管外部SL/TP/TS失败，下轮重试: {take_over_exc}")
+
                 # 先计算/初始化本风险周期的固定 TP，再维护交易所 STOP，
                 # 这样 TP1/TP2 完成后的利润保护 STOP 能在同一轮进入交易所。
                 if bool(conf.get("take_profit_enabled", True)):
@@ -270,79 +410,12 @@ async def watch_symbol_position(exchange, symbol, side):
 
                             # 重新按最新价格确认，防止等待锁期间价格已经回落。
                             tp_level = _take_profit_hit(pos_state, side, current_price)
-                            if tp_level == 3:
-                                if not _try_lock_risk_action(symbol, side, pos_state, "TP3"):
+                            if tp_level:
+                                await _execute_tp_reduce(
+                                    exchange, symbol, side, pos_state, fresh, current_price,
+                                    current_contracts, tp_level, conf, full_config)
+                                if _f(pos_state.get("contracts"), current_contracts) <= 1e-10:
                                     return
-                                tp3_keep = _tp3_remaining_ratio(conf)
-                                pos_state["tp3_triggered"] = True
-                                state[key] = pos_state; _save_state(state)
-                                if tp3_keep <= 0:
-                                    msg = (
-                                        f"[{symbol}] 🎯 躺平达到{conf.get('tp3_r_multiple',3.0):g}R，执行全部止盈！ "
-                                        f"周期:{pos_state.get('risk_cycle_id')} | 当前:{current_price:.8f} | "
-                                        f"躺平:{_f(pos_state.get('tp3_price')):.8f} | 模式:Maker挂单循环全平"
-                                    )
-                                    logger.success(msg)
-                                    send_alert(full_config, "止盈提示: 躺平 全平", msg, symbol=symbol)
-                                    qty = current_contracts
-                                else:
-                                    reduce_ratio = max(0.0, 1.0 - tp3_keep)
-                                    qty = min(current_contracts, _f(pos_state.get("base_contracts"), current_contracts) * reduce_ratio)
-                                    msg = (
-                                        f"[{symbol}] 🎯 躺平达到{conf.get('tp3_r_multiple',3.0):g}R，执行躺平止盈，保留{tp3_keep:.0%}仓位继续吃利润！ "
-                                        f"周期:{pos_state.get('risk_cycle_id')} | 当前:{current_price:.8f} | 躺平:{_f(pos_state.get('tp3_price')):.8f} | "
-                                        f"本次减仓:{qty:.8f} | 模式:Maker挂单循环"
-                                    )
-                                    logger.success(msg)
-                                    send_alert(full_config, "止盈提示: 躺平 分批止盈", msg, symbol=symbol)
-                                if qty > 0:
-                                    _, after = await _limit_reduce_with_maker_retry(
-                                        exchange, symbol, side, fresh, qty,
-                                        "躺平止盈", conf, int(pos_state.get("position_version", 0)), pos_state,
-                                        max_retries=int(conf.get("tp_limit_max_retries", 0)),
-                                        check_interval_sec=float(conf.get("tp_limit_check_interval_sec", 1.0)),
-                                        timeout_sec=float(conf.get("tp_limit_timeout_sec", 10.0)),
-                                        allow_market_fallback=False,
-                                        maker_only=bool(conf.get("tp_maker_only", True)),
-                                    )
-                                    pos_state["contracts"] = after
-                                    pos_state["tp_protection_stage"] = 3 if tp3_keep > 0 else 0
-                                    state[key] = pos_state; _save_state(state)
-                                    if after <= 1e-10:
-                                        state.pop(key, None); _save_state(state); return
-                                    logger.success(f"[{symbol}] 🔐 躺平完成：剩余{after}仓位继续由移动STOP保护利润")
-                            elif tp_level == 2 and not pos_state.get("tp2_triggered") and _try_lock_risk_action(symbol, side, pos_state, "TP2"):
-                                pos_state["tp2_triggered"] = True
-                                state[key] = pos_state; _save_state(state)
-                                ratio = float(conf.get("tp2_ratio", 0.30))
-                                qty = min(current_contracts, _f(pos_state.get("base_contracts"), current_contracts) * ratio)
-                                msg = (
-                                    f"[{symbol}] 🎯 TP2达到{conf.get('tp2_r_multiple',2.0):g}R，执行30%止盈并锁定利润！ "
-                                    f"周期:{pos_state.get('risk_cycle_id')} | 当前:{current_price:.8f} | TP2:{_f(pos_state.get('tp2_price')):.8f}"
-                                )
-                                logger.success(msg)
-                                send_alert(full_config, "止盈提示: TP2 减仓", msg, symbol=symbol)
-                                _, after = await _limit_reduce_with_maker_retry(exchange, symbol, side, fresh, qty, "TP2止盈", conf, int(pos_state.get("position_version", 0)), pos_state, max_retries=int(conf.get("tp_limit_max_retries", 0)), check_interval_sec=float(conf.get("tp_limit_check_interval_sec", 1.0)), timeout_sec=float(conf.get("tp_limit_timeout_sec", 10.0)), allow_market_fallback=False, maker_only=bool(conf.get("tp_maker_only", True)))
-                                pos_state["contracts"] = after
-                                pos_state["tp_protection_stage"] = 2
-                                state[key] = pos_state; _save_state(state)
-                                logger.success(f"[{symbol}] 🔐 TP2完成：下一轮交易所STOP抬到 TP1 上方锁定利润")
-                            elif tp_level == 1 and not pos_state.get("tp1_triggered") and _try_lock_risk_action(symbol, side, pos_state, "TP1"):
-                                pos_state["tp1_triggered"] = True
-                                state[key] = pos_state; _save_state(state)
-                                ratio = float(conf.get("tp1_ratio", 0.20))
-                                qty = min(current_contracts, _f(pos_state.get("base_contracts"), current_contracts) * ratio)
-                                msg = (
-                                    f"[{symbol}] 🎯 TP1达到{conf.get('tp1_r_multiple',1.0):g}R，执行20%止盈并启动保本保护！ "
-                                    f"周期:{pos_state.get('risk_cycle_id')} | 当前:{current_price:.8f} | TP1:{_f(pos_state.get('tp1_price')):.8f}"
-                                )
-                                logger.success(msg)
-                                send_alert(full_config, "止盈提示: TP1 减仓", msg, symbol=symbol)
-                                _, after = await _limit_reduce_with_maker_retry(exchange, symbol, side, fresh, qty, "TP1止盈", conf, int(pos_state.get("position_version", 0)), pos_state, max_retries=int(conf.get("tp_limit_max_retries", 0)), check_interval_sec=float(conf.get("tp_limit_check_interval_sec", 1.0)), timeout_sec=float(conf.get("tp_limit_timeout_sec", 10.0)), allow_market_fallback=False, maker_only=bool(conf.get("tp_maker_only", True)))
-                                pos_state["contracts"] = after
-                                pos_state["tp_protection_stage"] = 1
-                                state[key] = pos_state; _save_state(state)
-                                logger.success(f"[{symbol}] 🔐 TP1完成：下一轮交易所STOP抬到保本上方保护本金")
             except Exception as tp_exc:
                 logger.error(f"[{symbol}] 分批止盈逻辑异常: {tp_exc}")
 
@@ -551,61 +624,23 @@ async def watch_symbol_position(exchange, symbol, side):
 
                         # T2：中结构失守 + ATR确认 + 趋势过滤 -> 30%
                         elif t2_hit:
-                            action_key = (symbol, side, str(pos_state.get("risk_cycle_id")), "T2")
-                            if action_key in RUNTIME.risk_action_latches:
-                                logger.warning(f"[{symbol}/{side}] 🛑 T2本风险周期已执行/已锁定，跳过重复动作。")
-                                continue
-                            if _risk_action_on_cooldown(symbol, side, "T2", conf):
-                                logger.warning(
-                                    f"[{symbol}/{side}] ⏳ T2 距上次减仓不足 "
-                                    f"{_f(conf.get('risk_action_min_interval_sec'), 0.0):.0f}s"
-                                    f"（疑似风险周期被异常重建），本次跳过，不落闩。")
-                                continue
-                            RUNTIME.risk_action_latches.add(action_key)
-                            pos_state["t2_triggered"] = True
-                            state[key] = pos_state
-                            _save_state(state)
                             qty = min(current_contracts, (_f(pos_state.get("base_contracts"), current_contracts)) * float(conf.get("tier2_ratio", 0.30)))
                             msg = (f"[{symbol}] 📉 T2结构破位，执行30%减仓！周期:{pos_state.get('risk_cycle_id')} | "
                                    f"收盘:{closed_price:.4f} 结构:{t2_low if side=='long' else t2_high:.4f} "
                                    f"ATR:{atr:.4f} EMA26/83:{ema_fast:.4f}/{ema_slow:.4f} 当前:{current_price:.4f}")
-                            logger.warning(msg)
-                            send_alert(full_config, "风控提示: T2 减仓", msg, symbol=symbol)
-                            _, after = await _limit_reduce_with_maker_retry(exchange, symbol, side, fresh, qty, "T2结构减仓", conf, int(pos_state.get("position_version", 0)), pos_state)
-                            pos_state["contracts"] = after; pos_state["t2_done"] = True
-                            pos_state["last_program_reduce_ts"] = int(time.time())
-                            _mark_risk_action_done(symbol, side, "T2")
-                            state[key] = pos_state; _save_state(state)
+                            await _execute_tiered_reduce(
+                                exchange, symbol, side, pos_state, fresh, current_contracts,
+                                "T2", qty, msg, "风控提示: T2 减仓", "T2结构减仓", conf, full_config)
 
                         # T1：小结构破位 -> 20%，不再用MA直接触发
                         elif t1_hit:
-                            # T1 是“一次性事件”，不能只依赖 JSON 状态文件。
-                            # 文件保存失败/容器文件系统异常时，内存闩锁仍能阻止重复20%减仓。
-                            action_key = (symbol, side, str(pos_state.get("risk_cycle_id")), "T1")
-                            if action_key in RUNTIME.risk_action_latches:
-                                logger.warning(f"[{symbol}/{side}] 🛑 T1本风险周期已执行/已锁定，跳过重复减仓。")
-                                continue
-                            if _risk_action_on_cooldown(symbol, side, "T1", conf):
-                                logger.warning(
-                                    f"[{symbol}/{side}] ⏳ T1 距上次减仓不足 "
-                                    f"{_f(conf.get('risk_action_min_interval_sec'), 0.0):.0f}s"
-                                    f"（疑似风险周期被异常重建），本次跳过，不落闩。")
-                                continue
-                            RUNTIME.risk_action_latches.add(action_key)
-                            pos_state["t1_triggered"] = True
-                            state[key] = pos_state
-                            _save_state(state)
                             qty = min(current_contracts, (_f(pos_state.get("base_contracts"), current_contracts)) * float(conf.get("tier1_ratio", 0.20)))
                             msg = (f"[{symbol}] 📉 T1结构破位，执行20%减仓！周期:{pos_state.get('risk_cycle_id')} | "
                                    f"当前:{current_price:.4f} 结构:{t1_low if side=='long' else t1_high:.4f} 触发线:{t1_level:.4f} "
                                    f"ATR:{atr:.4f} EMA26/83:{ema_fast:.4f}/{ema_slow:.4f}")
-                            logger.warning(msg)
-                            send_alert(full_config, "风控提示: T1 减仓", msg, symbol=symbol)
-                            _, after = await _limit_reduce_with_maker_retry(exchange, symbol, side, fresh, qty, "T1结构减仓", conf, int(pos_state.get("position_version", 0)), pos_state)
-                            pos_state["contracts"] = after; pos_state["t1_done"] = True
-                            pos_state["last_program_reduce_ts"] = int(time.time())
-                            _mark_risk_action_done(symbol, side, "T1")
-                            state[key] = pos_state; _save_state(state)
+                            await _execute_tiered_reduce(
+                                exchange, symbol, side, pos_state, fresh, current_contracts,
+                                "T1", qty, msg, "风控提示: T1 减仓", "T1结构减仓", conf, full_config)
 
             except Exception as exc:
                 logger.error(f"[{symbol}] EMA/ATR/结构破位逻辑异常: {exc}")

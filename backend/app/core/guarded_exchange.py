@@ -22,9 +22,12 @@ REST_PRIORITY: dict[str, str] = {
     'edit_order': 'HIGH', 'fetch_order': 'HIGH', 'fetch_open_orders': 'HIGH',
     'fetch_positions': 'HIGH', 'fetch_position_mode': 'HIGH',
     'fetch_balance': 'HIGH', 'set_leverage': 'HIGH',
+    # 开仓/平仓执行链路的必经读：限价定价与 chase 让价用 fetch_order_book，
+    # 任务初始化用 load_markets。必须与下单撤单同级（HIGH），
+    # 否则熔断期间下单绕过了、盘口却被拒，开仓照样卡死（执行子任务断路器事故）。
+    'fetch_order_book': 'HIGH', 'load_markets': 'HIGH',
     # NORMAL：行情/元数据读
     'fetch_tickers': 'NORMAL', 'fetch_ticker': 'NORMAL',
-    'fetch_order_book': 'NORMAL', 'load_markets': 'NORMAL',
     'fetch_funding_rate': 'NORMAL', 'fetch_leverage': 'NORMAL',
     # LOW：大批量扫描读
     'fetch_ohlcv': 'LOW',

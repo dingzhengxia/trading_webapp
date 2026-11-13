@@ -17,8 +17,8 @@ DEFAULT_CONFIG = {
  'dry_run': False,
  'v2_timeframe': '2h',
  'v2_poll_interval_sec': 3.0,
- 'tier_ratios': [0.15, 0.20, 0.25, 0.40],
- 'tier_confirm_sec': [30, 45, 60, 0],
+     'tier_ratios': [0.15, 0.20, 0.25, 0.40],  # v2 实验引擎专用（risk_model/runner），当前主循环 engine.py 未引用
+     'tier_confirm_sec': [30, 45, 60, 0],  # 同上，v2 四档确认秒，主循环未引用
  'timeframe': '2h',
  'ema_fast_period': 26,
  'ema_slow_period': 83,
@@ -45,8 +45,14 @@ DEFAULT_CONFIG = {
  'tp_profit_lock_buffer_pct': 0.001,
  'profit_protection_enabled': True,
  'profit_protection_trigger_r': 0.5,
- 'tier1_ratio': 0.2,
- 'tier2_ratio': 0.3,
+ # 双轨治理：True 时守护端接管（撤销）开仓端遗留的 SL/TP/TS 条件单，止损止盈由守护端独家管理。
+ 'take_over_external_stops': False,
+ # 连续移动止损：'step'=阶梯跳（现状）| 'continuous'=浮盈达到 trailing_trigger_r 后按 ATR 平滑追踪。
+ 'trailing_stop_mode': 'step',
+ 'trailing_trigger_r': 1.0,
+ 'trailing_atr_multiple': 2.0,
+     # T1/T2 分级减仓比例已收敛为沿用 tp1_ratio/tp2_ratio（见 load_protection_config），
+     # 不再单独维护，避免两套减仓比例配置漂移。
  'ma_atr_period': 14,
  'emergency_enabled': True,
  'emergency_timeframe': '15m',
@@ -95,5 +101,10 @@ def load_protection_config():
     except Exception as exc:
         logger.warning(f"读取仓位保护配置失败，使用默认值: {exc}")
         stored = None
-    return {"position_protection": deep_merge(
-        DEFAULT_CONFIG["position_protection"], stored)}
+    merged = deep_merge(DEFAULT_CONFIG["position_protection"], stored)
+    # 收敛：T1/T2 分级减仓比例默认沿用 tp1_ratio/tp2_ratio，不再单独维护。
+    # 若用户显式设置 tier1_ratio/tier2_ratio（旧习惯），仍以它为准。
+    for tier, tp in (("tier1_ratio", "tp1_ratio"), ("tier2_ratio", "tp2_ratio")):
+        if merged.get(tier) is None:
+            merged[tier] = merged.get(tp)
+    return {"position_protection": merged}

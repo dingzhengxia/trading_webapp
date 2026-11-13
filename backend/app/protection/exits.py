@@ -36,6 +36,7 @@ from .state import (
 from .stops import (
     _calculate_disaster_stop,
     _calculate_dynamic_protection_stop,
+    _continuous_trailing_stop,
     _strategy_levels_from_rows,
 )
 from .take_profit import _take_profit_protection_stop
@@ -321,6 +322,86 @@ async def _cancel_bot_reduce_orders(exchange, symbol, side, conf, reason="重复
         return 0
 
 
+# ---------------------------------------------------------------------------
+# 双轨治理：接管开仓端遗留的固定 SL/TP/TS 条件单
+# ---------------------------------------------------------------------------
+
+# 开仓端 order_id.VALID_PREFIXES 中的条件单前缀（SL=固定止损 TP=固定止盈 TS=移动止盈）。
+# 守护端自己的单据前缀为 PM_WS_SL_ / PM_WS_R_，不会被这些前缀误伤。
+EXTERNAL_CONDITIONAL_PREFIXES = ("SL", "TP", "TS")
+
+
+def _is_external_conditional_order(order):
+    """识别开仓端遗留的固定 SL/TP/TS 条件单（按 clientOrderId 前缀）。"""
+    if not isinstance(order, dict):
+        return False
+    info = order.get("info") if isinstance(order.get("info"), dict) else {}
+    client_id = str(
+        order.get("clientOrderId") or order.get("clientAlgoId")
+        or info.get("clientOrderId") or info.get("origClientOrderId") or ""
+    )
+    return any(client_id.startswith(p) for p in EXTERNAL_CONDITIONAL_PREFIXES)
+
+
+async def _take_over_external_stops(exchange, symbol, side, pos, conf):
+    """双轨治理：撤销开仓端遗留的 SL/TP/TS 条件单，止盈止损由守护端独家管理。
+
+    安全顺序：先确认守护端自己的保护 STOP 已挂出；未就位则本轮不撤
+    （避免撤掉交易所兜底后守护端故障导致裸仓），由调用方下轮重试。
+    返回撤销张数。
+    """
+    stops = await _find_stop_orders(exchange, symbol, side, pos, 0, conf, force=True)
+    if not stops:
+        logger.warning(f"[{symbol}/{side}] ⏳ 接管外部SL/TP/TS：守护端保护STOP未就位，本轮跳过。")
+        return 0
+
+    expected_side = "sell" if side == "long" else "buy"
+    canceled = 0
+
+    # 1) 普通挂单簿中的条件单（STOP_MARKET / TAKE_PROFIT_MARKET / TRAILING_STOP_MARKET）
+    try:
+        orders = await _rest(exchange, "fetch_open_orders", symbol, priority="HIGH", conf=conf)
+        for order in orders if isinstance(orders, list) else []:
+            if not _is_external_conditional_order(order):
+                continue
+            order_side = str(order.get("side") or "").lower()
+            if order_side and order_side != expected_side:
+                continue
+            oid = str(order.get("id") or "")
+            if not oid:
+                continue
+            try:
+                await _rest(exchange, "cancel_order", oid, symbol, priority="HIGH", conf=conf)
+                canceled += 1
+            except Exception as exc:
+                logger.warning(f"[{symbol}] 撤销外部条件单失败: {exc}")
+    except Exception as exc:
+        logger.warning(f"[{symbol}] 扫描外部条件单失败: {exc}")
+
+    # 2) Algo 接口的条件单（部分渠道 TRAILING_STOP_MARKET 落在 algo 订单簿）
+    try:
+        algo_orders = await _get_open_algo_orders(exchange, symbol, conf, force=True)
+        for order in algo_orders if isinstance(algo_orders, list) else []:
+            if not _is_external_conditional_order(order):
+                continue
+            algo_id = order.get("algoId") or order.get("id")
+            if not algo_id:
+                continue
+            try:
+                await _cancel_algo(exchange, symbol, algo_id, conf)
+                canceled += 1
+            except Exception as exc:
+                logger.warning(f"[{symbol}] 撤销外部algo单失败: {exc}")
+    except Exception as exc:
+        logger.warning(f"[{symbol}] 扫描外部algo条件单失败: {exc}")
+
+    if canceled:
+        logger.warning(
+            f"[{symbol}/{side}] 🤝 已接管开仓端遗留 SL/TP/TS 条件单 {canceled} 张，"
+            f"止盈止损由守护端独家管理。")
+    return canceled
+
+
 async def _full_exit_with_revalidation(exchange, symbol, side, position, reason, conf, pos_state):
     expected_version = int(pos_state.get("position_version", 0))
     fresh = await _position_fresh(exchange, symbol, side, conf, priority="HIGH")
@@ -400,6 +481,40 @@ async def _ensure_disaster_stop(exchange, symbol, side, pos, current_price, conf
                     )
             except Exception as tp_stop_exc:
                 logger.warning(f"[{symbol}] 止盈后保护止损计算失败，继续使用策略止损: {tp_stop_exc}")
+
+        # 连续移动止损（trailing_stop_mode='continuous'）：浮盈达到 trailing_trigger_r
+        # 后，追踪线按 current_price ± trailing_atr_multiple×ATR 随价格平滑推进；
+        # 与阶梯保护取盈利方向的 max/min，推进仍受"只许盈利方向 + 最小有效距离"约束防抖。
+        if pos_state:
+            try:
+                atr_for_trail = float(strategy.get("atr") or 0.0) if strategy else 0.0
+                if atr_for_trail <= 0 and ohlcv_rows:
+                    atr_for_trail = float(_atr_from_rows(
+                        ohlcv_rows, int(conf.get("hard_stop_atr_period", 14))) or 0.0)
+                if atr_for_trail <= 0:
+                    tf = str(conf.get("hard_stop_timeframe", "1h"))
+                    atr_for_trail = float(await _closed_atr(
+                        exchange, symbol, tf, int(conf.get("hard_stop_atr_period", 14)), conf) or 0.0)
+
+                trail_stop, floating_r = _continuous_trailing_stop(
+                    pos_state, side, current_price, atr_for_trail, conf)
+                if trail_stop and trail_stop > 0:
+                    if side == "long":
+                        stop = max(stop, float(trail_stop))
+                    else:
+                        stop = min(stop, float(trail_stop))
+                    stop = float(exchange.price_to_precision(symbol, stop))
+                    distance = abs(current_price - stop) / current_price
+                    pos_state["trailing_stop"] = float(trail_stop)
+                    _status_log(
+                        "trailing", symbol, side, "INFO",
+                        f"[{symbol}] 📈 连续移动止损 | 浮盈:{floating_r:.2f}R | "
+                        f"追踪线:{float(trail_stop):.8f} | ATR:{atr_for_trail:.8f} | "
+                        f"综合STOP:{stop:.8f}",
+                        float(conf.get("status_log_interval_sec", 900.0)),
+                    )
+            except Exception as trail_exc:
+                logger.warning(f"[{symbol}] 连续移动止损计算失败，本轮沿用阶梯保护: {trail_exc}")
 
         # 一仓一 STOP：读取全部保护 STOP；重复时全部清理，只重建一个。
         stops = await _find_stop_orders(exchange, symbol, side, pos, current_price, conf, force=True)

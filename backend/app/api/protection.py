@@ -26,6 +26,8 @@ NUMERIC_RANGES: Dict[str, tuple] = {
     'tier1_ratio': (0.01, 1, False),
     'tier2_ratio': (0.01, 1, False),
     'profit_protection_trigger_r': (0.1, 100, False),
+    'trailing_trigger_r': (0.1, 100, False),
+    'trailing_atr_multiple': (0.5, 20, False),
     'structure_lookback': (2, 500, True),
     't1_structure_lookback': (2, 500, True),
     't2_structure_lookback': (2, 500, True),
@@ -110,6 +112,12 @@ def _validate(conf: Dict[str, Any]) -> None:
         raise HTTPException(status_code=400, detail="enabled 必须是布尔值。")
     if 'dry_run' in conf and not isinstance(conf['dry_run'], bool):
         raise HTTPException(status_code=400, detail="dry_run 必须是布尔值。")
+    if 'take_over_external_stops' in conf and not isinstance(conf['take_over_external_stops'], bool):
+        raise HTTPException(status_code=400, detail="take_over_external_stops 必须是布尔值。")
+
+    mode = conf.get('trailing_stop_mode')
+    if mode is not None and str(mode).lower() not in ('step', 'continuous'):
+        raise HTTPException(status_code=400, detail="trailing_stop_mode 必须是 step 或 continuous。")
 
     version = conf.get('engine_version')
     if version is not None and str(version).lower() not in ENGINE_VERSIONS:

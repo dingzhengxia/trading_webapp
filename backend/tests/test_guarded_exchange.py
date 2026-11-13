@@ -59,7 +59,9 @@ def test_priority_mapping():
     assert REST_PRIORITY['fetch_positions'] == 'HIGH'
     assert REST_PRIORITY['fetch_balance'] == 'HIGH'
     assert REST_PRIORITY['fetch_tickers'] == 'NORMAL'
-    assert REST_PRIORITY['fetch_order_book'] == 'NORMAL'
+    # 开仓定价/chase 让价必经读：必须与下单同级（HIGH），熔断不得阻断开仓链路
+    assert REST_PRIORITY['fetch_order_book'] == 'HIGH'
+    assert REST_PRIORITY['load_markets'] == 'HIGH'
     assert REST_PRIORITY['fetch_ohlcv'] == 'LOW'
 
 
@@ -103,10 +105,10 @@ def test_high_bypasses_circuit_but_still_throttled():
     guardian.circuit_open_until = float("inf")
 
     async def run():
-        # NORMAL 调用被熔断拦截
+        # LOW/NORMAL 调用被熔断拦截（扫描读 fetch_ohlcv 不属于交易关键路径）
         with pytest.raises(CircuitBreakerException):
             normal_exchange = MiniExchange()
-            await GuardedExchange(normal_exchange, guardian).fetch_order_book("X")
+            await GuardedExchange(normal_exchange, guardian).fetch_ohlcv("X")
         # HIGH 调用绕过熔断，可以继续下单
         await asyncio.gather(*(proxy.create_order("X", "limit", "buy", 1, 1) for _ in range(4)))
 
