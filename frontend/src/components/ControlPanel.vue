@@ -7,7 +7,7 @@
     <!-- 保存状态与手动保存：两个 Tab 都可见（原来在卡片标题行上） -->
     <div class="d-flex align-center flex-wrap ga-2 mb-3">
       <span v-if="lastSavedAt" class="text-caption text-medium-emphasis">
-        已保存 {{ formatClock(lastSavedAt) }}
+        已保存 {{ formatClockTime(lastSavedAt) }}
       </span>
       <v-spacer></v-spacer>
       <v-btn
@@ -418,19 +418,12 @@
   <v-skeleton-loader v-else type="article"></v-skeleton-loader>
 </template>
 
-<script lang="ts">
-// 模块级共享状态：本组件在 ConfigDrawer 的 general / rebalance 两个插槽里各挂一个实例，
-// 两实例共享同一份设置草稿（见 composables/useDraftSettings.ts 的模块级单例说明）。
-import { ref } from 'vue'
-
-const lastSavedAt = ref<number | null>(null)
-</script>
-
 <script setup lang="ts">
-import { computed, onBeforeUnmount } from 'vue'
+import { computed, onBeforeUnmount, ref } from 'vue'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { useUiStore } from '@/stores/uiStore'
 import { useDraftSettings } from '@/composables/useDraftSettings'
+import { formatClockTime } from '@/utils/format'
 import SmartSelect from '@/components/SmartSelect.vue'
 
 withDefaults(
@@ -451,7 +444,9 @@ const uiStore = useUiStore()
 
 // T11 草稿模式：3 个深 watch 收敛为 useDraftSettings 内部的单向数据流
 // （draft 单向绑定 + diff 提交 + 防抖自动保存），组件内不再直接侦听 store。
-const { draft, commitDraft, flushDraftSave } = useDraftSettings()
+// lastSavedAt 由 composable 的模块级单例提供（抽屉动作区读同一个值），
+// commitDraft 成功时会自行写入，本组件不再自己 set。
+const { draft, commitDraft, flushDraftSave, lastSavedAt } = useDraftSettings()
 
 const MAX_VISIBLE_CHIPS = 3
 const isLongListExpanded = ref(false)
@@ -492,17 +487,12 @@ const toList = (value: string | number | (string | number)[] | null | undefined)
 // ---- 保存状态：让“到底存没存”在界面上可见，而不是只写进日志抽屉 ----
 const saving = ref(false)
 
-const formatClock = (ts: number) =>
-  new Date(ts).toLocaleTimeString('zh-CN', { hour12: false })
-
 const persistNow = async (force = false) => {
   if (!draft.value || saving.value) return
   saving.value = true
-  const ok = await commitDraft(force)
+  // commitDraft 成功时会写入共享的 lastSavedAt，这里不再重复记时间
+  await commitDraft(force)
   saving.value = false
-  if (ok) {
-    lastSavedAt.value = Date.now()
-  }
 }
 
 // 选币等列表项立即提交（沿用原 patchSettings 即时保存行为）；

@@ -41,6 +41,7 @@
 .mdi-chart-timeline::before { content: "\F066E"; }
 .mdi-chart-timeline-variant::before { content: "\F0E93"; }
 .mdi-check-circle::before { content: "\F05E0"; }
+.mdi-check-circle-outline::before { content: "\F05E1"; }
 .mdi-chevron-down::before { content: "\F0140"; }
 .mdi-chevron-up::before { content: "\F0143"; }
 .mdi-circle-edit-outline::before { content: "\F08D5"; }
@@ -73,7 +74,6 @@
 .mdi-magnify-scan::before { content: "\F1276"; }
 .mdi-minus::before { content: "\F0374"; }
 .mdi-newspaper-variant-outline::before { content: "\F1004"; }
-.mdi-play::before { content: "\F040A"; }
 .mdi-play-circle-outline::before { content: "\F040D"; }
 .mdi-plus::before { content: "\F0415"; }
 .mdi-radar::before { content: "\F0437"; }

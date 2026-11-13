@@ -24,6 +24,12 @@ import { getErrorMessage } from '@/utils/errors'
 const draft: Ref<UserSettings | null> = ref(null)
 const baselineJson = ref('')
 
+/**
+ * 最近一次保存成功的时间戳（ms）。模块级共享：ControlPanel 的“已保存 hh:mm:ss”
+ * 与抽屉动作区的保存状态提示读同一个值，不再各自记一份。
+ */
+export const lastSavedAt = ref<number | null>(null)
+
 /** 服务端 settings 已灌入草稿，表单可以渲染 */
 const hydrated: ComputedRef<boolean> = computed(() => draft.value !== null)
 
@@ -77,7 +83,12 @@ function diffKeys(): Record<string, unknown> {
  */
 export async function commitDraft(force = false): Promise<boolean> {
   if (!draft.value || commitInFlight) return false
-  if (!force && !isDirty.value) return true
+  if (!force && !isDirty.value) {
+    // 无差异也是一次“保存成功”（服务端状态已与草稿一致），同样要刷新时间戳，
+    // 否则动作链路（先提交再开仓）后界面仍显示上一次的旧时间
+    lastSavedAt.value = Date.now()
+    return true
+  }
 
   commitInFlight = true
   const store = useSettingsStore()
@@ -106,6 +117,7 @@ export async function commitDraft(force = false): Promise<boolean> {
   }
   if (ok) {
     baselineJson.value = JSON.stringify(draft.value)
+    lastSavedAt.value = Date.now()
   }
   commitInFlight = false
   return ok
@@ -155,6 +167,8 @@ export interface UseDraftSettingsReturn {
   draft: Ref<UserSettings | null>
   hydrated: ComputedRef<boolean>
   isDirty: ComputedRef<boolean>
+  /** 最近一次保存成功的时间戳（ms），未保存成功过为 null */
+  lastSavedAt: Ref<number | null>
   /** 手动提交（force=true 时忽略 dirty 检查） */
   commitDraft: typeof commitDraft
   /** 立即提交尚在防抖窗口内的编辑（组件卸载前调用，避免“改完就切页”丢失） */
@@ -163,6 +177,11 @@ export interface UseDraftSettingsReturn {
 
 /**
  * 设置草稿模式入口。多实例共享同一份模块级草稿；内部 watcher 只注册一次。
+ *
+ * 动作链路（开仓 / 校准）只调 `await commitDraft()`，**不要**先 flushDraftSave 再
+ * commitDraft：debounce.flush() 会同步触发内部的 void commitDraft() 置位
+ * commitInFlight，紧随的 await commitDraft() 会因 in-flight 直接返回 false（假失败）。
+ * diff 是基于 draft 与基线的，防抖窗口内的编辑本来就在 draft 里，一次提交全覆盖。
  */
 export function useDraftSettings(): UseDraftSettingsReturn {
   ensureWatchers()
@@ -170,6 +189,7 @@ export function useDraftSettings(): UseDraftSettingsReturn {
     draft,
     hydrated,
     isDirty,
+    lastSavedAt,
     commitDraft,
     flushDraftSave: () => autoSave?.flush(),
   }

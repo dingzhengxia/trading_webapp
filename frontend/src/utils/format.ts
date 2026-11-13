@@ -28,6 +28,12 @@ export function formatUnixSeconds(value: number | null | undefined): string {
   return new Date(value * 1000).toLocaleString('zh-CN', { hour12: false })
 }
 
+/** 毫秒时间戳 → 时分秒（24 小时制）：“已保存 hh:mm:ss” 这类状态提示专用 */
+export function formatClockTime(value: number | null | undefined): string {
+  if (!value) return '—'
+  return new Date(value).toLocaleTimeString('zh-CN', { hour12: false })
+}
+
 /** ISO 时间字符串 → 本地时间字符串；无法解析时原样返回 */
 export function formatIsoTime(value: string | null | undefined): string {
   if (!value) return '—'
@@ -95,6 +101,20 @@ export function formatUsdLoose(value: number | string | null | undefined): strin
   const num = Number(value)
   if (!Number.isFinite(num)) return '—'
   return `$${num.toLocaleString('zh-CN', { maximumFractionDigits: 2 })}`
+}
+
+/**
+ * 美元金额·紧凑版：≥100 万压到一位小数并用 M 后缀（$1.2M），其余保持千分位（$2,000）。
+ * 用于抽屉动作区的摘要条这类只有一行宽度的位置；非法值显示破折号。
+ */
+export function formatUsdCompact(value: number | string | null | undefined): string {
+  const num = Number(value)
+  if (!Number.isFinite(num)) return '—'
+  if (Math.abs(num) >= 1_000_000) {
+    const millions = num / 1_000_000
+    return `$${millions.toLocaleString('en-US', { maximumFractionDigits: 1 })}M`
+  }
+  return `$${num.toLocaleString('en-US', { maximumFractionDigits: 2 })}`
 }
 
 /** Unix 毫秒级时间戳 → 本地时间字符串 */

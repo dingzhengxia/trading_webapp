@@ -2,7 +2,11 @@
 <!-- 共享参数抽屉容器（规格 §3 A7）：交易页与信号页复用，禁止各写一套。
      PC（md+）：右侧 temporary 导航抽屉，宽 520；手机：全屏 dialog + 顶部工具栏。
      Tab 骨架由本组件提供，内容通过具名插槽注入（插槽名 = tab.key）。
-     支持 ?tab= 深链：打开时按 query / defaultTab 定位，切换 Tab 时 router.replace 同步。 -->
+     支持 ?tab= 深链：打开时按 query / defaultTab 定位，切换 Tab 时 router.replace 同步。
+
+     结构固定为：标题行 → 分隔线 → Tabs → 滚动内容区 →（可选）动作区。
+     动作区是滚动区的平级兄弟且排在最后，flex 列布局下天然贴底，
+     不需要 position:sticky / elevation / box-shadow 也能常驻可见。 -->
 <template>
   <!-- md+ 用导航抽屉、<md 用全屏对话框：外壳不同，内部结构完全一致，
        用动态组件复用同一份 Tab / 内容模板，避免两份重复代码 -->
@@ -10,7 +14,9 @@
     <div class="config-drawer__frame d-flex flex-column">
       <div class="d-flex align-center ga-2 px-4 py-3">
         <v-icon v-if="icon" size="18" color="primary">{{ icon }}</v-icon>
-        <span class="text-subtitle-1 font-weight-medium">{{ title }}</span>
+        <span ref="titleEl" class="text-subtitle-1 font-weight-medium" tabindex="-1">
+          {{ title }}
+        </span>
         <v-spacer />
         <v-btn
           icon="mdi-close"
@@ -37,12 +43,21 @@
           </v-window-item>
         </v-window>
       </div>
+
+      <!-- 动作区：不随 Tab 切换隐藏（调用方不传 actions 插槽就整块不渲染，
+           例如信号页）。tab 作为插槽 prop 暴露，便于调用方按 Tab 定制文案。 -->
+      <template v-if="$slots.actions">
+        <v-divider />
+        <div class="config-drawer__actions" role="group" aria-label="开仓动作">
+          <slot name="actions" :tab="tab" />
+        </div>
+      </template>
     </div>
   </component>
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useDisplay } from 'vuetify'
 // 按需引入（T12）：外壳组件经 <component :is> 动态渲染且 vite-plugin-vuetify
@@ -99,6 +114,26 @@ watch(tab, (key) => {
   if (!show.value || !key || key === route.query.tab) return
   void router.replace({ query: { ...route.query, tab: key } })
 })
+
+// ---- 焦点管理（键盘/读屏）：打开把焦点送到标题，关闭把焦点还给触发元素 ----
+const titleEl = ref<HTMLElement | null>(null)
+/** 打开瞬间的焦点位置：关闭后还回去，避免焦点掉到 body、键盘用户丢失位置 */
+let restoreFocusTo: HTMLElement | null = null
+
+watch(show, async (open) => {
+  if (!open) {
+    const target = restoreFocusTo
+    restoreFocusTo = null
+    await nextTick()
+    target?.focus()
+    return
+  }
+  const active = document.activeElement
+  restoreFocusTo = active instanceof HTMLElement ? active : null
+  // 等外壳挂载完再 focus；标题是 tabindex="-1"，只是程序化聚焦点，不进 Tab 序
+  await nextTick()
+  titleEl.value?.focus()
+})
 </script>
 
 <style scoped>
@@ -117,5 +152,22 @@ watch(tab, (key) => {
 .config-drawer__body :deep([class*='v-col']) {
   flex: 0 0 100%;
   max-width: 100%;
+}
+
+/* 动作区：常驻在滚动区之外的最后一块。
+   底色必须显式给 surface —— 手机壳是 v-dialog，内容区滚动到底时
+   半透明叠层会透出后面的页面；这里用实心 surface 收口。
+   不加 box-shadow / elevation / sticky：它是 flex 列的最后一项，本来就不动。 */
+.config-drawer__actions {
+  background: rgb(var(--v-theme-surface));
+  padding: 12px 16px;
+}
+
+/* 手机断点（与 base.css 的 960px 保持一致）：底部安全区避让，
+   否则 iPhone 的 Home 指示条会压住主按钮 */
+@media (max-width: 959px) {
+  .config-drawer__actions {
+    padding-bottom: max(12px, env(safe-area-inset-bottom));
+  }
 }
 </style>
