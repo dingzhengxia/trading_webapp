@@ -61,6 +61,11 @@ const form = reactive({
   emergency_enabled: true,
   exchange_hard_stop_enabled: true,
   hard_stop_min_distance_pct: 0.05,
+  // 双轨治理：守护端接管开仓端遗留 SL/TP/TS 条件单（默认关，不改变现有行为）
+  take_over_external_stops: false,
+  // 连续移动止损：'step'=阶梯跳（现状）| 'continuous'=浮盈达标后按 ATR 平滑追踪
+  trailing_stop_mode: 'step' as 'step' | 'continuous',
+  trailing_trigger_r: 1,
 })
 
 /** 运行中引擎是否为 v2（状态优先，回退表单值） */
@@ -108,9 +113,17 @@ function applyConfig(config: Partial<ProtectionConfig>): void {
     'profit_protection_enabled',
     'emergency_enabled',
     'exchange_hard_stop_enabled',
+    'take_over_external_stops',
   ] as const) {
     if (typeof config[key] === 'boolean') form[key] = config[key] as boolean
   }
+  if (
+    config.trailing_stop_mode === 'step' || config.trailing_stop_mode === 'continuous'
+  ) {
+    form.trailing_stop_mode = config.trailing_stop_mode
+  }
+  const triggerR = Number(config.trailing_trigger_r)
+  if (Number.isFinite(triggerR) && triggerR > 0) form.trailing_trigger_r = triggerR
 }
 
 async function fetchStatus(): Promise<void> {

@@ -314,12 +314,16 @@ async def watch_symbol_position(exchange, symbol, side):
                     _save_state(state)
 
                 # 双轨治理：守护端接管开仓端遗留的 SL/TP/TS 条件单。
-                # 幂等：每风险周期只执行一次（新周期 pop 状态后标志自动重置）。
+                # 幂等 + 节流：每风险周期尝试（60s 间隔），成功完成才置终态标志。
                 if bool(conf.get("take_over_external_stops", False)) \
-                        and not pos_state.get("external_stops_taken_over"):
+                        and not pos_state.get("external_stops_taken_over") \
+                        and time.time() - float(pos_state.get("external_stops_check_ts") or 0) > 60:
+                    pos_state["external_stops_check_ts"] = time.time()
                     try:
-                        await _take_over_external_stops(exchange, symbol, side, pos, conf)
-                        pos_state["external_stops_taken_over"] = True
+                        taken = await _take_over_external_stops(exchange, symbol, side, pos, conf)
+                        if taken >= 0:
+                            # -1 = 守护端 STOP 未就位（不置标志，下轮重试）
+                            pos_state["external_stops_taken_over"] = True
                         state[key] = pos_state
                         _save_state(state)
                     except Exception as take_over_exc:

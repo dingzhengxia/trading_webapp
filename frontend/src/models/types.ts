@@ -382,6 +382,10 @@ export interface ProtectionConfig {
   profit_protection_trigger_r: number
   emergency_enabled: boolean
   exchange_hard_stop_enabled: boolean
+  // 双轨治理 + 连续移动止损（v1/v2 引擎共用）
+  take_over_external_stops?: boolean
+  trailing_stop_mode?: 'step' | 'continuous'
+  trailing_trigger_r?: number
   hard_stop_min_distance_pct: number
   hard_stop_atr_multiplier: number
   dynamic_stop_max_distance_pct: number

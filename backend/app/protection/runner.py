@@ -24,6 +24,7 @@ from loguru import logger
 from . import engine, ledger, risk_model
 from .config import load_protection_config
 from .notifier import send_alert
+from .stops import _continuous_trailing_stop
 
 Key = Tuple[str, str]
 
@@ -38,7 +39,6 @@ class _Runtime:
         self.recent_actions: List[Dict[str, Any]] = []
         self.last_error: Optional[str] = None
         self.disappeared_since: Dict[Key, float] = {}
-        self.previous_active: Set[Key] = set()
 
     def note_action(self, symbol: str, side: str, text: str, level: str = 'info') -> None:
         self.recent_actions.append({
@@ -107,18 +107,25 @@ def _structure_from_df(df, side: str, lookbacks: List[int]) -> Tuple[float, floa
 # 生命周期：仓位消失 → 确认超时 → 清账本 + 清旧挂单
 # ---------------------------------------------------------------------------
 async def _sweep_lifecycle(exchange, conf: Dict[str, Any], active: Set[Key]) -> None:
+    """账本对账：清掉「账本里有、但交易所已无此仓位」的幽灵行。
+
+    关键：对账基准是**账本全集 vs 本轮真实持仓**，不再依赖进程内存里的
+    previous_active —— 否则引擎重启后内存集合丢失，平仓后的旧账本行
+    永远不会被清理，前端"守护中的仓位"会越积越多（幽灵仓位）。
+    flat_confirm_sec 缓冲防接口偶发漏报。
+    """
     now = time.time()
     confirm = max(0.0, _f(conf.get('flat_confirm_sec'), 30.0))
-    disappeared = V2.previous_active - active
-    keep: Set[Key] = set()
+    # 账本 key 是 'symbol|side' 字符串，active 是 (symbol, side) tuple —— 先统一成 tuple。
+    ledger_keys = {ledger.split_key(k) for k in ledger.all_positions().keys()}
+    disappeared = ledger_keys - active
 
     for key in disappeared:
         since = V2.disappeared_since.setdefault(key, now)
         if confirm > 0 and (now - since) < confirm:
-            keep.add(key)  # 接口偶发漏报，先不下结论
-            continue
+            continue  # 接口偶发漏报，先不下结论（账本行保留，下轮复核）
         V2.disappeared_since.pop(key, None)
-        symbol, side = key
+        symbol, side = key  # disappeared 元素已是 (symbol, side) tuple
         ledger.delete(symbol, side)
         ledger.log_event(symbol, side, 'flat', '仓位已消失，清除本风险周期并清理旧挂单')
         try:
@@ -132,8 +139,6 @@ async def _sweep_lifecycle(exchange, conf: Dict[str, Any], active: Set[Key]) -> 
     for key in list(V2.disappeared_since):
         if key in active:
             V2.disappeared_since.pop(key, None)
-
-    V2.previous_active = set(active) | keep
 
 
 # ---------------------------------------------------------------------------
@@ -218,6 +223,19 @@ async def _prepare(exchange, conf: Dict[str, Any], symbol: str, side: str,
         plan = state['plan']
         atr = atr or _f(plan.get('atr_at_plan'))
 
+    # 双轨治理（每轮检查，幂等 + 60s 节流）：接管开仓端遗留 SL/TP/TS 条件单。
+    # -1 = 守护端 STOP 未就位（标志不置，节流后下轮重试）；>=0 = 接管流程完成。
+    if bool(conf.get('take_over_external_stops', False)) \
+            and not state.get('external_stops_taken_over') \
+            and now - _f(state.get('external_stops_check_ts')) > 60:
+        state['external_stops_check_ts'] = now
+        try:
+            taken = await engine._take_over_external_stops(exchange, symbol, side, pos, conf)
+            if taken >= 0:
+                state['external_stops_taken_over'] = True
+        except Exception as exc:  # noqa: BLE001 - 接管失败不影响守护
+            logger.warning(f'[{symbol}/{side}] 接管外部SL/TP/TS失败，下轮重试: {exc}')
+
     snap = risk_model.Snapshot(
         symbol=symbol, side=side, entry=_f(plan.get('entry'), entry),
         price=price, last_close=last_close, contracts=contracts,
@@ -226,6 +244,23 @@ async def _prepare(exchange, conf: Dict[str, Any], symbol: str, side: str,
     )
 
     decision = risk_model.decide(state, snap, conf)
+
+    # 连续移动止损：追踪线与决策 STOP 取盈利方向更优者；没有 stop 动作时补一张。
+    # 放在黑天鹅检查之前：emergency 命中时仍会压过本动作（安全优先级不变）。
+    trail_stop = _v2_trailing_stop(state, side, snap, atr, conf)
+    if trail_stop and trail_stop > 0:
+        patched = False
+        for act in decision.get('actions') or []:
+            if act.get('type') != 'stop':
+                continue
+            current = _f(act.get('price'))
+            act['price'] = max(current, trail_stop) if side == 'long' else (
+                min(current, trail_stop) if current > 0 else trail_stop)
+            patched = True
+        if not patched:
+            decision.setdefault('actions', []).append({
+                'type': 'stop', 'price': trail_stop, 'tag': 'trailing',
+                'level': 'info', 'reason': '连续移动止损'})
 
     # 黑天鹅：独立一支，命中直接压过所有结构/止盈动作
     emergency = await _check_emergency(exchange, conf, symbol, side, state, snap)
@@ -242,6 +277,30 @@ async def _prepare(exchange, conf: Dict[str, Any], symbol: str, side: str,
         'symbol': symbol, 'side': side, 'pos': pos, 'state': state,
         'snap': snap, 'actions': decision.get('actions') or [],
     }
+
+
+def _v2_trailing_stop(state: Dict[str, Any], side: str, snap: 'risk_model.Snapshot',
+                      atr: float, conf: Dict[str, Any]) -> Optional[float]:
+    """v2 连续移动止损：浮盈达到 trailing_trigger_r 后按 ATR 平滑追踪。
+
+    带 min_move 防抖（避免每轮撤单重挂刷交易所）；追踪线只许向盈利方向推进。
+    返回需要写入的追踪价，或 None（不更新）。
+    """
+    if str(conf.get('trailing_stop_mode', 'step') or 'step').lower() != 'continuous':
+        return None
+    plan = state.get('plan') or {}
+    trail_state = {'tp_entry_price': plan.get('entry'), 'tp_risk_distance': plan.get('risk')}
+    trail, _floating_r = _continuous_trailing_stop(trail_state, side, snap.price, atr, conf)
+    if not trail or trail <= 0:
+        return None
+    current_stop = _f(state.get('stop'))
+    if current_stop <= 0:
+        return trail  # 账本还没有 STOP：首个兜底单直接用追踪线
+    min_move = max(
+        snap.price * _f(conf.get('stop_min_update_pct'), 0.0005),
+        atr * _f(conf.get('stop_min_update_atr_ratio'), 0.05))
+    improved = (trail - current_stop) if side == 'long' else (current_stop - trail)
+    return trail if improved >= min_move else None
 
 
 async def _check_emergency(exchange, conf: Dict[str, Any], symbol: str, side: str,
@@ -495,6 +554,9 @@ def status() -> Dict[str, Any]:
     rows: List[Dict[str, Any]] = []
     for key, state in ledger.all_positions().items():
         symbol, side = ledger.split_key(key)
+        # 幽灵行兜底：对账修复前的残留行（仓位已平但账本未清）不再展示。
+        if _f(state.get('contracts'), 0.0) <= 0:
+            continue
         plan = state.get('plan') or {}
         levels = plan.get('levels') or []
         tps = plan.get('tp_prices') or [None, None, None]

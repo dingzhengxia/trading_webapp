@@ -1,5 +1,6 @@
 <!-- frontend/src/components/protection/ConfigForm.vue -->
-<!-- 参数设置：40 个控件收进三组折叠面板，标题行带当前值摘要（T11 自 ProtectionView 拆出）。
+<!-- 参数设置：控件收进两组折叠面板（v2 分档参数 / 执行开关），标题行带当前值摘要。
+     v1 专属的 TP 阶梯与结构回看参数已随 v1 参数组移除（守护端自动化，无需手配）。
      保存只允许走 useProtectionConfig.saveConfig（配置域唯一写路径）。 -->
 <template>
   <PageCard icon="mdi-tune" title="参数设置" spaced>
@@ -17,109 +18,7 @@
     </template>
 
     <v-expansion-panels>
-      <!-- 组 1：核心参数 -->
-      <v-expansion-panel>
-        <v-expansion-panel-title>
-          <div class="d-flex flex-wrap align-baseline ga-2">
-            <span class="text-subtitle-2 font-weight-medium">核心参数</span>
-            <span class="text-caption text-medium-emphasis">{{ coreSummary }}</span>
-          </div>
-        </v-expansion-panel-title>
-        <v-expansion-panel-text>
-          <v-row dense>
-            <v-col cols="12" sm="6" md="3">
-              <SmartSelect
-                v-model="form.timeframe"
-                :items="timeframes"
-                label="结构判定周期"
-              ></SmartSelect>
-            </v-col>
-            <v-col cols="12" sm="6" md="3">
-              <v-text-field
-                v-model.number="form.tp1_r_multiple"
-                type="number"
-                step="0.1"
-                min="0.1"
-                label="TP1 (R 倍数)"
-                density="compact"
-                variant="outlined"
-                hide-details
-              ></v-text-field>
-            </v-col>
-            <v-col cols="12" sm="6" md="3">
-              <v-text-field
-                v-model.number="form.tp2_r_multiple"
-                type="number"
-                step="0.1"
-                min="0.1"
-                label="TP2 (R 倍数)"
-                density="compact"
-                variant="outlined"
-                hide-details
-              ></v-text-field>
-            </v-col>
-            <v-col cols="12" sm="6" md="3">
-              <v-text-field
-                v-model.number="form.tp3_r_multiple"
-                type="number"
-                step="0.1"
-                min="0.1"
-                label="躺平 (R 倍数)"
-                density="compact"
-                variant="outlined"
-                hide-details
-              ></v-text-field>
-            </v-col>
-            <v-col cols="12" sm="6" md="3">
-              <v-text-field
-                v-model.number="form.t1_structure_lookback"
-                type="number"
-                min="2"
-                label="T1 结构回看(根)"
-                density="compact"
-                variant="outlined"
-                hide-details
-              ></v-text-field>
-            </v-col>
-            <v-col cols="12" sm="6" md="3">
-              <v-text-field
-                v-model.number="form.t2_structure_lookback"
-                type="number"
-                min="2"
-                label="T2 结构回看(根)"
-                density="compact"
-                variant="outlined"
-                hide-details
-              ></v-text-field>
-            </v-col>
-            <v-col cols="12" sm="6" md="3">
-              <v-text-field
-                v-model.number="form.t3_structure_lookback"
-                type="number"
-                min="2"
-                label="T3 结构回看(根)"
-                density="compact"
-                variant="outlined"
-                hide-details
-              ></v-text-field>
-            </v-col>
-            <v-col cols="12" sm="6" md="3">
-              <v-text-field
-                v-model.number="form.structure_buffer_atr"
-                type="number"
-                step="0.1"
-                min="0"
-                label="结构缓冲 (ATR)"
-                density="compact"
-                variant="outlined"
-                hide-details
-              ></v-text-field>
-            </v-col>
-          </v-row>
-        </v-expansion-panel-text>
-      </v-expansion-panel>
-
-      <!-- 组 2：v2 分档参数（结构 + ATR 四档） -->
+      <!-- 组 1：v2 分档参数（结构 + ATR 四档） -->
       <v-expansion-panel>
         <v-expansion-panel-title>
           <div class="d-flex flex-wrap align-baseline ga-2">
@@ -248,7 +147,7 @@
         </v-expansion-panel-text>
       </v-expansion-panel>
 
-      <!-- 组 3：执行开关（浮盈保护 · 紧急止损 · 灾难止损） -->
+      <!-- 组 2：执行开关（浮盈保护 · 紧急止损 · 灾难止损 · 双轨治理 · 连续追踪） -->
       <v-expansion-panel>
         <v-expansion-panel-title>
           <div class="d-flex flex-wrap align-baseline ga-2">
@@ -302,6 +201,47 @@
               ></v-text-field>
             </v-col>
           </v-row>
+          <v-row dense class="mt-1">
+            <v-col cols="12" sm="6" md="3">
+              <v-switch
+                v-model="form.take_over_external_stops"
+                label="接管开仓端止盈止损"
+                color="primary"
+                density="compact"
+                inset
+                hide-details
+              ></v-switch>
+            </v-col>
+            <v-col cols="12" sm="6" md="3">
+              <v-switch
+                :model-value="form.trailing_stop_mode === 'continuous'"
+                label="连续移动止损"
+                color="primary"
+                density="compact"
+                inset
+                hide-details
+                @update:model-value="form.trailing_stop_mode = $event ? 'continuous' : 'step'"
+              ></v-switch>
+            </v-col>
+            <v-col cols="12" sm="6" md="3">
+              <v-text-field
+                v-model.number="form.trailing_trigger_r"
+                type="number"
+                step="0.1"
+                min="0.1"
+                max="100"
+                label="连续追踪触发 (R)"
+                density="compact"
+                variant="outlined"
+                hide-details
+              ></v-text-field>
+            </v-col>
+          </v-row>
+          <v-alert type="info" variant="tonal" density="compact" class="mt-3 text-caption">
+            接管开仓端止盈止损：开启后守护引擎会撤销开仓时挂的固定 SL/TP/TS 单（先确认自己的保护 STOP
+            已就位才撤，绝不裸仓），止盈止损由守护引擎独家管理。连续移动止损：浮盈达到触发 R
+            倍数后，止损线按 价格 ± ATR×倍数 平滑追踪（只在盈利方向推进）。
+          </v-alert>
         </v-expansion-panel-text>
       </v-expansion-panel>
     </v-expansion-panels>
@@ -325,16 +265,14 @@ const engineVersions = [
 
 // ---- 折叠面板标题行的当前值摘要（收起状态也能读到关键值） ----
 const onOff = (value: boolean): string => (value ? '开' : '关')
-const coreSummary = computed(
-  () =>
-    `TP1 ${form.tp1_r_multiple}R / TP2 ${form.tp2_r_multiple}R / 躺平 ${form.tp3_r_multiple}R / 回看 ${form.t1_structure_lookback} 根`,
-)
 const v2Summary = computed(
   () =>
     `引擎 ${form.engine_version.toUpperCase()} / 风险 ${form.risk_min_pct}–${form.risk_max_pct} / 追踪 ${form.trailing_atr_mult} ATR / 巡检 ${form.v2_poll_interval_sec}s`,
 )
 const switchSummary = computed(
   () =>
-    `浮盈保护 ${onOff(form.profit_protection_enabled)} / 紧急止损 ${onOff(form.emergency_enabled)} / 灾难止损 ${onOff(form.exchange_hard_stop_enabled)}`,
+    `浮盈保护 ${onOff(form.profit_protection_enabled)} / 紧急止损 ${onOff(form.emergency_enabled)} / ` +
+    `灾难止损 ${onOff(form.exchange_hard_stop_enabled)} / 接管外部止盈止损 ${onOff(form.take_over_external_stops)} / ` +
+    `连续移动止损 ${form.trailing_stop_mode === 'continuous' ? '开' : '关'}`,
 )
 </script>

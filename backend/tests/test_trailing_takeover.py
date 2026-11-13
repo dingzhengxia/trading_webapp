@@ -168,13 +168,13 @@ def _patch_take_over(monkeypatch, program_stops, open_orders, algo_orders):
 
 
 def test_take_over_skips_when_program_stop_missing(monkeypatch):
-    """守护端保护 STOP 未就位：不撤任何单（防止裸仓）。"""
+    """守护端保护 STOP 未就位：返回 -1（可重试），不撤任何单（防止裸仓）。"""
     rest, algo_canceled = _patch_take_over(
         monkeypatch, program_stops=[],
         open_orders=[{"id": "1", "clientOrderId": "SL123"}], algo_orders=[])
     canceled = asyncio.run(exits_mod._take_over_external_stops(
         object(), "BTC/USDT:USDT", "long", {"symbol": "BTC/USDT:USDT"}, {}))
-    assert canceled == 0
+    assert canceled == -1
     assert rest.canceled == []
     assert algo_canceled == []
 

@@ -348,12 +348,12 @@ async def _take_over_external_stops(exchange, symbol, side, pos, conf):
 
     安全顺序：先确认守护端自己的保护 STOP 已挂出；未就位则本轮不撤
     （避免撤掉交易所兜底后守护端故障导致裸仓），由调用方下轮重试。
-    返回撤销张数。
+    返回：-1 = 守护端 STOP 未就位（调用方应下轮重试）；>=0 = 撤销张数（接管流程已完成）。
     """
     stops = await _find_stop_orders(exchange, symbol, side, pos, 0, conf, force=True)
     if not stops:
         logger.warning(f"[{symbol}/{side}] ⏳ 接管外部SL/TP/TS：守护端保护STOP未就位，本轮跳过。")
-        return 0
+        return -1
 
     expected_side = "sell" if side == "long" else "buy"
     canceled = 0
