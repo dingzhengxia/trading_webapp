@@ -91,16 +91,21 @@
         v-for="item in positions"
         :key="item.full_symbol"
         class="position-card"
-        @click="toggleCardExpand(item.full_symbol)"
+        :class="{
+          'position-card--selectable': selectMode,
+          'position-card--selected': selectMode && isCardSelected(item),
+        }"
+        @click="handleCardClick(item)"
       >
         <!-- 头行：合约 + 方向徽标 + 浮动盈亏大字 -->
         <div class="d-flex align-center ga-2">
           <v-checkbox-btn
             v-if="selectMode"
             :model-value="isCardSelected(item)"
-            density="compact"
+            :aria-label="`选择 ${item.full_symbol}`"
             hide-details
             color="primary"
+            class="position-card__check"
             @click.stop
             @update:model-value="toggleCardSelect(item)"
           ></v-checkbox-btn>
@@ -119,9 +124,20 @@
           <span>回报率 <span class="num" :class="pnlClass(item.pnl_percentage)">{{ formatSignedPercent(item.pnl_percentage) }}</span></span>
           <span>名义价值 <span class="num">${{ formatFixed(item.notional, 2) }}</span></span>
           <v-spacer></v-spacer>
-          <v-icon size="16" class="text-medium-emphasis">
-            {{ cardExpanded.has(item.full_symbol) ? 'mdi-chevron-up' : 'mdi-chevron-down' }}
-          </v-icon>
+          <!-- 展开与选择分离：多选态下点卡片是选中，展开只能点这里 -->
+          <v-btn
+            icon
+            variant="text"
+            size="x-small"
+            class="position-card__expand"
+            :aria-label="cardExpanded.has(item.full_symbol) ? '收起明细' : '展开明细'"
+            :aria-expanded="cardExpanded.has(item.full_symbol)"
+            @click.stop="toggleCardExpand(item.full_symbol)"
+          >
+            <v-icon size="18" class="text-medium-emphasis">
+              {{ cardExpanded.has(item.full_symbol) ? 'mdi-chevron-up' : 'mdi-chevron-down' }}
+            </v-icon>
+          </v-btn>
         </div>
         <!-- 点击展开：开仓均价 / 数量（xs 表格列隐藏，细节收在这里） -->
         <div v-if="cardExpanded.has(item.full_symbol)" class="text-caption text-medium-emphasis mt-1">
@@ -266,7 +282,7 @@
             （限价 post-only，有 USDC 合约自动走 USDC）。执行中不可撤销。
           </v-alert>
           <div
-            v-for="(item, index) in batchReverseItems"
+            v-for="item in batchReverseItems"
             :key="item.symbol"
             class="d-flex align-center ga-3 py-1"
           >
@@ -314,7 +330,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useDisplay } from 'vuetify'
 import type { Position } from '@/models/types'
 import { useUiStore } from '@/stores/uiStore'
@@ -392,6 +408,29 @@ const toggleCardSelect = (item: Position): void => {
     ? positionStore.selectedPositions.filter((s) => s !== item.full_symbol)
     : [...positionStore.selectedPositions, item.full_symbol]
 }
+
+/**
+ * 卡片点击：平时展开明细；多选态下改为「选中/取消」。
+ * 多选时用户的手指落点就是整张卡，若仍走展开，勾选框 40px 的命中区等于逼人点小靶。
+ */
+const handleCardClick = (item: Position): void => {
+  if (selectMode.value) {
+    toggleCardSelect(item)
+  } else {
+    toggleCardExpand(item.full_symbol)
+  }
+}
+
+/** 关掉多选时清掉本表的选中项：否则「平掉选中」会带着看不见的勾选继续可用 */
+const clearTableSelection = (): void => {
+  const current = new Set(props.positions.map((p) => p.full_symbol))
+  positionStore.selectedPositions = positionStore.selectedPositions.filter(
+    (symbol) => !current.has(symbol),
+  )
+}
+watch(selectMode, (on) => {
+  if (!on) clearTableSelection()
+})
 
 // --- 反手（单仓位）---
 const reverseDialog = ref(false)
@@ -471,6 +510,16 @@ const headers: TDataTableHeader[] = [
   white-space: nowrap !important;
 }
 
+/* 表格里的勾选框同理：未选中态原来继承中等强调灰 + 细描边，在表头浅底上几乎看不见。
+   只调未选中的 blank 图标，选中态的主色标记保持原样。 */
+.position-table :deep(.v-selection-control__input > .v-icon) {
+  font-size: 22px;
+}
+.position-table :deep(.v-icon.mdi-checkbox-blank-outline) {
+  color: rgb(var(--v-theme-on-surface)) !important;
+  opacity: 0.75;
+}
+
 /* 手机端：操作栏按钮允许换行，避免被裁切 */
 .toolbar-wrap :deep(.v-toolbar__content) {
   flex-wrap: wrap;
@@ -504,6 +553,44 @@ const headers: TDataTableHeader[] = [
   gap: 10px;
   margin-top: 4px;
   color: rgba(var(--v-theme-on-surface), 0.72);
+}
+/* 多选态下整卡是勾选命中区，给个手型提示 */
+.position-card--selectable {
+  cursor: pointer;
+}
+/* 勾选框（用户反馈「看不清」）：Vuetify 未选中态继承卡片的中等强调灰 + 1px 细描边图标，
+   白卡上几乎不可见。这里做三件事：放大图形、描边提到 0.55 不透明度的正文色、
+   命中区从 compact 的 28 抬到 40。选中态仍交给 color="primary"，不覆写。 */
+.position-card__check {
+  flex: 0 0 auto;
+  margin-left: -6px; /* 抵消 40px 命中区带来的视觉缩进 */
+}
+.position-card__check :deep(.v-selection-control) {
+  --v-selection-control-size: 40px;
+  flex: 0 0 auto; /* 默认 flex:1 0 会挤占币种名的宽度 */
+}
+.position-card__check :deep(.v-selection-control__input > .v-icon) {
+  font-size: 26px;
+}
+.position-card__check :deep(.v-icon.mdi-checkbox-blank-outline) {
+  /* 未选中框：给足正文色（浅色 #3F4750 on 白 ≈ 10:1）。
+     Vuetify 未选中态继承卡片文字色且图标是 1px 描边，实际渲染出来的框
+     在手机上几乎不可见；这里只针对 blank 图标提色，选中态仍是 primary。 */
+  color: rgb(var(--v-theme-on-surface)) !important;
+  opacity: 0.75;
+}
+/* 选中必须整卡可见：只靠小勾变化，用户扫一眼分不清选了哪几个 */
+.position-card--selected {
+  border-color: rgb(var(--v-theme-primary));
+  background: rgba(var(--v-theme-primary), 0.06);
+  box-shadow: inset 0 0 0 1px rgb(var(--v-theme-primary));
+}
+/* 展开按钮：多选态下卡片点击已改为选中，展开只剩这个入口，命中区给到 32 */
+.position-card__expand {
+  flex: 0 0 auto;
+  width: 32px !important;
+  height: 32px !important;
+  margin: -6px -8px -6px 0;
 }
 /* 底部按钮 40px 高（规格要求的手机触控高度） */
 .position-card__btn {
