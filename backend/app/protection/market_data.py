@@ -170,6 +170,7 @@ async def _emergency_signal(exchange, symbol, side, conf, live_rows=None):
     period = int(conf.get("emergency_atr_period", 14))
     mult = float(conf.get("emergency_atr_multiplier", 3.0))
     volmult = float(conf.get("emergency_vol_multiplier", 3.0))
+    vol_atr_mult = float(conf.get("emergency_vol_atr_multiplier", 4.0))
     lookback = int(conf.get("emergency_structure_lookback", 4))
     limit = max(period + lookback + 25, 60)
 
@@ -198,23 +199,33 @@ async def _emergency_signal(exchange, symbol, side, conf, live_rows=None):
     live = df.iloc[-1]
     ws_price = float(live["close"])
     live_vol = float(live["volume"])
-    threshold = atr * mult
+    # 阈值 = max(倍数 × ATR, 价格 × 绝对下限)，两个下限各有分工：
+    # · ATR(14) 只覆盖最近 3.5 小时。急涨/急跌后的窄幅整理会把 ATR 压得很低，随后
+    #   一根中等阴线就成「数倍 ATR」——2026-11-13 AAPL 即如此：ATR 0.756(占价 0.21%)，
+    #   3×ATR 只有 0.63%，一根 0.67% 的回落（当日振幅的 38%）就被市价全平。
+    # · 价格百分比下限按标的自身尺度兜底：对日波动 ~1.8% 的标的，15m 位移 1% 约 5σ，
+    #   属月度级事件；而加密真闪崩（15m 2~3%）远高于该下限，不会因此漏判。
+    # · 放量分支不需要结构确认，所以倍数单独提到 4（结构分支仍是 3，它本来就有破位确认）。
+    floor = ws_price * max(0.0, _f(conf.get("emergency_min_move_pct"), 0.01))
+    struct_threshold = max(atr * mult, floor)
+    vol_threshold = max(atr * vol_atr_mult, floor)
 
     is_volume_spike = bool(vol_ma and vol_ma > 0 and live_vol > vol_ma * volmult)
 
     if side == "long":
         move = float(live["open"] - ws_price) if ws_price < live["open"] else 0.0
         structure = ws_price < float(closed["low"].iloc[-lookback:].min())
-        volume_crash = is_volume_spike and move >= (atr * mult)
     else:
         move = float(ws_price - live["open"]) if ws_price > live["open"] else 0.0
         structure = ws_price > float(closed["high"].iloc[-lookback:].max())
-        volume_crash = is_volume_spike and move >= (atr * mult)
 
-    is_emergency = bool((move >= threshold and structure) or volume_crash)
+    volume_crash = is_volume_spike and move >= vol_threshold
+    is_emergency = bool((move >= struct_threshold and structure) or volume_crash)
     reason = "放量加速暴跌/拉升" if volume_crash else "结构性黑天鹅"
 
     return is_emergency, {
-        "ws_price": ws_price, "move": move, "threshold": threshold,
+        "ws_price": ws_price, "move": move,
+        "threshold": vol_threshold if volume_crash else struct_threshold,
+        "structure_threshold": struct_threshold, "volume_threshold": vol_threshold,
         "structure": structure, "volume_crash": volume_crash, "reason": reason
     }

@@ -84,6 +84,11 @@ V2_DEFAULTS: Dict[str, Any] = {
     # 「放量」门槛：本根 15m 量需超过过去 20 根（有成交 K 线）均量的倍数。
     # 原默认 1.0 等于「高于平均即算放量」，几乎不过滤——2026-11-13 TQQQ/NVDA 误杀即由此来。
     'emergency_vol_multiplier': 3.0,
+    # 放量分支（无结构确认）的位移门槛倍数：比结构分支更严，因为少了破位确认这道关。
+    'emergency_vol_atr_multiplier': 4.0,
+    # 位移的绝对下限（占价格比例）：兜住「ATR 被窄幅整理压低 → 一根中等 K 线成数倍 ATR」。
+    # 2026-11-13 AAPL 三倍 ATR 仅 0.63%，一根 0.67% 回落即被全平；1% 可挡住而真闪崩仍触发。
+    'emergency_min_move_pct': 0.01,
     'flat_confirm_sec': 30.0,
     # E 结构重估（docs/v2-replan-design.md）：持仓期间周期性重算档位线/灾难线。
     # 已触发档冻结、未触发档只许外移（评审定稿）、灾难线与现价保持 buffer*ATR。
