@@ -213,6 +213,19 @@
               <v-row>
                   <v-col cols="12" sm="6">
                       <v-text-field
+                        v-model.number="draft.leverage"
+                        label="合约杠杆倍数"
+                        type="number"
+                        min="1"
+                        max="125"
+                        step="1"
+                        suffix="x"
+                        hint="1–125 整数；新开仓直接按此杠杆下单，已有持仓在点「校准 SL/TP」时一并推送（改杠杆会改变清算价）"
+                        persistent-hint
+                      ></v-text-field>
+                  </v-col>
+                  <v-col cols="12" sm="6">
+                      <v-text-field
                         v-model.number="draft.open_maker_retries"
                         label="开仓重试次数"
                         type="number"

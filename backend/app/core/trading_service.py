@@ -13,6 +13,7 @@ from .websocket_manager import broadcast_progress_details, log_message, manager 
 from ..config.config import load_settings
 from ..logic.exchange_logic_async import (
     TaskInterruptedError,
+    _set_leverage_safe_async,
     close_position_async,
     fetch_positions_with_pnl_async,
     process_order_with_sl_tp_async,
@@ -331,10 +332,23 @@ class TradingService:
 
     async def _sync_sltp_task(self, settings: dict):
         task_name = "同步SL/TP"
+        # 杠杆：优先用请求携带值；payload 缺失/非法时回退服务端配置。
+        # 防御点：SyncSltpRequest.leverage 默认 1，若直接 fallback 到 1 会把持仓悄悄降到 1x。
+        leverage = int(settings.get('leverage') or 0)
+        if leverage <= 0:
+            leverage = int(load_settings().get('leverage', 1) or 1)
         async with get_exchange_for_task() as exchange:
-            positions = await fetch_positions_with_pnl_async(exchange, settings.get('leverage', 1))
+            positions = await fetch_positions_with_pnl_async(exchange, leverage)
 
             async def worker(pos):
+                # 杠杆推送到已有持仓（影响清算价，set_leverage 幂等，同值无副作用）。
+                # 失败不阻断 SL/TP 同步——降级警告由 _set_leverage_safe_async 记录。
+                try:
+                    await _set_leverage_safe_async(exchange, pos.full_symbol, leverage, log_message)
+                except Exception as exc:
+                    await log_message(
+                        f"⚠️ {pos.full_symbol}: 杠杆 {leverage}x 推送失败，保持原杠杆继续同步 SL/TP: {exc}",
+                        "warning")
                 return await set_tp_sl_for_position_async(exchange, pos, settings, log_message, self._stop_event)
 
             await self._run_task_loop(positions, worker, self.CONCURRENT_CLOSE_TASKS, task_name)
