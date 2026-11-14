@@ -41,6 +41,14 @@
               ></SmartSelect>
             </v-col>
             <v-col cols="12" sm="6" md="3">
+              <SmartSelect
+                v-model="form.emergency_timeframe"
+                :items="timeframes"
+                label="黑天鹅判定周期"
+                :help="HELP.protection.emergencyTimeframe"
+              ></SmartSelect>
+            </v-col>
+            <v-col cols="12" sm="6" md="3">
               <v-text-field
                 v-model.number="form.risk_min_pct"
                 type="number"
@@ -233,6 +241,23 @@
             </v-col>
             <v-col cols="12" sm="6" md="3">
               <v-text-field
+                v-model.number="form.emergency_cooldown_sec"
+                type="number"
+                step="60"
+                min="0"
+                max="86400"
+                label="黑天鹅后冷却（秒）"
+                density="compact"
+                variant="outlined"
+                hide-details
+              >
+                <template #append-inner>
+                  <HelpTip :text="HELP.protection.emergencyCooldown" />
+                </template>
+              </v-text-field>
+            </v-col>
+            <v-col cols="12" sm="6" md="3">
+              <v-text-field
                 v-model.number="form.hard_stop_min_distance_pct"
                 type="number"
                 step="0.01"
@@ -281,7 +306,7 @@ const {
 
 const timeframes = ['15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d']
 
-/** 四个布尔型执行开关：绑定同名配置字段，改动即 patch 落库 */
+/** 五个布尔型执行开关：绑定同名配置字段，改动即 patch 落库 */
 const booleanSwitches = [
   {
     key: 'profit_protection_enabled',
@@ -303,6 +328,11 @@ const booleanSwitches = [
     label: '接管开仓端止盈止损',
     help: HELP.protection.switchTakeOver,
   },
+  {
+    key: 'emergency_block_new_entries',
+    label: '黑天鹅期间禁止开仓',
+    help: HELP.protection.switchBlockEntries,
+  },
 ] as const
 
 type BooleanSwitchKey = (typeof booleanSwitches)[number]['key']
@@ -319,12 +349,14 @@ const onTrailingModeSwitch = (value: boolean | null): void => {
 const onOff = (value: boolean): string => (value ? '开' : '关')
 const tierSummary = computed(
   () =>
-    `风险 ${form.risk_min_pct}–${form.risk_max_pct} / 追踪 ${form.trailing_atr_mult} ATR / 巡检 ${form.v2_poll_interval_sec}s`,
+    `风险 ${form.risk_min_pct}–${form.risk_max_pct} / 追踪 ${form.trailing_atr_mult} ATR / ` +
+    `黑天鹅 ${form.emergency_timeframe} / 巡检 ${form.v2_poll_interval_sec}s`,
 )
 const switchSummary = computed(
   () =>
     `浮盈保护 ${onOff(form.profit_protection_enabled)} / 紧急止损 ${onOff(form.emergency_enabled)} / ` +
     `灾难止损 ${onOff(form.exchange_hard_stop_enabled)} / 接管外部止盈止损 ${onOff(form.take_over_external_stops)} / ` +
-    `连续移动止损 ${form.trailing_stop_mode === 'continuous' ? '开' : '关'}`,
+    `连续移动止损 ${form.trailing_stop_mode === 'continuous' ? '开' : '关'} / ` +
+    `黑天鹅禁开仓 ${onOff(form.emergency_block_new_entries)}`,
 )
 </script>

@@ -22,6 +22,20 @@
         仓位保护当前未启用：打开上方开关后，引擎才会开始轮询持仓并挂保护单。
       </v-alert>
 
+      <!-- 黑天鹅冷却：开仓闸门正在跳过这些币，用户看到「为什么没开」的答案 -->
+      <v-alert
+        v-if="cooldownRows.length > 0"
+        type="info"
+        variant="tonal"
+        density="compact"
+        class="text-caption mb-2"
+      >
+        黑天鹅冷却中（此期间开仓会被跳过）：
+        <span v-for="(row, idx) in cooldownRows" :key="row.key">
+          <span v-if="idx > 0"> · </span>{{ row.label }}
+        </span>
+      </v-alert>
+
       <!-- xs：卡片化。TP1/TP2/躺平 合并成 chip 组（chip 显示触发态），点开看具体价格 -->
       <div v-else-if="isXs && status.positions.length > 0" class="d-flex flex-column ga-2">
         <div
@@ -197,6 +211,16 @@ import { HELP } from '@/config/help'
 import type { ProtectionEventRow, ProtectionPositionRow } from '@/models/types'
 
 const { status, events, isV2, fetchStatus } = useProtectionConfig()
+
+/** 黑天鹅冷却行：`ETH|long` → 「ETH 多 剩 28 分钟」 */
+const cooldownRows = computed(() => {
+  const map = status.value.cooldowns ?? {}
+  return Object.entries(map).map(([key, item]) => {
+    const [symbol, side] = key.split('|')
+    const minutes = Math.max(1, Math.round((item?.remaining_sec ?? 0) / 60))
+    return { key, label: `${symbol} ${side === 'short' ? '空' : '多'} 剩 ${minutes} 分钟` }
+  })
+})
 
 /** 事件类型 → 徽章（kind 由后端 ledger.log_event 写入） */
 const EVENT_KINDS: Record<string, { label: string; color: string }> = {

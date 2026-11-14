@@ -55,10 +55,19 @@ DEFAULT_CONFIG = {
      # 不再单独维护，避免两套减仓比例配置漂移。
  'ma_atr_period': 14,
  'emergency_enabled': True,
- 'emergency_timeframe': '15m',
+ # 黑天鹅判定周期：默认 1h。15m 上 3×ATR 常常只有 1% 上下，一根普通阴线就能触发全平
+ # （2026-11-14 ETH 连平两次）；1h 的 ATR(14) 约为 15m 的 2 倍，同样的 3 倍口径
+ # 要求约 2~3% 的小时级位移，只对真闪崩开枪。
+ 'emergency_timeframe': '1h',
  'emergency_atr_period': 14,
  'emergency_atr_multiplier': 3.0,
  'emergency_structure_lookback': 4,
+ # 黑天鹅是「状态型」信号：一根 K 线跌够幅度后，在它走完前每次开仓都会命中。
+ # 因此黑天鹅全平后给同币一段冷却，避免同一根 K 线里反复追。参考值：一根判定周期
+ # K 线（15m=900 / 1h=3600），默认保守用 900。
+ 'emergency_cooldown_sec': 900.0,
+ # 开仓前黑天鹅预检（默认关，属策略偏好；根因修复是位移按入场价起算）。
+ 'emergency_block_new_entries': False,
  'exchange_hard_stop_enabled': True,
  'hard_stop_timeframe': '1h',
  'hard_stop_atr_period': 14,

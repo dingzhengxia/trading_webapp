@@ -66,6 +66,11 @@ const form = reactive({
   structure_buffer_atr: 0.5,
   profit_protection_enabled: true,
   emergency_enabled: true,
+  // 黑天鹅判定周期（默认 1h；15m 的 3×ATR 只有 ~1%，普通阴线就会触发全平）
+  emergency_timeframe: '1h',
+  // 黑天鹅全平后同币冷却（秒，参考一根判定周期 K 线）+ 开仓前预检（可选，默认关）
+  emergency_cooldown_sec: 900,
+  emergency_block_new_entries: false,
   exchange_hard_stop_enabled: true,
   hard_stop_min_distance_pct: 0.05,
   // 双轨治理：守护端接管开仓端遗留 SL/TP/TS 条件单（默认关，不改变现有行为）
@@ -137,6 +142,9 @@ function applyConfig(config: Partial<ProtectionConfig>): void {
   }
   if (typeof config.dry_run === 'boolean') form.dry_run = config.dry_run
   if (typeof config.v2_timeframe === 'string') form.v2_timeframe = config.v2_timeframe
+  if (typeof config.emergency_timeframe === 'string') {
+    form.emergency_timeframe = config.emergency_timeframe
+  }
   if (Array.isArray(config.tier_ratios) && config.tier_ratios.length === 4) {
     form.tier_ratios = config.tier_ratios.map((x) => Number(x))
   }
@@ -149,6 +157,7 @@ function applyConfig(config: Partial<ProtectionConfig>): void {
     'risk_max_pct',
     'breakeven_trigger_r',
     'trailing_atr_mult',
+    'emergency_cooldown_sec',
   ] as const) {
     const value = Number(config[key])
     if (Number.isFinite(value)) form[key] = value
@@ -171,6 +180,7 @@ function applyConfig(config: Partial<ProtectionConfig>): void {
     'emergency_enabled',
     'exchange_hard_stop_enabled',
     'take_over_external_stops',
+    'emergency_block_new_entries',
   ] as const) {
     if (typeof config[key] === 'boolean') form[key] = config[key] as boolean
   }

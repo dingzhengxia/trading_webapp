@@ -204,8 +204,14 @@ async def _two_source_price_ok(exchange, symbol, ws_price, side, conf):
     return True, snap
 
 
-async def _emergency_signal(exchange, symbol, side, conf, live_rows=None):
-    tf = str(conf.get("emergency_timeframe", "15m"))
+async def _emergency_signal(exchange, symbol, side, conf, live_rows=None,
+                            entry_price=0.0, entry_ts=0.0):
+    """黑天鹅信号。返回 (是否触发, 明细)。
+
+    :param entry_price: 本仓开仓均价；<=0 表示还没建仓（开仓前预检就用这个模式）
+    :param entry_ts: 本仓开仓时间（秒）；用来判断「本根 K 线的位移里有多少发生在持仓期间」
+    """
+    tf = str(conf.get("emergency_timeframe", "1h"))
     enabled = conf.get("emergency_enabled", True)
     if not enabled:
         return False, None
@@ -240,11 +246,13 @@ async def _emergency_signal(exchange, symbol, side, conf, live_rows=None):
     ws_price = float(live["close"])
     live_vol = float(live["volume"])
     # 阈值 = max(倍数 × ATR, 价格 × 绝对下限)，两个下限各有分工：
-    # · ATR(14) 只覆盖最近 3.5 小时。急涨/急跌后的窄幅整理会把 ATR 压得很低，随后
-    #   一根中等阴线就成「数倍 ATR」——2026-11-13 AAPL 即如此：ATR 0.756(占价 0.21%)，
+    # · ATR(14) 只覆盖最近 14 根（1h 即 14 小时）。急涨/急跌后的窄幅整理会把 ATR 压得很低，
+    #   随后一根中等 K 线就成「数倍 ATR」——2026-11-13 AAPL 即如此：ATR 0.756(占价 0.21%)，
     #   3×ATR 只有 0.63%，一根 0.67% 的回落（当日振幅的 38%）就被市价全平。
-    # · 价格百分比下限按标的自身尺度兜底：对日波动 ~1.8% 的标的，15m 位移 1% 约 5σ，
-    #   属月度级事件；而加密真闪崩（15m 2~3%）远高于该下限，不会因此漏判。
+    # · 价格百分比下限按标的自身尺度兜底：对日波动 ~1.8% 的标的，1h 位移 1% 约 2σ，
+    #   属常见波动，故这一条在 1h 上通常不构成约束（真正起作用的是 3×ATR）；
+    #   1h ATR(14) 对 ETH/BTC 大约是价格的 0.7~1%，3 倍即 2~3% 的小时级位移——
+    #   那才是需要躲的闪崩。判定周期越小，这个下限越容易成为主要约束（15m 时它常是主因）。
     # · 放量分支不需要结构确认，所以倍数单独提到 4（结构分支仍是 3，它本来就有破位确认）。
     floor = ws_price * max(0.0, _f(conf.get("emergency_min_move_pct"), 0.01))
     struct_threshold = max(atr * mult, floor)
@@ -252,11 +260,28 @@ async def _emergency_signal(exchange, symbol, side, conf, live_rows=None):
 
     is_volume_spike = bool(vol_ma and vol_ma > 0 and live_vol > vol_ma * volmult)
 
+    # 位移基准（anchor）：只把「我们已经在场内」的那段行情归因到本仓。
+    # 2026-11-14 ETH：15m 的 22:00 那根从 1891.5 跌到 1867.6（位移 23.97 > 阈值 20.37），
+    # 但用户的仓位是 22:05:54 在 1868.66 才建立的——那 23.97 里 99% 发生在入场之前，
+    # 持仓实际只浮亏 0.06%，却被判成闪崩全平。锚点用错，等于让「历史跌幅」去平「新仓位」。
+    # 规则：仓位在本根 K 线中途建立（entry_ts 新于 bar 开盘）→ 从入场价起算；
+    #      仓位早于本根 K 线 → 整根 K 线的位移都发生在持仓期间，用 K 线开盘价。
+    bar_open = float(live["open"])
+    raw_ts = float(live["timestamp"] or 0)
+    # ccxt 给毫秒；离线测试/异源可能给秒或自增序号，按数量级判断，避免把「很早以前
+    # 建仓」误判成「本根 K 线中途建仓」
+    bar_ts = raw_ts / 1000.0 if raw_ts > 1e11 else raw_ts
+    anchor = bar_open
+    anchored_at_entry = False
+    if entry_price > 0 and entry_ts and entry_ts > bar_ts:
+        anchor = float(entry_price)
+        anchored_at_entry = True
+
     if side == "long":
-        move = float(live["open"] - ws_price) if ws_price < live["open"] else 0.0
+        move = float(anchor - ws_price) if ws_price < anchor else 0.0
         structure = ws_price < float(closed["low"].iloc[-lookback:].min())
     else:
-        move = float(ws_price - live["open"]) if ws_price > live["open"] else 0.0
+        move = float(ws_price - anchor) if ws_price > anchor else 0.0
         structure = ws_price > float(closed["high"].iloc[-lookback:].max())
 
     volume_crash = is_volume_spike and move >= vol_threshold
@@ -265,6 +290,7 @@ async def _emergency_signal(exchange, symbol, side, conf, live_rows=None):
 
     return is_emergency, {
         "ws_price": ws_price, "move": move,
+        "anchor": anchor, "bar_open": bar_open, "anchored_at_entry": anchored_at_entry,
         "threshold": vol_threshold if volume_crash else struct_threshold,
         "structure_threshold": struct_threshold, "volume_threshold": vol_threshold,
         "structure": structure, "volume_crash": volume_crash, "reason": reason

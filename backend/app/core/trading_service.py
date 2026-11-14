@@ -229,6 +229,8 @@ class TradingService:
                             # R-P0-2：SL/TP 失败被自动回收 / 危险态标记（供台账区分"开仓成功"与"开仓后回收"）
                             'auto_closed': bool(plan.get('_auto_closed')),
                             'danger': plan.get('_danger'),
+                            'blocked': bool(plan.get('_blocked')),
+                            'error': plan.get('_blocked') or None,
                             'strategy': plan.get('strategy'), 'timeframe': plan.get('timeframe')})
             if opened and on_opened is not None:
                 try:
@@ -294,7 +296,10 @@ class TradingService:
                 results.append({'coin': plan_item.get('coin'), 'side': plan_item.get('side'),
                                 'target_value': plan_item.get('value'), 'success': bool(ok),
                                 'auto_closed': bool(plan_item.get('_auto_closed')),
-                                'danger': plan_item.get('_danger')})
+                                'danger': plan_item.get('_danger'),
+                                # 开仓前置闸门拦下的仓位：不是「下单失败」，而是「主动跳过」
+                                'blocked': bool(plan_item.get('_blocked')),
+                                'error': plan_item.get('_blocked') or None})
                 return ok
 
             try:

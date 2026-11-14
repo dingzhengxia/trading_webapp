@@ -769,6 +769,23 @@ async def _set_leverage_safe_async(exchange: ccxt.binanceusdm, symbol: str, targ
     raise ValueError(f"无法为 {symbol} 设置任何有效杠杆。")
 
 
+async def _entry_gate_reason(exchange: ccxt.binanceusdm, full_symbol: str, side,
+                             async_logger) -> str:
+    """开仓前置风控闸门（黑天鹅状态 / 同币冷却）。返回拒绝原因，允许时返回空串。
+
+    风控自身异常一律放行：闸门是为了省钱，不能因为它挂掉而让所有开仓停摆。
+    """
+    try:
+        from ..protection.entry_gate import first_blocker
+        return await first_blocker(exchange, full_symbol, side or '')
+    except ImportError as exc:  # 保护模块缺失（精简部署）不影响开仓
+        await async_logger(f"⚠️ 开仓前风控闸门不可用（跳过检查）: {exc}", "warning")
+        return ''
+    except Exception as exc:  # noqa: BLE001 - 闸门故障不能阻断交易
+        await async_logger(f"⚠️ 开仓前风控预检异常（继续开仓）: {exc}", "warning")
+        return ''
+
+
 async def process_order_with_sl_tp_async(exchange: ccxt.binanceusdm, plan: dict, config: dict, async_logger,
                                          stop_event: asyncio.Event) -> bool:
     """限价 post-only 开仓 -> 拉取实际仓位 -> 挂 SL/TP。"""
@@ -779,6 +796,15 @@ async def process_order_with_sl_tp_async(exchange: ccxt.binanceusdm, plan: dict,
     await async_logger(f"✅ {base_coin} 交易对: {full_symbol} ({quote} 优先)", "info")
     if stop_event.is_set():
         raise TaskInterruptedError()
+
+    # 开仓前置风控闸门：正处于黑天鹅行情 / 该币处于黑天鹅冷却期 → 直接不开。
+    # 放在下单之前而不是靠平仓兜底：2026-11-14 ETH 在 15m 已跌 1.27% 时被开多，
+    # 16 秒后又被同一信号全平，白付双边手续费与滑点（见 protection/entry_gate.py）。
+    blocked = await _entry_gate_reason(exchange, full_symbol, plan.get('side'), async_logger)
+    if blocked:
+        await async_logger(f"⛔ {base_coin}（{full_symbol}）跳过开仓：{blocked}", "warning")
+        plan['_blocked'] = blocked
+        return False
 
     desired_leverage = int(config.get('leverage', 1) or 1)
     actual_leverage = await _set_leverage_safe_async(exchange, full_symbol, desired_leverage, async_logger)

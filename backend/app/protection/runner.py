@@ -21,7 +21,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 from loguru import logger
 
-from . import engine, ledger, risk_model
+from . import cooldown, engine, ledger, risk_model
 from .config import load_protection_config
 from .notifier import send_alert
 from .stops import _continuous_trailing_stop
@@ -426,8 +426,14 @@ async def _check_emergency(exchange, conf: Dict[str, Any], symbol: str, side: st
     if last and snap.now - last < interval:
         return None
     state['last_emergency_check'] = snap.now
+    # 把「本仓入场价 / 入场时间」带进信号：位移只按持仓期间那段行情算，
+    # 否则「崩盘途中开仓 → 拿入场前的跌幅判自己闪崩」会立刻全平（2026-11-14 ETH）。
+    opened_ms = _f(state.get('opened_at_ms'))
+    entry_ts = opened_ms / 1000.0 if opened_ms > 0 else _f(state.get('created_at'))
     try:
-        triggered, details = await engine._emergency_signal(exchange, symbol, side, conf)
+        triggered, details = await engine._emergency_signal(
+            exchange, symbol, side, conf,
+            entry_price=_f(snap.entry), entry_ts=entry_ts)
     except Exception as exc:  # noqa: BLE001 - 单次失败不阻断主循环
         logger.debug(f'[{symbol}] 黑天鹅检查异常: {exc}')
         return None
@@ -437,9 +443,10 @@ async def _check_emergency(exchange, conf: Dict[str, Any], symbol: str, side: st
     if not ok:
         return None
     # 带上实际位移与阈值：出问题时这一条就能自证，不必再翻容器日志
+    scope = '入场后位移' if details.get('anchored_at_entry') else '本根位移'
     reason = (
         f"黑天鹅 {details.get('reason', '异常波动')}"
-        f"（本根位移 {_f(details.get('move')):.4g} / 阈值 {_f(details.get('threshold')):.4g}）"
+        f"（{scope} {_f(details.get('move')):.4g} / 阈值 {_f(details.get('threshold')):.4g}）"
     )
     return {'type': 'exit', 'ratio': 1.0, 'tag': 'emergency', 'level': 'error', 'reason': reason}
 
@@ -501,6 +508,10 @@ async def _apply_reduce(exchange, conf: Dict[str, Any], bundle: Dict[str, Any],
             # 钉钉与前端日志都收不到，用户只能事后从交易所账单里发现仓位没了。
             send_alert(conf, f"风控警告: {reason}",
                        f"[{symbol}] {side} 已市价全平 {current:.6g} → 0", symbol=symbol)
+            # 黑天鹅是「状态型」信号：一根 K 线跌够幅度后，在它走完前每次开仓都会命中。
+            # 记一段同币冷却，防开仓计划/信号在同一个崩盘窗口里反复建仓（开了 16 秒又被平）。
+            if tag == 'emergency':
+                cooldown.note_emergency_flat(symbol, side, reason, conf)
         else:
             # 全平失败 = 仓位仍在裸奔，同样必须外发，不能静默
             logger.error(f'[{symbol}] 全平未完成（{reason}），仓位仍在 {current:.6g}，下轮重试')

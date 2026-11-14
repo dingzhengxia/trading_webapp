@@ -398,6 +398,12 @@ export interface ProtectionConfig {
   profit_protection_enabled: boolean
   profit_protection_trigger_r: number
   emergency_enabled: boolean
+  /** 黑天鹅判定用的 K 线周期（默认 1h，越小越灵敏也越容易误杀） */
+  emergency_timeframe?: string
+  /** 黑天鹅全平后同币冷却（秒），0=不冷却 */
+  emergency_cooldown_sec?: number
+  /** 开仓前黑天鹅预检：命中当前崩盘状态则不下单 */
+  emergency_block_new_entries?: boolean
   exchange_hard_stop_enabled: boolean
   // 双轨治理 + 连续移动止损（v1/v2 引擎共用）
   take_over_external_stops?: boolean
@@ -419,6 +425,8 @@ export interface ProtectionStatus {
   positions: ProtectionPositionRow[]
   api: ProtectionApiStats
   config: ProtectionConfig
+  /** 黑天鹅冷却中的币（键 `ETH|long`），开仓闸门会据此跳过 */
+  cooldowns?: Record<string, { remaining_sec: number; reason: string; symbol: string }>
   v2?: {
     cycle_count: number
     last_cycle_ts: number

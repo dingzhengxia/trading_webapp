@@ -116,3 +116,67 @@ def test_volume_branch_stricter_than_structure_branch():
     triggered, details = _fire(rows)
     assert details['volume_crash'] is False
     assert details['volume_threshold'] > details['structure_threshold']
+
+
+# ---------------------------------------------------------------------------
+# 位移锚点：只归因「持仓期间」的行情（2026-11-14 ETH 开仓 16 秒被全平）
+#
+# 15m 的 22:00 那根从 1891.5 跌到 1867.6（整根位移 23.97 > 阈值 20.37），
+# 但仓位是 22:05:54 在 1868.66 才建立的——入场后只浮亏 1.08（0.06%），
+# 却被判成闪崩市价全平。位移必须按入场价起算。
+# ---------------------------------------------------------------------------
+BASE_MS = 1_790_000_000_000
+TF_MS = 900_000  # 15m
+
+
+def _ts_rows(spec, live):
+    rows = [(BASE_MS + i * TF_MS, *ohlc, vol) for i, (ohlc, vol) in enumerate(spec)]
+    rows.append((BASE_MS + len(spec) * TF_MS, *live))
+    return rows
+
+
+# 崩盘前的 15m K 线：价格 1885 附近，单根振幅 7 → ATR≈7，3×ATR≈21（价格 1% 下限 18.7）
+ETH_CALM = ((1885.0, 1888.5, 1881.5, 1884.0), 150.0)
+# 出事那根：开盘 1891.5，一路砸到 1867.58（跌破前 4 根低点 1878）
+ETH_CRASH_LIVE = (1891.5, 1892.0, 1867.0, 1867.58, 150.0)
+BAR_OPEN_TS = BASE_MS / 1000 + 59 * (TF_MS / 1000)  # 本根 K 线开盘时间（秒）
+
+
+def _fire_anchor(rows, entry_price=0.0, entry_ts=0.0):
+    return asyncio.run(_emergency_signal(
+        None, 'ETH/USDC:USDC', 'long', CONF, live_rows=rows,
+        entry_price=entry_price, entry_ts=entry_ts))
+
+
+def test_crash_before_entry_does_not_close_new_position():
+    """ETH 事故复现：入场前的跌幅不得算到新仓头上。"""
+    rows = _ts_rows([ETH_CALM] * 59, ETH_CRASH_LIVE)
+    triggered, details = _fire_anchor(rows, entry_price=1868.66,
+                                      entry_ts=BAR_OPEN_TS + 354)  # 22:05:54，本根第 354 秒
+    assert triggered is False, f'入场前的跌幅把新仓平掉了: {details}'
+    assert details['anchored_at_entry'] is True
+    assert details['move'] == pytest.approx(1.08, abs=0.01)
+    # 同一根 K 线：不做锚点时（入场前就持有）仍然必须开枪，证明没有修过头
+    triggered_legacy, legacy = _fire_anchor(rows)
+    assert triggered_legacy is True, f'真跌势被漏判: {legacy}'
+    assert legacy['move'] == pytest.approx(23.92, abs=0.01)
+
+
+def test_position_held_before_bar_uses_bar_open():
+    """仓位早于本根 K 线建立 → 整根 K 线的跌幅都发生在持仓期间，仍按开盘价起算。"""
+    rows = _ts_rows([ETH_CALM] * 59, ETH_CRASH_LIVE)
+    triggered, details = _fire_anchor(rows, entry_price=1900.0,
+                                      entry_ts=BAR_OPEN_TS - 600)
+    assert triggered is True
+    assert details['anchored_at_entry'] is False
+    assert details['anchor'] == pytest.approx(1891.5)
+
+
+def test_crash_after_entry_still_triggers():
+    """入场后继续暴跌（从 1868.66 跌到 1840）→ 必须平，保护不能被削弱。"""
+    rows = _ts_rows([ETH_CALM] * 59, (1891.5, 1892.0, 1839.0, 1840.0, 150.0))
+    triggered, details = _fire_anchor(rows, entry_price=1868.66,
+                                      entry_ts=BAR_OPEN_TS + 354)
+    assert triggered is True, f'入场后真闪崩被漏判: {details}'
+    assert details['move'] == pytest.approx(28.66, abs=0.01)
+    assert details['move'] >= details['threshold']

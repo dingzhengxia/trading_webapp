@@ -77,11 +77,12 @@ V2_DEFAULTS: Dict[str, Any] = {
     'tier_maker_only_until': 2,
     'tp_keep_ratio': 0.15,
     'emergency_enabled': True,
-    'emergency_timeframe': '15m',
+    # 判定周期默认 1h（15m 的 3×ATR 只有 ~1%，正常阴线就构成「黑天鹅」，误杀频繁）。
+    'emergency_timeframe': '1h',
     'emergency_atr_multiplier': 3.0,
     'emergency_atr_period': 14,
     'emergency_structure_lookback': 4,
-    # 「放量」门槛：本根 15m 量需超过过去 20 根（有成交 K 线）均量的倍数。
+    # 「放量」门槛：本根 K 线量需超过过去 20 根（有成交 K 线）均量的倍数。
     # 原默认 1.0 等于「高于平均即算放量」，几乎不过滤——2026-11-13 TQQQ/NVDA 误杀即由此来。
     'emergency_vol_multiplier': 3.0,
     # 放量分支（无结构确认）的位移门槛倍数：比结构分支更严，因为少了破位确认这道关。
@@ -89,6 +90,14 @@ V2_DEFAULTS: Dict[str, Any] = {
     # 位移的绝对下限（占价格比例）：兜住「ATR 被窄幅整理压低 → 一根中等 K 线成数倍 ATR」。
     # 2026-11-13 AAPL 三倍 ATR 仅 0.63%，一根 0.67% 回落即被全平；1% 可挡住而真闪崩仍触发。
     'emergency_min_move_pct': 0.01,
+    # 黑天鹅全平后同币冷却（秒）：一根 K 线跌够幅度后，剩下的时间里每次开仓都会
+    # 命中同一信号（2026-11-14 ETH 开仓 16 秒被平两次），冷却把这类重复往返挡在门外。
+    # 参考值：一根判定周期 K 线（15m=900 / 1h=3600）；默认 900 足够挡住「同一根 K 线里
+    # 反复追多」，又不至于把一个小时的开仓机会全堵死；0 = 关闭。
+    'emergency_cooldown_sec': 900.0,
+    # 开仓前黑天鹅预检（默认关）：它只解决「别在崩盘半途接刀」，属于策略偏好，
+    # 默认交给用户自己开。真正的根因修复是位移锚点（见 market_data._emergency_signal）。
+    'emergency_block_new_entries': False,
     # ---- 静默 K 线剔除（ATR / 均量口径）----
     # 股票代币在美股休市时段仍 24/7 报价，产出「量极小 + 振幅极小」的 K 线，
     # 把 ATR 与均量同时压到极低：TQQQ 实测 ATR 0.096 vs 真实 0.6，AAPL 的 3×ATR

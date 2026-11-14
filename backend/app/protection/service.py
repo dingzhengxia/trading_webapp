@@ -154,6 +154,16 @@ def _position_row(symbol: str, side: str, position: Dict[str, Any]) -> Dict[str,
     }
 
 
+def _cooldown_snapshot(conf: Dict[str, Any]) -> Dict[str, Any]:
+    """黑天鹅冷却快照；单点异常不影响整个状态接口。"""
+    try:
+        from . import cooldown
+        return cooldown.snapshot(conf)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"读取黑天鹅冷却状态失败: {exc}")
+        return {}
+
+
 def get_protection_status() -> Dict[str, Any]:
     """返回仓位保护运行状态（供 /api/protection 使用），不发起任何交易所请求。"""
     conf = load_protection_config().get("position_protection", {})
@@ -198,4 +208,6 @@ def get_protection_status() -> Dict[str, Any]:
         },
         "api": engine.RUNTIME.rest.stats(),
         "config": conf,
+        # 黑天鹅全平后的同币冷却（开仓闸门会据此跳过）：空对象=没有币在冷却
+        "cooldowns": _cooldown_snapshot(conf),
     }

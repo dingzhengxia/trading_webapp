@@ -142,11 +142,14 @@ def _validate(conf: Dict[str, Any]) -> None:
         raise HTTPException(
             status_code=400,
             detail=f"timeframe 必须是 {', '.join(ALLOWED_TIMEFRAMES)} 之一。")
-    v2_timeframe = conf.get('v2_timeframe')
-    if v2_timeframe is not None and v2_timeframe not in ALLOWED_TIMEFRAMES:
-        raise HTTPException(
-            status_code=400,
-            detail=f"v2_timeframe 必须是 {', '.join(ALLOWED_TIMEFRAMES)} 之一。")
+    # 黑天鹅/灾难止损的判定周期同样会进 ATR 计算，写错会让阈值失衡（例如传 '60' 会被
+    # ccxt 当非法周期直接抛错，引擎整轮跳过 → 等于关掉这层保护）。
+    for tf_key in ('v2_timeframe', 'emergency_timeframe', 'hard_stop_timeframe'):
+        value = conf.get(tf_key)
+        if value is not None and value not in ALLOWED_TIMEFRAMES:
+            raise HTTPException(
+                status_code=400,
+                detail=f"{tf_key} 必须是 {', '.join(ALLOWED_TIMEFRAMES)} 之一。")
 
     validate_numbers(conf, NUMERIC_RANGES)
 
