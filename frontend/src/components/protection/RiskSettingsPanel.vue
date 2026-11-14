@@ -148,34 +148,38 @@
       />
     </PageCard>
 
-    <!-- v2 动作轨迹：什么时候、因为哪条线、减了多少 -->
-    <PageCard v-if="isV2" icon="mdi-history" title="最近保护动作" spaced>
+    <!-- v2 保护事件：什么时候、因为哪条线、减了多少、最后为什么没了 -->
+    <PageCard v-if="isV2" icon="mdi-history" title="最近保护事件" spaced>
       <template #badges>
         <v-chip size="small" variant="tonal">
           第 {{ status.v2?.cycle_count ?? 0 }} 轮
         </v-chip>
         <HelpTip :text="HELP.protection.actionLog" />
       </template>
-      <div v-if="(status.v2?.recent_actions?.length ?? 0) === 0" class="text-caption text-medium-emphasis">
-        最近没有触发减仓/止盈，引擎只在上移止损时保持安静。
+      <div v-if="events.length === 0" class="text-caption text-medium-emphasis">
+        还没有保护事件。开仓后这里会依次出现「建立风险周期 → 止损上移到哪 → 减仓 → 为什么平仓」；
+        这份记录存在数据库里，引擎重启也不会丢。
       </div>
-      <v-list v-else density="compact" lines="one">
-        <v-list-item
-          v-for="(item, idx) in status.v2?.recent_actions ?? []"
-          :key="`${item.ts}-${idx}`"
-        >
-          <template #prepend>
-            <v-icon
-              size="16"
-              :color="item.level === 'error' ? 'error' : item.level === 'warning' ? 'warning' : 'success'"
-            >
-              mdi-shield-alert-outline
-            </v-icon>
-          </template>
-          <v-list-item-title class="text-caption">
-            {{ formatClock(item.ts) }} · {{ item.symbol }} · {{ item.text }}
-          </v-list-item-title>        </v-list-item>
-      </v-list>
+      <div v-else class="event-log">
+        <div v-for="(item, idx) in events" :key="`${item.ts}-${idx}`" class="event-log__row">
+          <span class="event-log__time">{{ formatEventTime(item.ts) }}</span>
+          <v-chip
+            size="x-small"
+            variant="tonal"
+            :color="kindMeta(item).color"
+            class="event-log__kind"
+          >
+            {{ kindMeta(item).label }}
+          </v-chip>
+          <span class="event-log__symbol text-caption">{{ shortSymbol(item.symbol) }}</span>
+          <span
+            class="event-log__msg text-caption"
+            :class="{ 'event-log__msg--alert': item.triggered_stop }"
+          >
+            {{ item.message }}
+          </span>
+        </div>
+      </div>
     </PageCard>
   </div>
 </template>
@@ -184,15 +188,37 @@
 import { computed, ref } from 'vue'
 import { useDisplay } from 'vuetify'
 import { useProtectionConfig } from '@/composables/useProtectionConfig'
-import { formatNumberOrDash as formatNumber } from '@/utils/format'
+import { formatEventTime, formatNumberOrDash as formatNumber } from '@/utils/format'
 import { directionTone } from '@/utils/tone'
 import PageCard from '@/components/PageCard.vue'
 import EmptyState from '@/components/EmptyState.vue'
 import HelpTip from '@/components/HelpTip.vue'
 import { HELP } from '@/config/help'
-import type { ProtectionPositionRow } from '@/models/types'
+import type { ProtectionEventRow, ProtectionPositionRow } from '@/models/types'
 
-const { status, isV2, fetchStatus } = useProtectionConfig()
+const { status, events, isV2, fetchStatus } = useProtectionConfig()
+
+/** 事件类型 → 徽章（kind 由后端 ledger.log_event 写入） */
+const EVENT_KINDS: Record<string, { label: string; color: string }> = {
+  cycle_new: { label: '新周期', color: 'info' },
+  reduce: { label: '减仓', color: 'warning' },
+  stop: { label: '止损', color: 'info' },
+  exit: { label: '全平', color: 'error' },
+  flat: { label: '已平仓', color: 'success' },
+  replan: { label: '重估', color: 'info' },
+  replan_dry: { label: '重估·演练', color: 'info' },
+  error: { label: '异常', color: 'error' },
+}
+
+const kindMeta = (item: ProtectionEventRow): { label: string; color: string } => {
+  // 「仓位消失」里判定为兜底止损触发的，用 error 提级：这是最需要用户知道的一条
+  if (item.kind === 'flat' && item.triggered_stop) return { label: '止损触发', color: 'error' }
+  return EVENT_KINDS[item.kind] ?? { label: item.kind || '事件', color: 'default' }
+}
+
+/** ETH/USDC:USDC → ETH/USDC，省掉重复的结算币后缀，手机上不占位 */
+const shortSymbol = (symbol: string): string =>
+  symbol.includes(':') ? symbol.split(':')[0] : symbol
 
 // ---- 断点：xs 卡片化 / sm+ 表格 / lg 才显示「开仓价」列 ----
 const display = useDisplay()
@@ -226,8 +252,6 @@ const tierText = (row: ProtectionPositionRow): string =>
 const hasTriggered = (row: ProtectionPositionRow): boolean =>
   row.tp1_done || row.tp2_done || row.tp3_done ||
   row.t1_done || row.t2_done || row.t3_done || Boolean(row.t4_done)
-
-const formatClock = (ts: number): string => new Date(ts * 1000).toLocaleTimeString()
 </script>
 
 <style scoped>
@@ -249,5 +273,46 @@ const formatClock = (ts: number): string => new Date(ts * 1000).toLocaleTimeStri
   gap: 4px;
   margin-top: 6px;
   color: rgba(var(--v-theme-on-surface), 0.72);
+}
+
+/* 保护事件流：时间 / 类型徽章 / 币种 / 说明，窄屏自动换行 */
+.event-log {
+  max-height: 340px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.event-log__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+  padding: 6px 0;
+  border-bottom: 1px solid rgba(var(--v-border-color), 0.5);
+}
+.event-log__row:last-child {
+  border-bottom: none;
+}
+.event-log__time {
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.65;
+  flex: 0 0 auto;
+}
+.event-log__kind {
+  flex: 0 0 auto;
+}
+.event-log__symbol {
+  font-weight: 600;
+  flex: 0 0 auto;
+}
+.event-log__msg {
+  flex: 1 1 220px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+/* 兜底止损触发：这是「仓位怎么没的」的答案，必须一眼看到 */
+.event-log__msg--alert {
+  color: rgb(var(--v-theme-error));
+  font-weight: 500;
 }
 </style>

@@ -28,6 +28,10 @@ from .stops import _continuous_trailing_stop
 
 Key = Tuple[str, str]
 
+# 「仓位消失」定性阈值：最后轮询价距兜底 STOP 在 1% 以内 → 认定为止损触发。
+# 真实成交价事后无法反查（条件市价单在交易所侧成交），只能按这个距离判断。
+_STOP_TOUCH_TOL = 0.01
+
 
 class _Runtime:
     """v2 运行时视图，仅供状态接口展示，不参与决策。"""
@@ -126,19 +130,62 @@ async def _sweep_lifecycle(exchange, conf: Dict[str, Any], active: Set[Key]) -> 
             continue  # 接口偶发漏报，先不下结论（账本行保留，下轮复核）
         V2.disappeared_since.pop(key, None)
         symbol, side = key  # disappeared 元素已是 (symbol, side) tuple
+        # 删行前先把上下文取出来：这里是「仓位怎么没的」唯一的现场证据
+        state = ledger.load(symbol, side) or {}
+        stop = _f(state.get('stop'))
+        last = _f(state.get('last_price'))
+        entry = _f((state.get('plan') or {}).get('entry'))
+        contracts = _f(state.get('contracts'))
+        msg, hit_stop = _describe_disappearance(side, stop, last, entry, contracts)
         ledger.delete(symbol, side)
-        ledger.log_event(symbol, side, 'flat', '仓位已消失，清除本风险周期并清理旧挂单')
+        ledger.log_event(symbol, side, 'flat', msg,
+                         level='warning' if hit_stop else 'info',
+                         stop=stop or None, last_price=last or None,
+                         entry=entry or None, contracts=contracts or None,
+                         triggered_stop=hit_stop)
+        # 静默删行 = 用户只能事后从交易所账单发现仓位没了。必须留痕 + 外发。
+        V2.note_action(symbol, side, msg, 'warning' if hit_stop else 'info')
+        if hit_stop:
+            send_alert(
+                conf, '风控提示: 兜底止损单已被交易所触发',
+                f'[{symbol}] {side} STOP {stop:.8g} 触发，仓位 {contracts:.6g} 已全平'
+                f'（最后价 {last:.8g}）',
+                symbol=symbol)
         try:
             await engine._cancel_program_stops_for_flat(exchange, symbol, side, conf)
             await engine._cancel_bot_reduce_orders(
                 exchange, symbol, side, conf, reason='仓位已平，清理旧减仓单')
         except Exception as exc:  # noqa: BLE001 - 清理失败不影响守护
             logger.warning(f'[{symbol}/{side}] 平仓后清理异常: {exc}')
-        logger.info(f'[{symbol}/{side}] 🧹 仓位已消失：下次开仓建立全新风险周期')
+        logger.info(f'[{symbol}/{side}] 🧹 仓位已消失：{msg}')
 
     for key in list(V2.disappeared_since):
         if key in active:
             V2.disappeared_since.pop(key, None)
+
+
+def _describe_disappearance(side: str, stop: float, last: float, entry: float,
+                            contracts: float) -> Tuple[str, bool]:
+    """给「仓位消失」定性：是兜底 STOP 被交易所触发，还是被手动/其它任务平掉。
+
+    判定依据：最后轮询价是否已贴到（或穿过）STOP 线。真实触发价无法事后反查
+    （兜底单是条件市价，交易所侧成交），距 STOP 1% 以内即认定为止损触发；
+    超出这个范围则如实标注「非兜底单触发」，避免把人工平仓误报成风控动作。
+    """
+    touched = stop > 0 and last > 0 and (
+        last <= stop * (1 + _STOP_TOUCH_TOL) if side == 'long'
+        else last >= stop * (1 - _STOP_TOUCH_TOL))
+    if touched:
+        gap = abs(last - stop) / stop
+        entry_text = f'，开仓 {entry:.8g}' if entry > 0 else ''
+        return (
+            f'交易所兜底STOP {stop:.8g} 已触发（最后价 {last:.8g}，距线 {gap:.2%}{entry_text}），'
+            f'仓位 {contracts:.6g} 由条件单市价全平', True)
+    if stop > 0 and last > 0:
+        return (
+            f'仓位 {contracts:.6g} 已消失：最后价 {last:.8g} 距兜底STOP {stop:.8g} '
+            f'还有 {abs(last - stop) / stop:.2%}，判定为手动/其它任务平仓', False)
+    return f'仓位 {contracts:.6g} 已消失（本周期未记录STOP），判定为手动/其它任务平仓', False
 
 
 # ---------------------------------------------------------------------------
@@ -326,7 +373,8 @@ async def _prepare(exchange, conf: Dict[str, Any], symbol: str, side: str,
         if not patched:
             decision.setdefault('actions', []).append({
                 'type': 'stop', 'price': trail_stop, 'tag': 'trailing',
-                'level': 'info', 'reason': '连续移动止损'})
+                'level': 'info', 'reason': '连续移动止损',
+                'previous_stop': _f(state.get('stop'))})
 
     # 黑天鹅：独立一支，命中直接压过所有结构/止盈动作
     emergency = await _check_emergency(exchange, conf, symbol, side, state, snap)
@@ -537,8 +585,13 @@ async def _apply_stop(exchange, conf: Dict[str, Any], bundle: Dict[str, Any],
     await engine._create_full_close_stop(exchange, symbol, pos, side, desired, conf)
     state['stop'] = desired
     ledger.save(symbol, side, state)
-    ledger.log_event(symbol, side, 'stop', f'兜底STOP {desired:.8g}',
-                     level='info', price=desired)
+    # 记「建立」还是「上移」，并带上上一档：这条事件就是日后复盘
+    # 「止损怎么被推到保本、然后被扫掉」的唯一凭据
+    previous = _f(act.get('previous_stop'))
+    label = str(act.get('reason') or '兜底STOP')
+    ledger.log_event(symbol, side, 'stop',
+                     f'{label} {desired:.8g}' + (f'（原 {previous:.8g}）' if previous > 0 else ''),
+                     level='info', price=desired, trigger=str(act.get('tag') or ''))
 
 
 async def _execute(exchange, conf: Dict[str, Any], bundle: Dict[str, Any]) -> None:

@@ -1,12 +1,13 @@
 # backend/app/api/protection.py
 """仓位保护（Phase 3）API：状态查询与参数热更新。"""
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Body, Depends, HTTPException
 from loguru import logger
 
 from ..config import config as app_config
 from ..core.security import verify_api_key
+from ..protection import ledger as protection_ledger
 from ..protection.service import get_protection_status, restart_protection
 from .validators import validate_numbers
 
@@ -208,6 +209,17 @@ def _validate(conf: Dict[str, Any]) -> None:
 def protection_status() -> Dict[str, Any]:
     """仓位保护运行状态：开关、引擎是否在跑、守卫中的仓位与风险周期状态。"""
     return get_protection_status()
+
+
+@router.get("/events")
+def protection_events(symbol: Optional[str] = None, limit: int = 100) -> Dict[str, Any]:
+    """最近保护事件（持久化台账，跨重启保留）。
+
+    回答「这个仓位为什么没了」：cycle_new / reduce / stop（止损上移到哪）/
+    exit（引擎主动全平）/ flat（仓位消失，含是否兜底单触发）/ replan / error。
+    以前这些只写在 DB 里没有出口，出问题只能翻容器日志。
+    """
+    return {'events': protection_ledger.recent_events(limit=limit, symbol=symbol)}
 
 
 @router.post("/config")

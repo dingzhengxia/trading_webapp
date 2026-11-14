@@ -493,6 +493,15 @@ def decide(state: Dict[str, Any], snap: Snapshot, conf: Dict[str, Any]) -> Dict[
     return {'actions': actions, 'patch': patch, 'reason': 'ok'}
 
 
+def _stop_move_reason(side: str, entry: float, price: float, desired: float) -> str:
+    """给「止损上移」一个能看懂的定性，避免台账里全是「止损上移」。"""
+    if entry <= 0:
+        return '止损上移'
+    if (desired > entry) if side == 'long' else (desired < entry):
+        return '止损上移到保本/锁盈'
+    return '止损上移（档位推进）'
+
+
 def _stop_action(state: Dict[str, Any], snap: Snapshot, plan: Dict[str, Any],
                  conf: Dict[str, Any], tiers_done: set) -> Optional[Dict[str, Any]]:
     """计算本轮应当挂到交易所的兜底 STOP。
@@ -555,7 +564,7 @@ def _stop_action(state: Dict[str, Any], snap: Snapshot, plan: Dict[str, Any],
     if current <= 0:
         # 首次挂单：直接放兜底线，让内部四档先动作
         return {'type': 'stop', 'price': desired, 'tag': 'stop:init',
-                'reason': '建立交易所兜底STOP', 'level': 'info'}
+                'reason': '建立交易所兜底STOP', 'level': 'info', 'previous_stop': 0.0}
 
     improvement = (desired - current) if side == 'long' else (current - desired)
     if improvement <= 0:
@@ -566,4 +575,5 @@ def _stop_action(state: Dict[str, Any], snap: Snapshot, plan: Dict[str, Any],
         return None  # 变化太小，不折腾交易所
 
     return {'type': 'stop', 'price': desired, 'tag': 'stop:move',
-            'reason': '止损上移', 'level': 'info'}
+            'reason': _stop_move_reason(side, entry, price, desired),
+            'level': 'info', 'previous_stop': current}

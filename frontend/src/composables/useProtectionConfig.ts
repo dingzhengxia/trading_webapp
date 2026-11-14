@@ -15,7 +15,7 @@ import api from '@/services/api'
 import { ENDPOINTS } from '@/services/endpoints'
 import { useSnackbarStore } from '@/stores/snackbar'
 import { getErrorMessage } from '@/utils/errors'
-import type { ProtectionConfig, ProtectionStatus } from '@/models/types'
+import type { ProtectionConfig, ProtectionEventRow, ProtectionStatus } from '@/models/types'
 
 const status = ref<ProtectionStatus>({
   enabled: false,
@@ -36,6 +36,13 @@ const status = ref<ProtectionStatus>({
 })
 
 const saving = ref(false)
+
+/**
+ * 持久化台账事件（DB 里那份，跨重启保留）。
+ * v2.recent_actions 只在内存里、重启即空，且不含「仓位怎么没的」；
+ * 「为什么被平了」只能靠这份事件回看（stop 上移到哪 → flat 触发）。
+ */
+const events = ref<ProtectionEventRow[]>([])
 
 /** 参数表单（40 个控件的单一份草稿，ConfigForm 直接绑定） */
 const form = reactive({
@@ -177,6 +184,18 @@ function applyConfig(config: Partial<ProtectionConfig>): void {
   syncSaved()
 }
 
+async function fetchEvents(limit = 80): Promise<void> {
+  try {
+    const response = await api.get<{ events: ProtectionEventRow[] }>(
+      ENDPOINTS.protectionEvents,
+      { params: { limit } },
+    )
+    events.value = response.data.events ?? []
+  } catch (error: unknown) {
+    console.warn('获取仓位保护事件失败:', getErrorMessage(error))
+  }
+}
+
 async function fetchStatus(force = false): Promise<void> {
   try {
     const response = await api.get<ProtectionStatus>(ENDPOINTS.protection)
@@ -186,6 +205,8 @@ async function fetchStatus(force = false): Promise<void> {
   } catch (error: unknown) {
     console.warn('获取仓位保护状态失败:', getErrorMessage(error))
   }
+  // 事件列表独立请求：状态拿到就先渲染，事件慢一点不阻塞
+  void fetchEvents()
 }
 
 /** 写路径 1：整包保存参数表单（保存按钮） */
@@ -265,6 +286,7 @@ async function onToggleEnabled(value: boolean | null): Promise<void> {
 
 export interface UseProtectionConfigReturn {
   status: Ref<ProtectionStatus>
+  events: Ref<ProtectionEventRow[]>
   form: typeof form
   saving: Ref<boolean>
   isV2: ComputedRef<boolean>
@@ -272,6 +294,7 @@ export interface UseProtectionConfigReturn {
   isDirty: ComputedRef<boolean>
   dirtyKeys: ComputedRef<string[]>
   fetchStatus: typeof fetchStatus
+  fetchEvents: typeof fetchEvents
   saveConfig: typeof saveConfig
   patchConfig: typeof patchConfig
   applySwitch: typeof applySwitch
@@ -284,12 +307,14 @@ export interface UseProtectionConfigReturn {
 export function useProtectionConfig(): UseProtectionConfigReturn {
   return {
     status,
+    events,
     form,
     saving,
     isV2,
     isDirty,
     dirtyKeys,
     fetchStatus,
+    fetchEvents,
     saveConfig,
     patchConfig,
     applySwitch,

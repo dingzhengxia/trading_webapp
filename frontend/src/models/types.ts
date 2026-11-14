@@ -344,6 +344,23 @@ export interface ProtectionActionRow {
   level: string
 }
 
+/** 持久化台账事件（/api/protection/events）：跨重启保留，用于事后复盘「为什么平了」 */
+export interface ProtectionEventRow {
+  ts: number
+  symbol: string
+  side: string
+  /** cycle_new | reduce | stop | exit | flat | replan | error */
+  kind: string
+  level: string
+  message: string
+  /** kind=flat 时：是否判定为交易所兜底 STOP 触发 */
+  triggered_stop?: boolean
+  stop?: number | null
+  last_price?: number | null
+  entry?: number | null
+  price?: number | null
+}
+
 export interface ProtectionApiStats {
   request_count: number
   error_count: number

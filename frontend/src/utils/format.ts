@@ -34,6 +34,26 @@ export function formatClockTime(value: number | null | undefined): string {
   return new Date(value).toLocaleTimeString('zh-CN', { hour12: false })
 }
 
+/**
+ * Unix 秒级时间戳 → 「事件时间」：今天只给时分秒，今年给月日，跨年给完整日期。
+ *
+ * 审计日志（保护事件、开仓记录）会横跨好几天，只显示时分秒会分不清是哪天。
+ */
+export function formatEventTime(value: number | null | undefined): string {
+  if (!value) return '—'
+  const date = new Date(value * 1000)
+  if (Number.isNaN(date.getTime())) return '—'
+  const now = new Date()
+  const sameDay =
+    date.getFullYear() === now.getFullYear() &&
+    date.getMonth() === now.getMonth() &&
+    date.getDate() === now.getDate()
+  if (sameDay) return date.toLocaleTimeString('zh-CN', { hour12: false })
+  const pad = (n: number): string => String(n).padStart(2, '0')
+  const md = `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`
+  return date.getFullYear() === now.getFullYear() ? md : `${date.getFullYear()}-${md}`
+}
+
 /** ISO 时间字符串 → 本地时间字符串；无法解析时原样返回 */
 export function formatIsoTime(value: string | null | undefined): string {
   if (!value) return '—'

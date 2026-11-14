@@ -26,6 +26,7 @@ export const ENDPOINTS = {
   signalsClear: '/api/signals/clear',
   protection: '/api/protection',
   protectionConfig: '/api/protection/config',
+  protectionEvents: '/api/protection/events',
   rebalancePlan: '/api/rebalance/plan',
   rebalanceExecute: '/api/rebalance/execute',
   tradingManual: '/api/trading/manual',

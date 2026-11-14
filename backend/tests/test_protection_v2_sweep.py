@@ -84,6 +84,70 @@ def test_sweep_keeps_live_positions(tmp_db, clean_v2, no_cleanup_orders):
     assert ledger.load("ETH/USDC:USDC", "short") is not None
 
 
+# ---------------------------------------------------------------------------
+# 仓位消失定性：兜底 STOP 触发 vs 手动/其它任务平仓
+# ---------------------------------------------------------------------------
+def test_describe_disappearance_long_stop_touched():
+    """最后价贴着 STOP 线（保本止损）→ 判定为止损触发。"""
+    msg, hit = runner._describe_disappearance('long', 1889.6, 1889.57, 1885.8, 1.145)
+    assert hit is True
+    assert '兜底STOP' in msg and '保本' not in msg  # 文案只描述事实，不臆测档位
+    assert '开仓 1885.8' in msg
+
+
+def test_describe_disappearance_long_far_from_stop_is_manual():
+    """价格离 STOP 还有 3% → 不是兜底单打的，如实标注（避免误报风控动作）。"""
+    msg, hit = runner._describe_disappearance('long', 1800.0, 1950.0, 1885.8, 1.0)
+    assert hit is False
+    assert '手动/其它任务平仓' in msg
+
+
+def test_describe_disappearance_short_stop_touched():
+    """空单：STOP 在上方，价格涨到线上即为触发。"""
+    assert runner._describe_disappearance('short', 1000.0, 1002.0, 950.0, 1.0)[1] is True
+    assert runner._describe_disappearance('short', 1000.0, 900.0, 950.0, 1.0)[1] is False
+
+
+def test_describe_disappearance_without_stop():
+    """账本没记 STOP（引擎刚接管/未挂出）→ 只能定性为手动平仓，不推送风向告警。"""
+    msg, hit = runner._describe_disappearance('long', 0.0, 0.0, 100.0, 2.0)
+    assert hit is False
+    assert '未记录STOP' in msg
+
+
+def test_sweep_alerts_when_protective_stop_fired(tmp_db, clean_v2, no_cleanup_orders, monkeypatch):
+    """仓位被交易所兜底单平掉时必须外发告警 + 写台账（此前是静默删行）。"""
+    alerts = []
+    monkeypatch.setattr(runner, 'send_alert', lambda *a, **k: alerts.append(a))
+    ledger.save('ETH/USDC:USDC', 'long', {
+        'contracts': 1.145, 'stop': 1889.6, 'last_price': 1889.57,
+        'plan': {'entry': 1885.8}})
+
+    asyncio.run(runner._sweep_lifecycle(object(), CONF, set()))
+
+    assert alerts, '兜底单触发必须推送'
+    assert '兜底止损' in alerts[0][1]
+    events = [e for e in ledger.recent_events(50) if e['kind'] == 'flat']
+    assert events and events[0]['triggered_stop'] is True
+    assert any('兜底STOP' in a['text'] for a in runner.V2.recent_actions)
+
+
+def test_sweep_keeps_quiet_when_manually_closed(tmp_db, clean_v2, no_cleanup_orders, monkeypatch):
+    """手动平仓不推钉钉（否则批量平仓会刷屏），但仍留台账 + 前端动作轨迹。"""
+    alerts = []
+    monkeypatch.setattr(runner, 'send_alert', lambda *a, **k: alerts.append(a))
+    ledger.save('ETH/USDC:USDC', 'long', {
+        'contracts': 1.0, 'stop': 1800.0, 'last_price': 1950.0,
+        'plan': {'entry': 1885.8}})
+
+    asyncio.run(runner._sweep_lifecycle(object(), CONF, set()))
+
+    assert alerts == []
+    events = [e for e in ledger.recent_events(50) if e['kind'] == 'flat']
+    assert events and events[0]['triggered_stop'] is False
+    assert runner.V2.recent_actions, '前端动作轨迹也要能看到'
+
+
 def test_status_filters_zero_contract_rows(tmp_db):
     """status() 兜底过滤 contracts<=0 的幽灵行。"""
     ledger.save("GHOST/USDC:USDC", "long", {"contracts": 0, "plan": {"entry": 1.0}})
