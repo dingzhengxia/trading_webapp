@@ -4,15 +4,18 @@
 <template>
   <PageCard icon="mdi-tune" title="参数设置" spaced>
     <template #badges>
+      <v-btn v-if="isDirty" size="small" variant="text" :disabled="saving" @click="revertChanges">
+        撤销
+      </v-btn>
       <v-btn
         size="small"
-        color="primary"
+        :color="isDirty ? 'warning' : 'primary'"
         variant="tonal"
         prepend-icon="mdi-content-save"
         :loading="saving"
         @click="saveConfig"
       >
-        保存参数
+        {{ isDirty ? `保存参数（${dirtyKeys.length} 项未保存）` : '保存参数' }}
       </v-btn>
     </template>
 
@@ -148,62 +151,21 @@
           </div>
         </v-expansion-panel-title>
         <v-expansion-panel-text>
+          <!-- 四个二值开关：改动即写入（不等「保存参数」），否则下次 10s 轮询会把值刷回旧状态 -->
           <v-row dense>
-            <v-col cols="12" sm="6" md="3">
+            <v-col v-for="sw in booleanSwitches" :key="sw.key" cols="12" sm="6" md="3">
               <v-switch
-                v-model="form.profit_protection_enabled"
-                label="浮盈保护（上移止损）"
+                :model-value="form[sw.key]"
+                :label="sw.label"
                 color="primary"
                 density="compact"
                 inset
                 hide-details
+                @update:model-value="onBooleanSwitch(sw.key, $event)"
               ></v-switch>
-            </v-col>
-            <v-col cols="12" sm="6" md="3">
-              <v-switch
-                v-model="form.emergency_enabled"
-                label="紧急结构止损"
-                color="primary"
-                density="compact"
-                inset
-                hide-details
-              ></v-switch>
-            </v-col>
-            <v-col cols="12" sm="6" md="3">
-              <v-switch
-                v-model="form.exchange_hard_stop_enabled"
-                label="交易所灾难止损单"
-                color="primary"
-                density="compact"
-                inset
-                hide-details
-              ></v-switch>
-            </v-col>
-            <v-col cols="12" sm="6" md="3">
-              <v-text-field
-                v-model.number="form.hard_stop_min_distance_pct"
-                type="number"
-                step="0.01"
-                min="0"
-                max="1"
-                label="灾难止损最小距离 (比例)"
-                density="compact"
-                variant="outlined"
-                hide-details
-              ></v-text-field>
             </v-col>
           </v-row>
           <v-row dense class="mt-1">
-            <v-col cols="12" sm="6" md="3">
-              <v-switch
-                v-model="form.take_over_external_stops"
-                label="接管开仓端止盈止损"
-                color="primary"
-                density="compact"
-                inset
-                hide-details
-              ></v-switch>
-            </v-col>
             <v-col cols="12" sm="6" md="3">
               <v-switch
                 :model-value="form.trailing_stop_mode === 'continuous'"
@@ -212,7 +174,7 @@
                 density="compact"
                 inset
                 hide-details
-                @update:model-value="form.trailing_stop_mode = $event ? 'continuous' : 'step'"
+                @update:model-value="onTrailingModeSwitch($event)"
               ></v-switch>
             </v-col>
             <v-col cols="12" sm="6" md="3">
@@ -228,8 +190,22 @@
                 hide-details
               ></v-text-field>
             </v-col>
+            <v-col cols="12" sm="6" md="3">
+              <v-text-field
+                v-model.number="form.hard_stop_min_distance_pct"
+                type="number"
+                step="0.01"
+                min="0"
+                max="1"
+                label="灾难止损最小距离 (比例)"
+                density="compact"
+                variant="outlined"
+                hide-details
+              ></v-text-field>
+            </v-col>
           </v-row>
           <v-alert type="info" variant="tonal" density="compact" class="mt-3 text-caption">
+            开关改动立即生效；数值参数改动后需点右上角「保存参数」。
             接管开仓端止盈止损：开启后守护引擎会撤销开仓时挂的固定 SL/TP/TS 单（先确认自己的保护 STOP
             已就位才撤，绝不裸仓），止盈止损由守护引擎独家管理。连续移动止损：浮盈达到触发 R
             倍数后，止损线按 价格 ± ATR×倍数 平滑追踪（只在盈利方向推进）。
@@ -246,9 +222,35 @@ import { useProtectionConfig } from '@/composables/useProtectionConfig'
 import SmartSelect from '@/components/SmartSelect.vue'
 import PageCard from '@/components/PageCard.vue'
 
-const { form, saving, saveConfig } = useProtectionConfig()
+const {
+  form,
+  saving,
+  isDirty,
+  dirtyKeys,
+  saveConfig,
+  applySwitch,
+  revertChanges,
+} = useProtectionConfig()
 
 const timeframes = ['15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d']
+
+/** 四个布尔型执行开关：绑定同名配置字段，改动即 patch 落库 */
+const booleanSwitches = [
+  { key: 'profit_protection_enabled', label: '浮盈保护（上移止损）' },
+  { key: 'emergency_enabled', label: '紧急结构止损' },
+  { key: 'exchange_hard_stop_enabled', label: '交易所灾难止损单' },
+  { key: 'take_over_external_stops', label: '接管开仓端止盈止损' },
+] as const
+
+type BooleanSwitchKey = (typeof booleanSwitches)[number]['key']
+
+const onBooleanSwitch = (key: BooleanSwitchKey, value: boolean | null): void => {
+  void applySwitch(key, value === true)
+}
+
+const onTrailingModeSwitch = (value: boolean | null): void => {
+  void applySwitch('trailing_stop_mode', value === true ? 'continuous' : 'step')
+}
 
 // ---- 折叠面板标题行的当前值摘要（收起状态也能读到关键值） ----
 const onOff = (value: boolean): string => (value ? '开' : '关')

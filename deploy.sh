@@ -90,7 +90,21 @@ echo -e "${GREEN}Code is up to date.${NC}"
 echo ""
 
 
-echo -e "${YELLOW}===== [STEP 3/6] Stopping and removing old container... =====${NC}"
+echo -e "${YELLOW}===== [STEP 3/6] Building new Docker image: $APP_NAME =====${NC}"
+# 先构建、后停旧容器：构建期间旧容器继续对外服务，空窗从「构建耗时（1-3 分钟）」
+# 缩短到「秒级」；且构建失败时旧容器仍在运行，等于自动回滚（原顺序是构建前先删容器，
+# 一旦 build 失败线上就彻底没服务）。
+DOCKER_BUILDKIT=1 sudo docker build -t $APP_NAME .
+BUILD_STATUS=$?
+if [ $BUILD_STATUS -ne 0 ]; then
+    echo -e "${RED}!!!!! Docker build failed! Deployment aborted. Old container keeps running. !!!!!${NC}"
+    exit $BUILD_STATUS
+fi
+echo -e "${GREEN}Docker image built successfully.${NC}"
+echo ""
+
+
+echo -e "${YELLOW}===== [STEP 4/6] Stopping and removing old container... =====${NC}"
 if [ "$(sudo docker ps -q -f name=$CONTAINER_NAME)" ]; then
     sudo docker stop $CONTAINER_NAME
 fi
@@ -98,17 +112,6 @@ if [ "$(sudo docker ps -aq -f name=$CONTAINER_NAME)" ]; then
     sudo docker rm $CONTAINER_NAME
 fi
 echo -e "${GREEN}Old container stopped and removed.${NC}"
-echo ""
-
-
-echo -e "${YELLOW}===== [STEP 4/6] Building new Docker image: $APP_NAME =====${NC}"
-DOCKER_BUILDKIT=1 sudo docker build -t $APP_NAME .
-BUILD_STATUS=$?
-if [ $BUILD_STATUS -ne 0 ]; then
-    echo -e "${RED}!!!!! Docker build failed! Deployment aborted. !!!!!${NC}"
-    exit $BUILD_STATUS
-fi
-echo -e "${GREEN}Docker image built successfully.${NC}"
 echo ""
 
 

@@ -68,6 +68,56 @@ const form = reactive({
   trailing_trigger_r: 1,
 })
 
+type FormState = typeof form
+
+const formKeys = Object.keys(form) as (keyof FormState)[]
+/** 动态读写用视图（key 来自运行期字段名，类型无法静态收敛） */
+const rawForm = form as unknown as Record<string, unknown>
+
+/**
+ * 后端最后一次确认落库的值 = 脏值判定基线。
+ * 10s 轮询拿到的配置只在与基线一致（无未保存改动）时才回填表单，
+ * 否则用户刚改的数字/开关会被静默覆盖（曾导致开关「打开过一会自己关掉」）。
+ */
+const saved = ref<Record<string, unknown>>({})
+
+const valueKey = (value: unknown): string =>
+  Array.isArray(value) ? value.join(',') : String(value)
+
+function copyValue(value: unknown): unknown {
+  return Array.isArray(value) ? [...value] : value
+}
+
+/** 把当前表单视为已落库状态 */
+function syncSaved(): void {
+  const next: Record<string, unknown> = {}
+  for (const key of formKeys) next[key as string] = copyValue(form[key])
+  saved.value = next
+}
+
+/**
+ * 与基线不一致的字段名（数值参数改动后需要手动保存）。
+ * 基线里没有的字段不参与比较：首次加载前基线为空，此时不应算「未保存」。
+ */
+const dirtyKeys: ComputedRef<string[]> = computed(() =>
+  formKeys
+    .filter((key) => {
+      const baseline = saved.value[key as string]
+      return baseline !== undefined && valueKey(form[key]) !== valueKey(baseline)
+    })
+    .map(String),
+)
+
+const isDirty: ComputedRef<boolean> = computed(() => dirtyKeys.value.length > 0)
+
+/** 放弃未保存改动，回到后端已落库的值 */
+function revertChanges(): void {
+  for (const key of formKeys) {
+    const baseline = saved.value[key as string]
+    if (baseline !== undefined) rawForm[key as string] = copyValue(baseline)
+  }
+}
+
 /** 运行中引擎是否为 v2（状态优先，回退表单值） */
 const isV2: ComputedRef<boolean> = computed(
   () => (status.value.engine_version ?? form.engine_version ?? 'v2') === 'v2',
@@ -124,13 +174,15 @@ function applyConfig(config: Partial<ProtectionConfig>): void {
   }
   const triggerR = Number(config.trailing_trigger_r)
   if (Number.isFinite(triggerR) && triggerR > 0) form.trailing_trigger_r = triggerR
+  syncSaved()
 }
 
-async function fetchStatus(): Promise<void> {
+async function fetchStatus(force = false): Promise<void> {
   try {
     const response = await api.get<ProtectionStatus>(ENDPOINTS.protection)
     status.value = response.data
-    applyConfig(response.data.config ?? {})
+    // 有未保存改动时只用服务端数据刷新运行状态，不回填表单
+    if (force || !isDirty.value) applyConfig(response.data.config ?? {})
   } catch (error: unknown) {
     console.warn('获取仓位保护状态失败:', getErrorMessage(error))
   }
@@ -142,7 +194,7 @@ async function saveConfig(): Promise<boolean> {
   try {
     await api.post(ENDPOINTS.protectionConfig, { ...form })
     useSnackbarStore().show({ message: '仓位保护参数已保存并生效。', color: 'success' })
-    await fetchStatus()
+    await fetchStatus(true)
     return true
   } catch (error: unknown) {
     useSnackbarStore().show({ message: getErrorMessage(error), color: 'error' })
@@ -159,6 +211,10 @@ async function patchConfig(
   saving.value = true
   try {
     await api.post(ENDPOINTS.protectionConfig, partial)
+    // patch 成功即视为该字段已落库，避免它被算成「未保存」而挡住后续轮询回填
+    for (const [key, value] of Object.entries(partial)) {
+      if (formKeys.includes(key as keyof FormState)) saved.value[key] = copyValue(value)
+    }
     await fetchStatus()
     return { ok: true, detail: '' }
   } catch (error: unknown) {
@@ -168,6 +224,20 @@ async function patchConfig(
   } finally {
     saving.value = false
   }
+}
+
+/**
+ * 开关类参数：改动即写回（失败的则回滚到改动前的值）。
+ * 这类开关是二值状态，用户预期是「拨了就算数」，不该等「保存参数」。
+ */
+async function applySwitch<K extends keyof FormState>(
+  key: K,
+  value: FormState[K],
+): Promise<void> {
+  const previous = rawForm[key as string]
+  rawForm[key as string] = value
+  const result = await patchConfig({ [key as string]: value })
+  if (!result.ok) rawForm[key as string] = previous
 }
 
 async function onToggleDryRun(value: boolean | null): Promise<void> {
@@ -198,9 +268,14 @@ export interface UseProtectionConfigReturn {
   form: typeof form
   saving: Ref<boolean>
   isV2: ComputedRef<boolean>
+  /** 数值参数有未保存改动（开关类改动即时生效，不计入） */
+  isDirty: ComputedRef<boolean>
+  dirtyKeys: ComputedRef<string[]>
   fetchStatus: typeof fetchStatus
   saveConfig: typeof saveConfig
   patchConfig: typeof patchConfig
+  applySwitch: typeof applySwitch
+  revertChanges: typeof revertChanges
   onToggleDryRun: typeof onToggleDryRun
   onToggleEnabled: typeof onToggleEnabled
 }
@@ -212,9 +287,13 @@ export function useProtectionConfig(): UseProtectionConfigReturn {
     form,
     saving,
     isV2,
+    isDirty,
+    dirtyKeys,
     fetchStatus,
     saveConfig,
     patchConfig,
+    applySwitch,
+    revertChanges,
     onToggleDryRun,
     onToggleEnabled,
   }
