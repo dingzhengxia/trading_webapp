@@ -19,6 +19,7 @@
         <v-btn value="short" size="small">做空</v-btn>
         <v-btn value="neutral" size="small">观望</v-btn>
       </v-btn-toggle>
+      <HelpTip :text="HELP.signals.listDirection" />
 
       <span class="text-caption text-medium-emphasis num">
         {{ signals.length }} / {{ total }} 条
@@ -30,6 +31,7 @@
       <v-btn size="small" variant="text" prepend-icon="mdi-refresh" :loading="loading" @click="emit('refresh')">
         刷新
       </v-btn>
+      <HelpTip :text="HELP.signals.refreshBtn" />
       <v-btn
         size="small"
         color="primary"
@@ -41,6 +43,7 @@
       >
         立即扫描
       </v-btn>
+      <HelpTip :text="HELP.signals.scanNowBtn" />
       <v-btn
         size="small"
         color="error"
@@ -52,6 +55,7 @@
       >
         清空
       </v-btn>
+      <HelpTip :text="HELP.signals.clearBtn" />
       <slot name="toolbar-append"></slot>
     </div>
 
@@ -165,6 +169,8 @@
 import { ref } from 'vue'
 import type { SignalRecord } from '@/models/types'
 import EmptyState from '@/components/EmptyState.vue'
+import HelpTip from '@/components/HelpTip.vue'
+import { HELP } from '@/config/help'
 import { directionTone } from '@/utils/tone'
 import { formatAutoPrecision, formatFixed, formatIsoTime as formatTime, formatSignedPercent } from '@/utils/format'
 

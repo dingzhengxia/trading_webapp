@@ -6,9 +6,11 @@
     <PageCard icon="mdi-shield-account" title="守卫中的仓位" spaced>
       <template #badges>
         <v-chip size="small" variant="tonal">{{ status.positions.length }} 个</v-chip>
+        <HelpTip :text="HELP.protection.guardCard" />
         <v-btn size="small" variant="text" prepend-icon="mdi-refresh" @click="fetchStatus">
           刷新
         </v-btn>
+        <HelpTip :text="HELP.protection.refreshBtn" />
       </template>
       <v-alert
         v-if="!status.enabled"
@@ -152,6 +154,7 @@
         <v-chip size="small" variant="tonal">
           第 {{ status.v2?.cycle_count ?? 0 }} 轮
         </v-chip>
+        <HelpTip :text="HELP.protection.actionLog" />
       </template>
       <div v-if="(status.v2?.recent_actions?.length ?? 0) === 0" class="text-caption text-medium-emphasis">
         最近没有触发减仓/止盈，引擎只在上移止损时保持安静。
@@ -185,6 +188,8 @@ import { formatNumberOrDash as formatNumber } from '@/utils/format'
 import { directionTone } from '@/utils/tone'
 import PageCard from '@/components/PageCard.vue'
 import EmptyState from '@/components/EmptyState.vue'
+import HelpTip from '@/components/HelpTip.vue'
+import { HELP } from '@/config/help'
 import type { ProtectionPositionRow } from '@/models/types'
 
 const { status, isV2, fetchStatus } = useProtectionConfig()

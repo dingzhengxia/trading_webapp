@@ -48,7 +48,12 @@
               hide-details
               density="compact"
               :disabled="saving"
-            ></v-switch>
+            >
+              <template #label>
+                <span class="text-caption text-medium-emphasis">自动生成</span>
+                <HelpTip :text="HELP.reports.enableSwitch" />
+              </template>
+            </v-switch>
           </v-card-title>
           <v-divider></v-divider>
           <v-card-text>
@@ -58,6 +63,7 @@
                   v-model="report.run_interval"
                   :items="intervalOptions"
                   label="统计周期"
+                  :help="HELP.reports.interval"
                   :disabled="saving"
                 ></SmartSelect>
               </v-col>
@@ -72,7 +78,11 @@
                   variant="outlined"
                   hide-details
                   :disabled="saving"
-                ></v-text-field>
+                >
+                  <template #append-inner>
+                    <HelpTip :text="HELP.reports.sampleCount" />
+                  </template>
+                </v-text-field>
               </v-col>
               <v-col cols="12" sm="6">
                 <v-text-field
@@ -85,7 +95,11 @@
                   variant="outlined"
                   hide-details
                   :disabled="saving"
-                ></v-text-field>
+                >
+                  <template #append-inner>
+                    <HelpTip :text="HELP.reports.gainersCount" />
+                  </template>
+                </v-text-field>
               </v-col>
               <v-col cols="12" sm="6">
                 <v-text-field
@@ -98,7 +112,11 @@
                   variant="outlined"
                   hide-details
                   :disabled="saving"
-                ></v-text-field>
+                >
+                  <template #append-inner>
+                    <HelpTip :text="HELP.reports.volumeRatioCount" />
+                  </template>
+                </v-text-field>
               </v-col>
             </v-row>
 
@@ -131,6 +149,7 @@
             >
               立即生成
             </v-btn>
+            <HelpTip :text="HELP.reports.runNowBtn" />
             <v-spacer></v-spacer>
             <v-btn
               variant="text"
@@ -140,6 +159,7 @@
             >
               查看最近报告
             </v-btn>
+            <HelpTip :text="HELP.reports.latestBtn" />
           </v-card-actions>
         </v-card>
       </v-col>
@@ -171,13 +191,16 @@
         <div class="d-flex flex-wrap align-center ga-4">
           <v-switch
             v-model="dingtalkEnabled"
-            label="钉钉推送（报告 + 仓位保护告警）"
             color="primary"
             inset
             hide-details
             density="compact"
             :disabled="!status.dingtalk_configured || saving"
-          ></v-switch>
+          >
+            <template #label>
+              钉钉推送（报告 + 仓位保护告警）<HelpTip :text="HELP.reports.dingtalkSwitch" />
+            </template>
+          </v-switch>
           <v-spacer></v-spacer>
           <v-btn
             color="primary"
@@ -188,6 +211,7 @@
           >
             保存配置
           </v-btn>
+          <HelpTip :text="HELP.reports.saveBtn" />
         </div>
 
         <!-- .env 说明：默认折叠成一行，需要时再展开看 -->
@@ -216,6 +240,8 @@ import { useSnackbarStore } from '@/stores/snackbar'
 import { getErrorMessage } from '@/utils/errors'
 import { formatUnixSeconds as formatTime } from '@/utils/format'
 import SmartSelect from '@/components/SmartSelect.vue'
+import HelpTip from '@/components/HelpTip.vue'
+import { HELP } from '@/config/help'
 import type { PeriodicReportConfig, ReportResult, ReportRow, ReportsStatus } from '@/models/types'
 
 const snackbarStore = useSnackbarStore()

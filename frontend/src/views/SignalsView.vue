@@ -100,6 +100,7 @@
           <v-btn size="small" variant="text" prepend-icon="mdi-cog" @click="configOpen = true">
             配置
           </v-btn>
+          <HelpTip :text="HELP.signals.configBtn" />
         </template>
       </SignalListPanel>
     </v-card>
@@ -213,6 +214,8 @@ import {
   timeframeOptions,
 } from '@/services/signalsData'
 import { formatIsoTime as formatTime } from '@/utils/format'
+import HelpTip from '@/components/HelpTip.vue'
+import { HELP } from '@/config/help'
 import MetricCard from '@/components/MetricCard.vue'
 import ConfigDrawer from '@/components/ConfigDrawer.vue'
 import SignalListPanel from '@/components/signals/SignalListPanel.vue'

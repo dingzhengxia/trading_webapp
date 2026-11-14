@@ -22,11 +22,14 @@
           :model-value="pushStatus.signal_dingtalk_enabled"
           :loading="savingDingtalkPush"
           :disabled="!pushStatus.dingtalk_configured || !pushStatus.dingtalk_enabled"
-          label="币种信号推送"
           color="primary"
           hide-details
           @update:model-value="emit('toggle-dingtalk', $event)"
-        />
+        >
+          <template #label>
+            币种信号推送<HelpTip :text="HELP.signals.dingtalkSwitch" />
+          </template>
+        </v-switch>
       </v-col>
       <v-col cols="8" sm="4" md="3">
         <!-- 说明放小节标题里，这里只留一个不带浮动标签的小输入框，
@@ -42,7 +45,11 @@
           hint="量能倍数"
           persistent-hint
           @update:model-value="emit('update:pushVolumeInput', Number($event))"
-        />
+        >
+          <template #append-inner>
+            <HelpTip :text="HELP.signals.volumeMultiplier" />
+          </template>
+        </v-text-field>
       </v-col>
       <v-col cols="4" sm="2" md="2">
         <v-btn
@@ -56,6 +63,7 @@
         >
           保存
         </v-btn>
+        <HelpTip :text="HELP.signals.saveVolumeBtn" />
       </v-col>
       <v-col cols="12" md="3" class="text-caption text-medium-emphasis">
         静态币（{{ pushStatus.static_symbols.join(' / ') || '无' }}）始终推送
@@ -79,12 +87,15 @@
     <v-switch
       :model-value="autoEnabled"
       :loading="savingAutoTrade"
-      label="启用自动开仓"
       color="primary"
       hide-details
       class="mb-2"
       @update:model-value="emit('toggle-auto', $event)"
-    />
+    >
+      <template #label>
+        启用自动开仓<HelpTip :text="HELP.signals.autoSwitch" />
+      </template>
+    </v-switch>
 
     <v-row dense>
       <v-col cols="12" md="3">
@@ -94,6 +105,7 @@
           item-title="title"
           item-value="value"
           label="允许方向"
+          :help="HELP.signals.autoDirections"
           multiple
           @update:model-value="emit('dirty')"
         />
@@ -103,6 +115,7 @@
           v-model="autoForm.timeframes"
           :items="timeframeOptions"
           label="允许周期"
+          :help="HELP.signals.autoTimeframes"
           multiple
           @update:model-value="emit('dirty')"
         />
@@ -114,6 +127,7 @@
           item-title="title"
           item-value="value"
           label="策略白名单"
+          :help="HELP.signals.autoStrategies"
           multiple
           hint="观望类策略不会自动开仓"
           :hide-details="false"
@@ -131,7 +145,11 @@
           :min="field.min"
           hide-details="auto"
           @update:model-value="emit('dirty')"
-        />
+        >
+          <template #append-inner>
+            <HelpTip :text="field.help" />
+          </template>
+        </v-text-field>
       </v-col>
     </v-row>
 
@@ -146,6 +164,7 @@
       >
         保存自动开仓配置
       </v-btn>
+      <HelpTip :text="HELP.signals.saveAutoBtn" />
       <span v-if="!autoValid" class="text-caption text-error">
         方向 / 策略 / 周期至少各选一项，数字参数需大于 0
       </span>
@@ -156,6 +175,8 @@
 <script setup lang="ts">
 import SectionHeader from '@/components/SectionHeader.vue'
 import SmartSelect from '@/components/SmartSelect.vue'
+import HelpTip from '@/components/HelpTip.vue'
+import { HELP } from '@/config/help'
 import type { SignalPushStatus } from '@/models/types'
 
 export interface AutoTradeForm {
@@ -210,12 +231,17 @@ type NumericKey =
 // 五个数字参数用数据驱动渲染：加字段不用再复制一段模板
 // 说明统一写在 label 里（确认窗口/冷却时间已带单位），不再用 persistent-hint，
 // 否则各行提示文字行数不同会互相挤压、导致输入框错位
-const numericFields: Array<{ key: NumericKey; label: string; min: number }> = [
-  { key: 'confirmations', label: '确认数', min: 1 },
-  { key: 'confirmationWindowSeconds', label: '确认窗口 (秒)', min: 1 },
-  { key: 'cooldownSeconds', label: '冷却时间 (秒)', min: 0 },
-  { key: 'valueUsd', label: '单笔金额 (USD)', min: 1 },
-  { key: 'maxPositions', label: '最大持仓数', min: 1 },
+const numericFields: Array<{ key: NumericKey; label: string; min: number; help: string }> = [
+  { key: 'confirmations', label: '确认数', min: 1, help: HELP.signals.confirmations },
+  {
+    key: 'confirmationWindowSeconds',
+    label: '确认窗口 (秒)',
+    min: 1,
+    help: HELP.signals.confirmationWindow,
+  },
+  { key: 'cooldownSeconds', label: '冷却时间 (秒)', min: 0, help: HELP.signals.cooldown },
+  { key: 'valueUsd', label: '单笔金额 (USD)', min: 1, help: HELP.signals.valueUsd },
+  { key: 'maxPositions', label: '最大持仓数', min: 1, help: HELP.signals.maxPositions },
 ]
 
 const emit = defineEmits<{

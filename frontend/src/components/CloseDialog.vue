@@ -5,7 +5,9 @@
       <v-card-title class="text-h5 text-center pt-4">{{ dialogTitle }}</v-card-title>
       <v-card-text>
         <div class="text-center">
-          <div class="text-caption text-medium-emphasis">请选择要平仓的仓位比例:</div>
+          <div class="text-caption text-medium-emphasis">
+            请选择要平仓的仓位比例:<HelpTip :text="HELP.position.closeRatio" />
+          </div>
         </div>
 
         <div class="text-center mt-4 mb-2">
@@ -67,6 +69,8 @@ import type { CloseTarget } from '@/stores/uiStore'
 import { ENDPOINTS } from '@/services/endpoints'
 import type { EndpointPath } from '@/services/endpoints'
 import { formatAmount } from '@/utils/format'
+import HelpTip from '@/components/HelpTip.vue'
+import { HELP } from '@/config/help'
 
 const uiStore = useUiStore()
 const positionStore = usePositionStore()

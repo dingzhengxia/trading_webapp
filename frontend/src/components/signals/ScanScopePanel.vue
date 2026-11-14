@@ -10,11 +10,14 @@
       <v-switch
         :model-value="enabled"
         :loading="savingScan"
-        label="启用信号扫描"
         color="primary"
         hide-details
         @update:model-value="emit('toggle', $event)"
-      />
+      >
+        <template #label>
+          启用信号扫描<HelpTip :text="HELP.signals.scanSwitch" />
+        </template>
+      </v-switch>
     </SectionHeader>
 
     <v-divider class="mb-4" />
@@ -31,6 +34,7 @@
           :model-value="staticSymbols"
           :items="staticItems"
           label="静态币种"
+          :help="HELP.signals.staticSymbols"
           multiple
           clearable
           searchable
@@ -49,13 +53,18 @@
           hint="按成交额排名补足"
           persistent-hint
           @update:model-value="emit('update:topN', Number($event))"
-        />
+        >
+          <template #append-inner>
+            <HelpTip :text="HELP.signals.topN" />
+          </template>
+        </v-text-field>
       </v-col>
       <v-col cols="12" sm="8" md="4">
         <SmartSelect
           :model-value="timeframes"
           :items="timeframeOptions"
           label="扫描周期"
+          :help="HELP.signals.timeframes"
           multiple
           @update:model-value="emit('update:timeframes', $event)"
         />
@@ -73,6 +82,7 @@
       >
         保存扫描范围
       </v-btn>
+      <HelpTip :text="HELP.signals.saveScanBtn" />
       <span v-if="dirty" class="text-caption text-warning">
         <v-icon size="13" class="mr-1">mdi-circle-edit-outline</v-icon>有未保存的修改
       </span>
@@ -84,6 +94,8 @@
 <script setup lang="ts">
 import SectionHeader from '@/components/SectionHeader.vue'
 import SmartSelect from '@/components/SmartSelect.vue'
+import HelpTip from '@/components/HelpTip.vue'
+import { HELP } from '@/config/help'
 
 withDefaults(
   defineProps<{

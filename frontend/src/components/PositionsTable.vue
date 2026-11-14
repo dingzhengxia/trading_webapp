@@ -31,6 +31,7 @@
         @click="emit('refresh')"
         :loading="loading"
       ></v-btn>
+      <HelpTip :text="HELP.position.refreshBtn" />
     </v-toolbar>
 
     <!-- 第二行操作栏 -->
@@ -45,18 +46,22 @@
       >
         平掉选中 ({{ selectedInThisTable.length }})
       </v-btn>
+      <HelpTip :text="HELP.position.closeSelected" />
       <v-spacer></v-spacer>
       <!-- xs：批量选择改走「多选」开关（卡片出现 checkbox），完成批量平仓 -->
       <v-switch
         v-if="isXs"
         v-model="selectMode"
-        label="多选"
         color="primary"
         density="compact"
         inset
         hide-details
         class="mr-1 mobile-switch"
-      ></v-switch>
+      >
+        <template #label>
+          多选<HelpTip :text="HELP.position.selectModeSwitch" />
+        </template>
+      </v-switch>
       <v-btn
         color="warning"
         variant="outlined"
@@ -67,6 +72,7 @@
       >
         批量反手 (全部)
       </v-btn>
+      <HelpTip :text="HELP.position.reverseAllBtn" />
       <v-btn
         color="error"
         variant="outlined"
@@ -76,6 +82,7 @@
       >
         批量平仓 (全部)
       </v-btn>
+      <HelpTip :text="HELP.position.closeAllBtn" />
     </v-toolbar>
 
     <v-divider></v-divider>
@@ -156,6 +163,7 @@
           >
             反手
           </v-btn>
+          <HelpTip :text="HELP.position.reverseBtn" />
           <v-btn
             color="error"
             variant="tonal"
@@ -250,7 +258,11 @@
             density="compact"
             :rules="[(v: number) => v > 0 || '价值必须大于 0']"
             hide-details="auto"
-          ></v-text-field>
+          >
+            <template #append-inner>
+              <HelpTip :text="HELP.position.reverseTargetValue" />
+            </template>
+          </v-text-field>
           <div class="text-caption text-medium-emphasis mt-1">
             当前仓位名义价值 ${{ formatFixed(reverseTarget.notional, 2) }}（已预填）
           </div>
@@ -339,6 +351,8 @@ import { directionTone, pnlClass } from '@/utils/tone'
 import { formatAmount, formatFixed, formatQuantity, formatSigned, formatSignedPercent } from '@/utils/format'
 import { ENDPOINTS } from '@/services/endpoints'
 import EmptyState from '@/components/EmptyState.vue'
+import HelpTip from '@/components/HelpTip.vue'
+import { HELP } from '@/config/help'
 
 type TDataTableHeader = {
   key: string

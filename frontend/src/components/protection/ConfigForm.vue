@@ -7,6 +7,7 @@
       <v-btn v-if="isDirty" size="small" variant="text" :disabled="saving" @click="revertChanges">
         撤销
       </v-btn>
+      <HelpTip v-if="isDirty" :text="HELP.protection.revertBtn" />
       <v-btn
         size="small"
         :color="isDirty ? 'warning' : 'primary'"
@@ -17,6 +18,7 @@
       >
         {{ isDirty ? `保存参数（${dirtyKeys.length} 项未保存）` : '保存参数' }}
       </v-btn>
+      <HelpTip :text="HELP.protection.saveBtn" />
     </template>
 
     <v-expansion-panels>
@@ -35,6 +37,7 @@
                 v-model="form.v2_timeframe"
                 :items="timeframes"
                 label="结构判定周期"
+                :help="HELP.protection.v2Timeframe"
               ></SmartSelect>
             </v-col>
             <v-col cols="12" sm="6" md="3">
@@ -48,7 +51,11 @@
                 density="compact"
                 variant="outlined"
                 hide-details
-              ></v-text-field>
+              >
+                <template #append-inner>
+                  <HelpTip :text="HELP.protection.riskMinPct" />
+                </template>
+              </v-text-field>
             </v-col>
             <v-col cols="12" sm="6" md="3">
               <v-text-field
@@ -61,7 +68,11 @@
                 density="compact"
                 variant="outlined"
                 hide-details
-              ></v-text-field>
+              >
+                <template #append-inner>
+                  <HelpTip :text="HELP.protection.riskMaxPct" />
+                </template>
+              </v-text-field>
             </v-col>
           </v-row>
           <v-row dense class="mt-1">
@@ -76,7 +87,11 @@
                 density="compact"
                 variant="outlined"
                 hide-details
-              ></v-text-field>
+              >
+                <template #append-inner>
+                  <HelpTip :text="HELP.protection.tierRatios" />
+                </template>
+              </v-text-field>
             </v-col>
           </v-row>
           <v-row dense class="mt-1">
@@ -91,7 +106,11 @@
                 density="compact"
                 variant="outlined"
                 hide-details
-              ></v-text-field>
+              >
+                <template #append-inner>
+                  <HelpTip :text="HELP.protection.tierConfirmSec" />
+                </template>
+              </v-text-field>
             </v-col>
           </v-row>
           <v-row dense class="mt-1">
@@ -106,7 +125,11 @@
                 density="compact"
                 variant="outlined"
                 hide-details
-              ></v-text-field>
+              >
+                <template #append-inner>
+                  <HelpTip :text="HELP.protection.breakevenTriggerR" />
+                </template>
+              </v-text-field>
             </v-col>
             <v-col cols="12" sm="6" md="3">
               <v-text-field
@@ -119,7 +142,11 @@
                 density="compact"
                 variant="outlined"
                 hide-details
-              ></v-text-field>
+              >
+                <template #append-inner>
+                  <HelpTip :text="HELP.protection.trailingAtrMult" />
+                </template>
+              </v-text-field>
             </v-col>
             <v-col cols="12" sm="6" md="3">
               <v-text-field
@@ -132,7 +159,11 @@
                 density="compact"
                 variant="outlined"
                 hide-details
-              ></v-text-field>
+              >
+                <template #append-inner>
+                  <HelpTip :text="HELP.protection.pollInterval" />
+                </template>
+              </v-text-field>
             </v-col>
           </v-row>
           <v-alert type="info" variant="tonal" density="compact" class="mt-3 text-caption">
@@ -156,26 +187,32 @@
             <v-col v-for="sw in booleanSwitches" :key="sw.key" cols="12" sm="6" md="3">
               <v-switch
                 :model-value="form[sw.key]"
-                :label="sw.label"
                 color="primary"
                 density="compact"
                 inset
                 hide-details
                 @update:model-value="onBooleanSwitch(sw.key, $event)"
-              ></v-switch>
+              >
+                <template #label>
+                  {{ sw.label }}<HelpTip :text="sw.help" />
+                </template>
+              </v-switch>
             </v-col>
           </v-row>
           <v-row dense class="mt-1">
             <v-col cols="12" sm="6" md="3">
               <v-switch
                 :model-value="form.trailing_stop_mode === 'continuous'"
-                label="连续移动止损"
                 color="primary"
                 density="compact"
                 inset
                 hide-details
                 @update:model-value="onTrailingModeSwitch($event)"
-              ></v-switch>
+              >
+                <template #label>
+                  连续移动止损<HelpTip :text="HELP.protection.switchTrailingMode" />
+                </template>
+              </v-switch>
             </v-col>
             <v-col cols="12" sm="6" md="3">
               <v-text-field
@@ -188,7 +225,11 @@
                 density="compact"
                 variant="outlined"
                 hide-details
-              ></v-text-field>
+              >
+                <template #append-inner>
+                  <HelpTip :text="HELP.protection.trailingTriggerR" />
+                </template>
+              </v-text-field>
             </v-col>
             <v-col cols="12" sm="6" md="3">
               <v-text-field
@@ -201,7 +242,11 @@
                 density="compact"
                 variant="outlined"
                 hide-details
-              ></v-text-field>
+              >
+                <template #append-inner>
+                  <HelpTip :text="HELP.protection.hardStopMinDistance" />
+                </template>
+              </v-text-field>
             </v-col>
           </v-row>
           <v-alert type="info" variant="tonal" density="compact" class="mt-3 text-caption">
@@ -221,6 +266,8 @@ import { computed } from 'vue'
 import { useProtectionConfig } from '@/composables/useProtectionConfig'
 import SmartSelect from '@/components/SmartSelect.vue'
 import PageCard from '@/components/PageCard.vue'
+import HelpTip from '@/components/HelpTip.vue'
+import { HELP } from '@/config/help'
 
 const {
   form,
@@ -236,10 +283,26 @@ const timeframes = ['15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d']
 
 /** 四个布尔型执行开关：绑定同名配置字段，改动即 patch 落库 */
 const booleanSwitches = [
-  { key: 'profit_protection_enabled', label: '浮盈保护（上移止损）' },
-  { key: 'emergency_enabled', label: '紧急结构止损' },
-  { key: 'exchange_hard_stop_enabled', label: '交易所灾难止损单' },
-  { key: 'take_over_external_stops', label: '接管开仓端止盈止损' },
+  {
+    key: 'profit_protection_enabled',
+    label: '浮盈保护（上移止损）',
+    help: HELP.protection.switchProfitProtection,
+  },
+  {
+    key: 'emergency_enabled',
+    label: '紧急结构止损',
+    help: HELP.protection.switchEmergency,
+  },
+  {
+    key: 'exchange_hard_stop_enabled',
+    label: '交易所灾难止损单',
+    help: HELP.protection.switchExchangeHardStop,
+  },
+  {
+    key: 'take_over_external_stops',
+    label: '接管开仓端止盈止损',
+    help: HELP.protection.switchTakeOver,
+  },
 ] as const
 
 type BooleanSwitchKey = (typeof booleanSwitches)[number]['key']

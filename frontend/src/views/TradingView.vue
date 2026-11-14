@@ -74,6 +74,7 @@
     >
       开仓
     </v-btn>
+    <HelpTip :text="HELP.trading.btnOpenDock" />
   </AppDockFooter>
 
   <!-- 共享参数抽屉（与信号页复用同一个 ConfigDrawer，禁止各写一套） -->
@@ -140,6 +141,7 @@
           >
             校准 SL/TP
           </v-btn>
+          <HelpTip :text="HELP.trading.btnCalibrate" />
           <v-btn
             class="open-pos-btn"
             variant="flat"
@@ -154,6 +156,7 @@
           >
             开始开仓
           </v-btn>
+          <HelpTip :text="HELP.trading.btnStart" />
         </div>
       </div>
     </template>
@@ -174,6 +177,8 @@ import PnlSummary from '@/components/PnlSummary.vue'
 import OpenHistoryPanel from '@/components/OpenHistoryPanel.vue'
 import AppDockFooter from '@/components/AppDockFooter.vue'
 import ConfigDrawer from '@/components/ConfigDrawer.vue'
+import HelpTip from '@/components/HelpTip.vue'
+import { HELP } from '@/config/help'
 import apiClient from '@/services/api'
 import { ENDPOINTS } from '@/services/endpoints'
 import type { RebalanceCriteria, UserSettings } from '@/models/types'

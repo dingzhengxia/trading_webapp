@@ -21,35 +21,58 @@
                       label="API Key"
                       v-model="settingsStore.settings.api_key"
                       hide-details
-                  /></v-col>
+                    >
+                      <template #append-inner>
+                        <HelpTip :text="HELP.settings.apiKey" />
+                      </template>
+                    </v-text-field></v-col
+                  >
                   <v-col cols="12"
                     ><v-text-field
                       label="API Secret"
                       v-model="settingsStore.settings.api_secret"
                       type="password"
                       hide-details
-                  /></v-col>
+                    >
+                      <template #append-inner>
+                        <HelpTip :text="HELP.settings.apiSecret" />
+                      </template>
+                    </v-text-field></v-col
+                  >
                   <v-col cols="12"
                     ><v-switch
-                      label="使用测试网"
                       v-model="settingsStore.settings.use_testnet"
                       color="primary"
                       hide-details
-                  /></v-col>
+                    >
+                      <template #label>
+                        使用测试网<HelpTip :text="HELP.settings.useTestnet" />
+                      </template>
+                    </v-switch></v-col
+                  >
                   <v-col cols="12"
                     ><v-switch
-                      label="使用代理"
                       v-model="settingsStore.settings.enable_proxy"
                       color="primary"
                       hide-details
-                  /></v-col>
+                    >
+                      <template #label>
+                        使用代理<HelpTip :text="HELP.settings.enableProxy" />
+                      </template>
+                    </v-switch></v-col
+                  >
                   <v-col cols="12"
                     ><v-text-field
                       label="代理地址"
                       v-model="settingsStore.settings.proxy_url"
                       :disabled="!settingsStore.settings.enable_proxy"
                       hide-details
-                  /></v-col>
+                    >
+                      <template #append-inner>
+                        <HelpTip :text="HELP.settings.proxyUrl" />
+                      </template>
+                    </v-text-field></v-col
+                  >
                 </v-row>
 
                 <SectionHeader icon="mdi-shield-alert" title="风控与执行兜底" spaced />
@@ -65,7 +88,11 @@
                       item-title="title"
                       item-value="value"
                       hide-details
-                    />
+                    >
+                      <template #append-inner>
+                        <HelpTip :text="HELP.settings.unprotectedAction" />
+                      </template>
+                    </v-select>
                   </v-col>
                   <v-col cols="12" sm="6">
                     <v-text-field
@@ -76,7 +103,11 @@
                       max="10"
                       hint="reduceOnly 平仓单连续 2 轮 0 成交后按 tick 让价重挂"
                       persistent-hint
-                    />
+                    >
+                      <template #append-inner>
+                        <HelpTip :text="HELP.settings.closeChaseTicks" />
+                      </template>
+                    </v-text-field>
                   </v-col>
                 </v-row>
 
@@ -90,7 +121,11 @@
                       min="1"
                       max="20"
                       hide-details
-                    />
+                    >
+                      <template #append-inner>
+                        <HelpTip :text="HELP.settings.apiMaxConcurrency" />
+                      </template>
+                    </v-text-field>
                   </v-col>
                   <v-col cols="6" sm="3">
                     <v-text-field
@@ -101,7 +136,11 @@
                       max="5"
                       step="0.01"
                       hide-details
-                    />
+                    >
+                      <template #append-inner>
+                        <HelpTip :text="HELP.settings.apiMinInterval" />
+                      </template>
+                    </v-text-field>
                   </v-col>
                   <v-col cols="6" sm="3">
                     <v-text-field
@@ -111,7 +150,11 @@
                       min="1"
                       max="10"
                       hide-details
-                    />
+                    >
+                      <template #append-inner>
+                        <HelpTip :text="HELP.settings.apiMaxRetries" />
+                      </template>
+                    </v-text-field>
                   </v-col>
                   <v-col cols="6" sm="3">
                     <v-text-field
@@ -121,7 +164,11 @@
                       min="1"
                       max="50"
                       hide-details
-                    />
+                    >
+                      <template #append-inner>
+                        <HelpTip :text="HELP.settings.apiFailureThreshold" />
+                      </template>
+                    </v-text-field>
                   </v-col>
                   <v-col cols="6" sm="3">
                     <v-text-field
@@ -131,7 +178,11 @@
                       min="1"
                       max="3600"
                       hide-details
-                    />
+                    >
+                      <template #append-inner>
+                        <HelpTip :text="HELP.settings.apiCooldown" />
+                      </template>
+                    </v-text-field>
                   </v-col>
                   <v-col cols="6" sm="3">
                     <v-text-field
@@ -141,7 +192,11 @@
                       min="1"
                       max="3600"
                       hide-details
-                    />
+                    >
+                      <template #append-inner>
+                        <HelpTip :text="HELP.settings.api418Cooldown" />
+                      </template>
+                    </v-text-field>
                   </v-col>
                   <v-col cols="6" sm="3">
                     <v-text-field
@@ -152,7 +207,11 @@
                       max="60"
                       step="0.1"
                       hide-details
-                    />
+                    >
+                      <template #append-inner>
+                        <HelpTip :text="HELP.settings.api429Base" />
+                      </template>
+                    </v-text-field>
                   </v-col>
                   <v-col cols="6" sm="3">
                     <v-text-field
@@ -163,7 +222,11 @@
                       max="600"
                       step="0.1"
                       hide-details
-                    />
+                    >
+                      <template #append-inner>
+                        <HelpTip :text="HELP.settings.api429Max" />
+                      </template>
+                    </v-text-field>
                   </v-col>
                 </v-row>
               </v-card-text>
@@ -186,6 +249,7 @@
       <v-icon left>mdi-content-save</v-icon>
       手动保存
     </v-btn>
+    <HelpTip :text="HELP.settings.saveBtn" />
   </AppDockFooter>
 </template>
 
@@ -197,6 +261,8 @@ import CoinPoolsManager from '@/components/CoinPoolsManager.vue'
 import AppDockFooter from '@/components/AppDockFooter.vue'
 import PageSkeleton from '@/components/PageSkeleton.vue'
 import SectionHeader from '@/components/SectionHeader.vue'
+import HelpTip from '@/components/HelpTip.vue'
+import { HELP } from '@/config/help'
 
 const settingsStore = useSettingsStore()
 const activeTab = ref('general')

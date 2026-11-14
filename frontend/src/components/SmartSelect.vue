@@ -23,6 +23,7 @@
       >
         <template #append-inner>
           <v-icon icon="mdi-chevron-down" size="20" />
+          <HelpTip v-if="help" :text="help" />
         </template>
       </v-text-field>
 
@@ -63,7 +64,10 @@
                 :icon="isSelected(opt.value) ? 'mdi-check-circle' : 'mdi-circle-outline'"
               ></v-icon>
             </div>
-            <div v-if="filteredItems.length === 0" class="pa-6 text-center text-caption text-medium-emphasis">
+            <div
+              v-if="filteredItems.length === 0"
+              class="pa-6 text-center text-caption text-medium-emphasis"
+            >
               没有匹配的选项
             </div>
           </div>
@@ -107,7 +111,11 @@
       :hint="hint"
       :persistent-hint="!!hint"
       @update:model-value="onSelect"
-    ></component>
+    >
+      <template v-if="help" #append-inner>
+        <HelpTip :text="help" />
+      </template>
+    </component>
   </div>
 </template>
 
@@ -117,6 +125,7 @@ import { useDisplay } from 'vuetify'
 // 按需引入（T12）：下面两个组件经 <component :is> 动态渲染且 vite-plugin-vuetify
 // 无法静态分析字符串派发，必须显式 import 并直接传组件对象
 import { VAutocomplete, VSelect } from 'vuetify/components'
+import HelpTip from '@/components/HelpTip.vue'
 
 type Primitive = string | number
 // v-model 取值：单选为标量，多选为数组；父组件的 ref 类型各不相同，这里统一用联合类型收敛
@@ -134,9 +143,18 @@ const props = withDefaults(
     disabled?: boolean
     clearable?: boolean
     density?: 'default' | 'comfortable' | 'compact'
-    variant?: 'filled' | 'outlined' | 'plain' | 'underlined' | 'solo' | 'solo-inverted' | 'solo-filled'
+    variant?:
+      | 'filled'
+      | 'outlined'
+      | 'plain'
+      | 'underlined'
+      | 'solo'
+      | 'solo-inverted'
+      | 'solo-filled'
     hideDetails?: boolean | 'auto'
     hint?: string
+    /** 「?」说明文案（控件右侧角标，点击弹出） */
+    help?: string
     /** 表格单元格等窄容器里用更小的胶囊 */
     dense?: boolean
     /** 桌面端允许输入搜索（选项很多时用） */

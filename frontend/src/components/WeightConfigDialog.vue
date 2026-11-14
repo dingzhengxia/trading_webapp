@@ -24,7 +24,11 @@
                 density="compact"
                 suffix="%"
                 hide-details
-              ></v-text-field>
+              >
+                <template #append-inner>
+                  <HelpTip :text="HELP.dialog.weightInput" />
+                </template>
+              </v-text-field>
             </v-col>
           </v-row>
         </v-form>
@@ -38,6 +42,7 @@
       </v-card-text>
       <v-card-actions>
         <v-btn color="primary" variant="text" @click="resetAndUnlock">均分权重</v-btn>
+        <HelpTip :text="HELP.dialog.weightAverage" />
         <v-spacer></v-spacer>
         <v-btn color="blue-darken-1" variant="text" @click="close">取消</v-btn>
         <v-btn
@@ -47,6 +52,7 @@
           :disabled="Math.abs(totalWeight - 100) > 0.001"
           >保存</v-btn
         >
+        <HelpTip :text="HELP.dialog.weightSave" />
       </v-card-actions>
     </v-card>
   </v-dialog>
@@ -56,6 +62,8 @@
 import { ref, watch, computed, nextTick } from 'vue'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { formatFixed, roundTo } from '@/utils/format'
+import HelpTip from '@/components/HelpTip.vue'
+import { HELP } from '@/config/help'
 
 const props = defineProps<{
   modelValue: boolean

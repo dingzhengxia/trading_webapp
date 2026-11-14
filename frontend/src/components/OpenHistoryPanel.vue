@@ -12,6 +12,7 @@
         <v-icon start>mdi-refresh</v-icon>
         刷新
       </v-btn>
+      <HelpTip :text="HELP.signals.openHistoryRefresh" />
     </v-card-title>
 
     <v-card-text>
@@ -102,6 +103,8 @@ import { ENDPOINTS } from '@/services/endpoints'
 import { formatMillis, formatUsdLoose } from '@/utils/format'
 import { useUiStore } from '@/stores/uiStore'
 import { getErrorMessage } from '@/utils/errors'
+import HelpTip from '@/components/HelpTip.vue'
+import { HELP } from '@/config/help'
 import { positionSideTone } from '@/utils/tone'
 import EmptyState from '@/components/EmptyState.vue'
 

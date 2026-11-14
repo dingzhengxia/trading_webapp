@@ -20,6 +20,7 @@
         <v-icon start>mdi-content-save</v-icon>
         保存
       </v-btn>
+      <HelpTip :text="HELP.trading.saveBtn" />
     </div>
 
     <!-- ============ Tab 1：通用开仓设置 ============ -->
@@ -32,21 +33,29 @@
             <v-card-text class="flex-grow-1">
               <v-switch
                 v-model="draft.enable_long_trades"
-                label="开启多头交易"
                 color="success"
                 inset
-              ></v-switch>
+              >
+                <template #label>
+                  开启多头交易<HelpTip :text="HELP.trading.enableLong" />
+                </template>
+              </v-switch>
               <v-text-field
                 v-model.number="draft.total_long_position_value"
                 label="多头总价值 (USD)"
                 type="number"
                 :disabled="!draft.enable_long_trades"
-              ></v-text-field>
+              >
+                <template #append-inner>
+                  <HelpTip :text="HELP.trading.longTotalValue" />
+                </template>
+              </v-text-field>
 
               <SmartSelect
                 :model-value="sortedLongCoinList"
                 :items="longListItems"
                 label="从备选池中选择做多币种（可搜索）"
+                :help="HELP.trading.longCoinList"
                 multiple
                 clearable
                 searchable
@@ -63,14 +72,18 @@
                 :disabled="!draft.enable_long_trades"
                 >配置权重</v-btn
               >
+              <HelpTip :text="HELP.trading.weightBtn" />
               <v-divider class="my-4"></v-divider>
               <v-switch
                 v-model="draft.enable_long_sl_tp"
-                label="开启多头固定 SL/TP"
                 color="info"
                 inset
                 :disabled="!draft.enable_long_trades"
-              ></v-switch>
+              >
+                <template #label>
+                  开启多头固定 SL/TP<HelpTip :text="HELP.trading.enableLongSltp" />
+                </template>
+              </v-switch>
               <v-row dense>
                 <v-col cols="6"
                   ><v-text-field
@@ -80,7 +93,11 @@
                     :disabled="!draft.enable_long_sl_tp"
                      hint="设为0则不设置止损"
                     persistent-hint
-                  ></v-text-field
+                  >
+                    <template #append-inner>
+                      <HelpTip :text="HELP.trading.longSlPct" />
+                    </template>
+                  </v-text-field
                 ></v-col>
                 <v-col cols="6"
                   ><v-text-field
@@ -90,7 +107,11 @@
                     :disabled="!draft.enable_long_sl_tp"
                     hint="设为0则不设置止盈"
                     persistent-hint
-                  ></v-text-field
+                  >
+                    <template #append-inner>
+                      <HelpTip :text="HELP.trading.longTpPct" />
+                    </template>
+                  </v-text-field
                 ></v-col>
               </v-row>
 
@@ -98,11 +119,14 @@
               <v-divider class="my-4"></v-divider>
               <v-switch
                 v-model="draft.enable_long_trailing_stop"
-                label="开启多头移动止盈 (Trailing)"
                 color="purple-accent-2"
                 inset
                 :disabled="!draft.enable_long_trades"
-              ></v-switch>
+              >
+                <template #label>
+                  开启多头移动止盈 (Trailing)<HelpTip :text="HELP.trading.enableLongTrailing" />
+                </template>
+              </v-switch>
               <v-text-field
                 v-model.number="draft.long_trailing_stop_callback_rate"
                 label="回调率 (%)"
@@ -113,7 +137,11 @@
                 :disabled="!draft.enable_long_trailing_stop"
                 hint="价格回撤多少百分比时平仓 (建议 0.5% - 5.0%)"
                 persistent-hint
-              ></v-text-field>
+              >
+                <template #append-inner>
+                  <HelpTip :text="HELP.trading.longTrailingRate" />
+                </template>
+              </v-text-field>
 
             </v-card-text>
           </v-card>
@@ -125,21 +153,29 @@
             <v-card-text class="flex-grow-1">
               <v-switch
                 v-model="draft.enable_short_trades"
-                label="开启空头交易"
                 color="error"
                 inset
-              ></v-switch>
+              >
+                <template #label>
+                  开启空头交易<HelpTip :text="HELP.trading.enableShort" />
+                </template>
+              </v-switch>
               <v-text-field
                 v-model.number="draft.total_short_position_value"
                 label="空头总价值 (USD)"
                 type="number"
                 :disabled="!draft.enable_short_trades"
-              ></v-text-field>
+              >
+                <template #append-inner>
+                  <HelpTip :text="HELP.trading.shortTotalValue" />
+                </template>
+              </v-text-field>
 
               <SmartSelect
                 :model-value="sortedShortCoinList"
                 :items="shortListItems"
                 label="从备选池中选择空头币种（可搜索）"
+                :help="HELP.trading.shortCoinList"
                 multiple
                 clearable
                 searchable
@@ -153,11 +189,14 @@
               <v-divider class="my-4"></v-divider>
               <v-switch
                 v-model="draft.enable_short_sl_tp"
-                label="开启空头固定 SL/TP"
                 color="info"
                 inset
                 :disabled="!draft.enable_short_trades"
-              ></v-switch>
+              >
+                <template #label>
+                  开启空头固定 SL/TP<HelpTip :text="HELP.trading.enableShortSltp" />
+                </template>
+              </v-switch>
               <v-row dense>
                 <v-col cols="6"
                   ><v-text-field
@@ -167,7 +206,11 @@
                     :disabled="!draft.enable_short_sl_tp"
                     hint="设为0则不设置止损"
                     persistent-hint
-                  ></v-text-field
+                  >
+                    <template #append-inner>
+                      <HelpTip :text="HELP.trading.shortSlPct" />
+                    </template>
+                  </v-text-field
                 ></v-col>
                 <v-col cols="6"
                   ><v-text-field
@@ -177,7 +220,11 @@
                     :disabled="!draft.enable_short_sl_tp"
                     hint="设为0则不设置止盈"
                     persistent-hint
-                  ></v-text-field
+                  >
+                    <template #append-inner>
+                      <HelpTip :text="HELP.trading.shortTpPct" />
+                    </template>
+                  </v-text-field
                 ></v-col>
               </v-row>
 
@@ -185,11 +232,14 @@
               <v-divider class="my-4"></v-divider>
               <v-switch
                 v-model="draft.enable_short_trailing_stop"
-                label="开启空头移动止盈 (Trailing)"
                 color="purple-accent-2"
                 inset
                 :disabled="!draft.enable_short_trades"
-              ></v-switch>
+              >
+                <template #label>
+                  开启空头移动止盈 (Trailing)<HelpTip :text="HELP.trading.enableShortTrailing" />
+                </template>
+              </v-switch>
               <v-text-field
                 v-model.number="draft.short_trailing_stop_callback_rate"
                 label="反弹率 (%)"
@@ -200,7 +250,11 @@
                 :disabled="!draft.enable_short_trailing_stop"
                 hint="价格反弹多少百分比时平仓 (建议 0.5% - 5.0%)"
                 persistent-hint
-              ></v-text-field>
+              >
+                <template #append-inner>
+                  <HelpTip :text="HELP.trading.shortTrailingRate" />
+                </template>
+              </v-text-field>
 
             </v-card-text>
           </v-card>
@@ -222,7 +276,11 @@
                         suffix="x"
                         hint="1–125 整数；新开仓直接按此杠杆下单，已有持仓在点「校准 SL/TP」时一并推送（改杠杆会改变清算价）"
                         persistent-hint
-                      ></v-text-field>
+                      >
+                        <template #append-inner>
+                          <HelpTip :text="HELP.trading.leverage" />
+                        </template>
+                      </v-text-field>
                   </v-col>
                   <v-col cols="12" sm="6">
                       <v-text-field
@@ -231,7 +289,11 @@
                         type="number"
                         hint="挂单失败或超时后重试的次数"
                         persistent-hint
-                      ></v-text-field>
+                      >
+                        <template #append-inner>
+                          <HelpTip :text="HELP.trading.openRetries" />
+                        </template>
+                      </v-text-field>
                   </v-col>
                   <v-col cols="12" sm="6">
                       <v-text-field
@@ -240,21 +302,33 @@
                         type="number"
                         hint="挂单后等待成交的最大时间"
                         persistent-hint
-                      ></v-text-field>
+                      >
+                        <template #append-inner>
+                          <HelpTip :text="HELP.trading.openTimeout" />
+                        </template>
+                      </v-text-field>
                   </v-col>
                   <v-col cols="12" sm="6">
                       <v-text-field
                         v-model.number="draft.close_maker_retries"
                         label="平仓重试次数"
                         type="number"
-                      ></v-text-field>
+                      >
+                        <template #append-inner>
+                          <HelpTip :text="HELP.trading.closeRetries" />
+                        </template>
+                      </v-text-field>
                   </v-col>
                   <v-col cols="12" sm="6">
                       <v-text-field
                         v-model.number="draft.close_order_fill_timeout_seconds"
                         label="平仓订单超时 (秒)"
                         type="number"
-                      ></v-text-field>
+                      >
+                        <template #append-inner>
+                          <HelpTip :text="HELP.trading.closeTimeout" />
+                        </template>
+                      </v-text-field>
                   </v-col>
               </v-row>
           </v-card-text>
@@ -272,6 +346,7 @@
             item-title="text"
             item-value="value"
             label="筛选策略"
+            :help="HELP.trading.rebalanceMethod"
           ></SmartSelect>
           <v-text-field
             v-model.number="draft.rebalance_top_n"
@@ -279,14 +354,22 @@
             type="number"
             variant="outlined"
             density="compact"
-          ></v-text-field>
+          >
+            <template #append-inner>
+              <HelpTip :text="HELP.trading.rebalanceTopN" />
+            </template>
+          </v-text-field>
           <v-text-field
             v-model.number="draft.rebalance_min_volume_usd"
             label="最小24h交易额 (USD)"
             type="number"
             variant="outlined"
             density="compact"
-          ></v-text-field>
+          >
+            <template #append-inner>
+              <HelpTip :text="HELP.trading.rebalanceMinVolume" />
+            </template>
+          </v-text-field>
           <v-text-field
             v-model.number="draft.rebalance_volume_ma_days"
             label="成交量均线天数 (MA)"
@@ -295,7 +378,11 @@
             persistent-hint
             variant="outlined"
             density="compact"
-          ></v-text-field>
+          >
+            <template #append-inner>
+              <HelpTip :text="HELP.trading.rebalanceVolumeMaDays" />
+            </template>
+          </v-text-field>
         </v-col>
         <v-col cols="12" md="6">
           <div v-if="draft.rebalance_method === 'multi_factor_weakest'">
@@ -303,6 +390,7 @@
               :model-value="draft.rebalance_benchmark_coin"
               :items="longListItems"
               label="相对强度基准币种"
+              :help="HELP.trading.rebalanceBenchmark"
               multiple
               searchable
               persistent-hint
@@ -315,14 +403,22 @@
               type="number"
               variant="outlined"
               density="compact"
-            ></v-text-field>
+            >
+              <template #append-inner>
+                <HelpTip :text="HELP.trading.rebalanceAbsMomentumDays" />
+              </template>
+            </v-text-field>
             <v-text-field
               v-model.number="draft.rebalance_rel_strength_days"
               label="相对强度天数"
               type="number"
               variant="outlined"
               density="compact"
-            ></v-text-field>
+            >
+              <template #append-inner>
+                <HelpTip :text="HELP.trading.rebalanceRelDays" />
+              </template>
+            </v-text-field>
           </div>
           <v-text-field
             v-model.number="draft.rebalance_volume_spike_ratio"
@@ -332,7 +428,11 @@
             persistent-hint
             variant="outlined"
             density="compact"
-          ></v-text-field>
+          >
+            <template #append-inner>
+              <HelpTip :text="HELP.trading.rebalanceVolumeSpike" />
+            </template>
+          </v-text-field>
         </v-col>
       </v-row>
 
@@ -342,11 +442,14 @@
           <v-spacer></v-spacer>
           <v-switch
             v-model="draft.enable_rebalance_filters"
-            label="启用"
             color="primary"
             hide-details
             inset
-          ></v-switch>
+          >
+            <template #label>
+              启用<HelpTip :text="HELP.trading.enableRebalanceFilters" />
+            </template>
+          </v-switch>
         </v-card-title>
         <v-divider></v-divider>
         <v-card-text :class="{ 'disabled-overlay': !draft.enable_rebalance_filters }">
@@ -358,7 +461,11 @@
                 label="RSI 周期"
                 type="number"
                 density="compact"
-              ></v-text-field>
+              >
+                <template #append-inner>
+                  <HelpTip :text="HELP.trading.rsiPeriod" />
+                </template>
+              </v-text-field>
               <v-text-field
                 v-model.number="draft.rebalance_rsi_threshold"
                 label="RSI 最低门槛"
@@ -366,7 +473,11 @@
                 hint="低于此值将被剔除"
                 persistent-hint
                 density="compact"
-              ></v-text-field>
+              >
+                <template #append-inner>
+                  <HelpTip :text="HELP.trading.rsiThreshold" />
+                </template>
+              </v-text-field>
             </v-col>
             <v-col cols="12" sm="6" md="4">
                <div class="text-subtitle-2 mb-1">短期反弹过滤</div>
@@ -375,7 +486,11 @@
                 label="考察天数"
                 type="number"
                 density="compact"
-              ></v-text-field>
+              >
+                <template #append-inner>
+                  <HelpTip :text="HELP.trading.shortTermDays" />
+                </template>
+              </v-text-field>
               <v-text-field
                 v-model.number="draft.rebalance_short_term_momentum_threshold"
                 label="最大涨幅 (%)"
@@ -383,7 +498,11 @@
                 hint="短期涨幅过高将剔除"
                 persistent-hint
                 density="compact"
-              ></v-text-field>
+              >
+                <template #append-inner>
+                  <HelpTip :text="HELP.trading.shortTermThreshold" />
+                </template>
+              </v-text-field>
             </v-col>
             <v-col cols="12" sm="6" md="4">
               <div class="text-subtitle-2 mb-1">波动率放大过滤</div>
@@ -392,13 +511,21 @@
                 label="布林带周期"
                 type="number"
                 density="compact"
-              ></v-text-field>
+              >
+                <template #append-inner>
+                  <HelpTip :text="HELP.trading.bollPeriod" />
+                </template>
+              </v-text-field>
                <v-text-field
                 v-model.number="draft.rebalance_bollinger_std_dev"
                 label="布林带标准差"
                 type="number"
                 density="compact"
-              ></v-text-field>
+              >
+                <template #append-inner>
+                  <HelpTip :text="HELP.trading.bollStd" />
+                </template>
+              </v-text-field>
               <v-text-field
                 v-model.number="draft.rebalance_bollinger_width_spike_ratio"
                 label="宽度放大倍数"
@@ -406,7 +533,11 @@
                 hint="当前宽度/均值 > 此值则剔除"
                 persistent-hint
                 density="compact"
-              ></v-text-field>
+              >
+                <template #append-inner>
+                  <HelpTip :text="HELP.trading.bollWidthSpike" />
+                </template>
+              </v-text-field>
             </v-col>
           </v-row>
         </v-card-text>
@@ -425,6 +556,7 @@
         >
           生成再平衡计划
         </v-btn>
+        <HelpTip :text="HELP.trading.generatePlanBtn" />
       </div>
     </template>
   </div>
@@ -438,6 +570,8 @@ import { useUiStore } from '@/stores/uiStore'
 import { useDraftSettings } from '@/composables/useDraftSettings'
 import { formatClockTime } from '@/utils/format'
 import SmartSelect from '@/components/SmartSelect.vue'
+import HelpTip from '@/components/HelpTip.vue'
+import { HELP } from '@/config/help'
 
 withDefaults(
   defineProps<{

@@ -23,12 +23,14 @@
             v-model="manualRatio"
             :step="0.5"
             color="primary"
-            label="手动调整目标比例"
             class="my-4 align-center"
             hide-details
             min="0"
             max="150"
           >
+            <template #label>
+              手动调整目标比例<HelpTip :text="HELP.dialog.manualRatio" />
+            </template>
             <template v-slot:thumb-label="{ modelValue }">
               <span class="font-weight-bold">{{ formatFixed(modelValue, 1) }}%</span>
             </template>
@@ -64,9 +66,11 @@
         <v-spacer></v-spacer>
         <v-btn color="blue-darken-1" variant="text" @click="close">取消</v-btn>
         <v-btn color="primary" variant="text" @click="applyList">应用列表到配置</v-btn>
+        <HelpTip :text="HELP.dialog.applyListBtn" />
         <v-btn color="red-darken-1" variant="tonal" @click="executePlan" :disabled="uiStore.isRunning"
           >确认执行</v-btn
         >
+        <HelpTip :text="HELP.dialog.executeBtn" />
       </v-card-actions>
     </v-card>
   </v-dialog>
@@ -80,6 +84,8 @@ import { usePositionStore } from '@/stores/positionStore'
 import type { RebalancePlan } from '@/models/types'
 import { ENDPOINTS } from '@/services/endpoints'
 import { formatAmount, formatFixed } from '@/utils/format'
+import HelpTip from '@/components/HelpTip.vue'
+import { HELP } from '@/config/help'
 
 const uiStore = useUiStore()
 const settingsStore = useSettingsStore()

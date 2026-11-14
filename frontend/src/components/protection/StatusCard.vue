@@ -18,23 +18,29 @@
         <v-switch
           :model-value="status.enabled"
           :loading="saving"
-          label="启用仓位保护"
           color="primary"
           inset
           hide-details
           @update:model-value="onToggleEnabled"
-        ></v-switch>
+        >
+          <template #label>
+            启用仓位保护<HelpTip :text="HELP.protection.enableSwitch" />
+          </template>
+        </v-switch>
       </v-col>
       <v-col v-if="isV2" cols="12" md="3">
         <v-switch
           :model-value="Boolean(form.dry_run)"
           :loading="saving"
-          label="演练模式（只记录不下单）"
           color="warning"
           inset
           hide-details
           @update:model-value="onToggleDryRun"
-        ></v-switch>
+        >
+          <template #label>
+            演练模式（只记录不下单）<HelpTip :text="HELP.protection.dryRunSwitch" />
+          </template>
+        </v-switch>
       </v-col>
       <v-col cols="12" :md="isV2 ? 6 : 9">
         <div class="d-flex flex-wrap ga-2">
@@ -60,6 +66,7 @@
           >
             {{ status.api.circuit_open ? '接口限流熔断中' : '接口正常' }}
           </v-chip>
+          <HelpTip :text="HELP.protection.chipRow" />
         </div>
       </v-col>
     </v-row>
@@ -75,6 +82,8 @@
 // 组件直接消费 useProtectionConfig 的模块级单例状态与写入口
 import { useProtectionConfig } from '@/composables/useProtectionConfig'
 import PageCard from '@/components/PageCard.vue'
+import HelpTip from '@/components/HelpTip.vue'
+import { HELP } from '@/config/help'
 
 const { status, form, saving, isV2, onToggleEnabled, onToggleDryRun } = useProtectionConfig()
 </script>

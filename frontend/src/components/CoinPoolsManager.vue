@@ -19,7 +19,11 @@
             class="mr-4"
             @keyup.enter="addCoin"
             autofocus
-          ></v-text-field>
+          >
+            <template #append-inner>
+              <HelpTip :text="HELP.settings.coinSymbol" />
+            </template>
+          </v-text-field>
           <v-btn
             color="primary"
             variant="tonal"
@@ -30,6 +34,7 @@
           >
             添加
           </v-btn>
+          <HelpTip :text="HELP.settings.addCoinBtn" />
         </div>
         <div class="text-caption text-medium-emphasis mt-2">
           添加到总池后，您就可以在下方的做多/做空备选池中选择它。
@@ -63,6 +68,7 @@
             :model-value="sortedLongPool"
             :items="availableForLongPool"
             label="从总池中选择做多备选币种（可搜索）"
+            :help="HELP.settings.longPool"
             multiple
             clearable
             searchable
@@ -96,6 +102,7 @@
             :model-value="sortedShortPool"
             :items="availableForShortPool"
             label="从总池中选择做空备选币种（可搜索）"
+            :help="HELP.settings.shortPool"
             multiple
             clearable
             searchable
@@ -110,6 +117,8 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
 import SmartSelect from '@/components/SmartSelect.vue'
+import HelpTip from '@/components/HelpTip.vue'
+import { HELP } from '@/config/help'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { useSnackbarStore } from '@/stores/snackbar'
 import apiClient from '@/services/api'

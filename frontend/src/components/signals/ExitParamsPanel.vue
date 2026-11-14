@@ -33,6 +33,7 @@
       <v-btn value="percent" size="small">百分比（现设）</v-btn>
       <v-btn value="atr" size="small">ATR 止损</v-btn>
     </v-btn-toggle>
+    <HelpTip :text="HELP.signals.exitMode" />
     <p class="text-caption text-medium-emphasis mb-4">
       {{
         exitMode === 'percent'
@@ -46,11 +47,14 @@
         <v-switch
           :model-value="paperEnabled"
           :loading="savingPaperToggle"
-          label="启用纸面跟踪"
           color="primary"
           hide-details
           @update:model-value="emit('toggle-paper', $event)"
-        />
+        >
+          <template #label>
+            启用纸面跟踪<HelpTip :text="HELP.signals.paperSwitch" />
+          </template>
+        </v-switch>
       </v-col>
       <v-col cols="6" sm="3" md="2">
         <v-text-field
@@ -62,7 +66,11 @@
           step="0.1"
           :disabled="exitMode !== 'atr'"
           @update:model-value="emit('dirty')"
-        />
+        >
+          <template #append-inner>
+            <HelpTip :text="HELP.signals.slAtr" />
+          </template>
+        </v-text-field>
       </v-col>
       <v-col cols="6" sm="3" md="2">
         <v-text-field
@@ -74,7 +82,11 @@
           step="0.5"
           :disabled="exitMode !== 'atr'"
           @update:model-value="emit('dirty')"
-        />
+        >
+          <template #append-inner>
+            <HelpTip :text="HELP.signals.tpR" />
+          </template>
+        </v-text-field>
       </v-col>
       <v-col cols="6" sm="3" md="2">
         <v-text-field
@@ -84,7 +96,11 @@
           min="1"
           max="100"
           @update:model-value="emit('dirty')"
-        />
+        >
+          <template #append-inner>
+            <HelpTip :text="HELP.signals.maxBars" />
+          </template>
+        </v-text-field>
       </v-col>
       <v-col cols="6" sm="3" md="3">
         <v-btn
@@ -98,6 +114,7 @@
         >
           保存参数
         </v-btn>
+        <HelpTip :text="HELP.signals.savePaperBtn" />
       </v-col>
     </v-row>
 
@@ -112,17 +129,24 @@
           :disabled="exitMode !== 'atr'"
           hide-details
           @update:model-value="emit('dirty')"
-        />
+        >
+          <template #append-inner>
+            <HelpTip :text="HELP.signals.atrTimeframe" />
+          </template>
+        </v-select>
       </v-col>
       <v-col cols="12" sm="6" md="4">
         <v-switch
           :model-value="liveExit.enabled"
           :loading="savingLiveTimeout"
-          label="实盘超时平仓"
           color="warning"
           hide-details
           @update:model-value="emit('toggle-live-timeout', $event)"
-        />
+        >
+          <template #label>
+            实盘超时平仓<HelpTip :text="HELP.signals.liveTimeoutSwitch" />
+          </template>
+        </v-switch>
       </v-col>
       <v-col cols="12" md="5" class="text-caption text-medium-emphasis">
         持有满「最大持有」根就市价平掉信号自动开的仓；手动仓不动。
@@ -132,11 +156,14 @@
         <v-switch
           :model-value="liveExit.guard_enabled"
           :loading="savingSltpGuard"
-          label="止损巡检（缺单自动补挂）"
           color="success"
           hide-details
           @update:model-value="emit('toggle-sltp-guard', $event)"
-        />
+        >
+          <template #label>
+            止损巡检（缺单自动补挂）<HelpTip :text="HELP.signals.sltpGuardSwitch" />
+          </template>
+        </v-switch>
       </v-col>
       <v-col cols="12" md="8" class="text-caption text-medium-emphasis mt-2">
         每 5 分钟核对所有持仓（手动与自动都算）：没有止损单就按当前口径补挂；只补挂、不平仓。
@@ -147,6 +174,8 @@
 
 <script setup lang="ts">
 import SectionHeader from '@/components/SectionHeader.vue'
+import HelpTip from '@/components/HelpTip.vue'
+import { HELP } from '@/config/help'
 import type { LiveExitStatus } from '@/models/types'
 
 export interface PaperForm {
