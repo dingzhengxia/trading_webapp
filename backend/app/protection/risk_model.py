@@ -53,6 +53,11 @@ V2_DEFAULTS: Dict[str, Any] = {
     'tier_fast_confirm_mult': [1.0, 0.5, 0.25, 0.0],
     'risk_min_pct': 0.015,
     'risk_max_pct': 0.08,
+    # 入场价漂移多少就重建风险周期（加仓 / 平掉后重开）。
+    # Binance 的仓位不返回开仓时间，且「加仓」判定比的是原始 base_contracts——
+    # 回补到 base 以下的加仓两条都看不见，计划会一直按旧开仓价算（2026-11-15 ETH/BNB）。
+    # 交易所均价是唯一无歧义的锚：正常减仓不会改变它，任何加仓/重开都会。
+    'entry_replan_pct': 0.003,
     # 交易所 STOP 只做兜底：放在灾难线再往外 1.5 ATR，保证内部四档先动作
     'disaster_atr_buffer': 1.5,
     # 止盈阶梯：1.5R / 2.5R / 4R，减 20% / 25% / 30%，剩 25% 交给追踪止损。

@@ -30,6 +30,8 @@ class Position(BaseModel):
     pnl: float
     pnl_percentage: float
     entry_price: float
+    # Binance 的「回本价」：把已实现盈亏摊进去后的价格，不等于开仓价，单独暴露
+    break_even_price: float = 0.0
     mark_price: float
 
 

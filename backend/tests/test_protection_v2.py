@@ -358,6 +358,29 @@ def test_new_cycle_detected_by_open_time_change():
     assert runner._is_new_cycle(state, "long", 100.0, 10.0, 1_700_000_100_000) is True
 
 
+def test_new_cycle_when_entry_drifts_even_below_base():
+    """2026-11-15 ETH/BNB：减仓后加仓回补，仓位仍小于 base，但均价变了。
+
+    Binance 不返回开仓时间（opened_ms=0），「加仓」判定又比的是原始 base，
+    两条都失效 → 计划一直按旧开仓价算：ETH 兜底 1,775.46 落到真实开仓价
+    1,804.84 之下，止盈也全被记成已完成、不再挂单。
+    """
+    state = _state(base=10.0, contractsn=1.0)
+    plan_entry = state["plan"]["entry"]
+    # 仓位只回到 3（远小于 base 10），但交易所均价从 100 抬到 104.32
+    assert runner._is_new_cycle(state, "long", plan_entry * 1.0432, 3.0, 0) is True
+    # 反向（均价下移）同样要重建：平掉重开在更低的位置也会让整条阶梯失真
+    assert runner._is_new_cycle(state, "long", plan_entry * 0.96, 1.0, 0) is True
+
+
+def test_no_rebuild_on_rounding_level_drift():
+    """均价只差万分之几（交易所四舍五入）不能反复重建周期。"""
+    state = _state(base=10.0, contractsn=10.0)
+    plan_entry = state["plan"]["entry"]
+    assert runner._is_new_cycle(state, "long", plan_entry * 1.0005, 10.0, 0) is False
+    assert runner._is_new_cycle(state, "long", plan_entry * 0.9995, 10.0, 0) is False
+
+
 # ---------------------------------------------------------------------------
 # 账本：一仓一行，互不覆盖
 # ---------------------------------------------------------------------------

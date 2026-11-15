@@ -210,7 +210,8 @@ def _describe_disappearance(side: str, stop: float, last: float, entry: float,
 # 单仓准备：拉数据 → 判断是否新周期 → 生成快照 → 决策
 # ---------------------------------------------------------------------------
 def _is_new_cycle(state: Optional[Dict[str, Any]], side: str, entry: float,
-                  contracts: float, opened_ms: int) -> bool:
+                  contracts: float, opened_ms: int,
+                  conf: Optional[Dict[str, Any]] = None) -> bool:
     if not state or not isinstance(state.get('plan'), dict):
         return True
     # 只在「加仓」时换周期。减仓导致的交易所字段抖动绝不再触发换周期（v1 的 T1 自激根因）。
@@ -223,6 +224,17 @@ def _is_new_cycle(state: Optional[Dict[str, Any]], side: str, entry: float,
     # 引擎停机期间「平仓又重开」：账本记录的建立时间早于本次开仓时间，必须换周期
     created = _f(state.get('created_at'))
     if opened_ms > 0 and created > 0 and opened_ms / 1000.0 > created + 60:
+        return True
+    # 入场价漂移（加仓 / 平掉后重开）：以上两条在币安上都可能失效——
+    # Binance 的 positionRisk 不返回开仓时间（opened_ms 恒为 0），而「加仓」判定比的是
+    # 原始 base_contracts，只要加仓后仓位仍小于 base 就永远看不见。
+    # 2026-11-15 就是这两种叠加：ETH TP3 后只剩 0.112，被加仓回 0.333（< base 0.733），
+    # BNB TP1 后只剩 0.05，被加到 2.14（< base 2.2）；计划仍按旧开仓价算，
+    # ETH 兜底 1,775.46 反而落到真实开仓价 1,804.84 之下，TP 也全被记成「已完成」不再挂单。
+    # 交易所均价是唯一无歧义的信号：任何加仓/重开都会移动它。
+    plan_entry = _f((state.get('plan') or {}).get('entry')) or entry
+    tol = _f((conf or {}).get('entry_replan_pct'), risk_model.V2_DEFAULTS['entry_replan_pct'])
+    if entry > 0 and plan_entry > 0 and abs(entry - plan_entry) / entry > max(1e-6, tol):
         return True
     return False
 
@@ -341,9 +353,12 @@ async def _prepare(exchange, conf: Dict[str, Any], symbol: str, side: str,
 
     state = ledger.load(symbol, side)
     opened_ms = engine._position_open_time_ms(pos)
-    new_cycle = _is_new_cycle(state, side, entry, contracts, opened_ms)
+    new_cycle = _is_new_cycle(state, side, entry, contracts, opened_ms, conf)
 
     if new_cycle:
+        prev_plan = (state or {}).get('plan') or {}
+        prev_entry = _f(prev_plan.get('entry'))
+        prev_tp_done = list(risk_model._ints((state or {}).get('tp_done')))
         try:
             plan = risk_model.build_plan(side, entry, atr, structure, conf, now=now)
         except Exception as exc:  # noqa: BLE001 - 参数写坏时退回默认值，绝不让仓位裸奔
@@ -356,8 +371,18 @@ async def _prepare(exchange, conf: Dict[str, Any], symbol: str, side: str,
         state['position_version'] = 1
         # 新周期第一轮先把交易所上残留的旧止盈单扫一遍（引擎重启/换周期都可能留下）
         state['tp_sweep_pending'] = True
+        # 重建原因写进日志/台账：加仓导致的周期重建必须一眼能看出来，
+        # 否则事后只会看到「计划的开仓价和交易所不一致」，无法回溯是哪一步漏了。
+        if prev_entry > 0 and abs(entry - prev_entry) / entry > 1e-6:
+            trigger = f'入场价 {prev_entry:.6g} → {entry:.6g}（加仓/重开）'
+            ledger.log_event(symbol, side, 'cycle_rebuild',
+                             f'{trigger}，重建风险周期（TP 阶梯重挂，原已完成 '
+                             f'{[i + 1 for i in prev_tp_done] or "无"}）',
+                             level='warning', entry=entry, prev_entry=prev_entry)
+        else:
+            trigger = '建仓'
         logger.info(
-            f'[{symbol}/{side}] 🆕 v2 新风险周期 | 开仓:{entry:.6f} ATR:{atr:.6f} '
+            f'[{symbol}/{side}] 🆕 v2 新风险周期({trigger}) | 开仓:{entry:.6f} ATR:{atr:.6f} '
             f'R:{plan["risk"]:.6f}({plan["risk"] / entry:.2%}) | '
             f'四档:{"/".join(f"{x:.6f}" for x in plan["levels"])} | '
             f'灾难线:{plan["disaster_stop"]:.6f}')
@@ -446,6 +471,9 @@ async def _prepare(exchange, conf: Dict[str, Any], symbol: str, side: str,
     # 仓位以交易所为唯一真值：止盈单成交、手动平一部分都不会经过 _apply_reduce，
     # 账本里的 contracts 不跟着同步，前端和日志就会一直显示旧仓位。
     state['contracts'] = contracts
+    # 交易所均价每轮记录：计划里的 entry 只在建周期时写死，两者一旦分叉就说明
+    # 发生了「加仓/重开但没识别」，对账时不用再拉交易所接口比对。
+    state['exchange_entry'] = entry
     state['last_price'] = price
     state['last_atr'] = atr
     if new_cycle:
@@ -1072,6 +1100,8 @@ def status() -> Dict[str, Any]:
             'side': side,
             'contracts': state.get('contracts'),
             'entry_price': plan.get('entry'),
+            # 交易所真实均价（计划 entry 建周期时锁定；两者不等 = 加仓/重开未被识别）
+            'exchange_entry': state.get('exchange_entry'),
             'mark_price': state.get('last_price'),
             'stop_price': state.get('stop'),
             'protected_stop': None,

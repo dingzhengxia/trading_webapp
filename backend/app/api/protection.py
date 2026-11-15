@@ -58,6 +58,8 @@ NUMERIC_RANGES: Dict[str, tuple] = {
     'risk_min_pct': (0.001, 0.5, False),
     'risk_max_pct': (0.001, 0.5, False),
     'disaster_atr_buffer': (0, 20, False),
+    # 入场价漂移重建阈值：0.1% ~ 2%（小于噪声没意义，大于 2% 等于允许大幅错位）
+    'entry_replan_pct': (0.001, 0.02, False),
     'breakeven_trigger_r': (0.1, 100, False),
     'breakeven_buffer_pct': (0, 0.1, False),
     'breakeven_atr_ratio': (0, 5, False),

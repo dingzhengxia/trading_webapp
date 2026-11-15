@@ -155,12 +155,16 @@ async def fetch_positions_with_pnl_async(exchange: ccxt.binanceusdm, leverage: i
         if signed_contracts == 0:
             continue
 
-        # breakEvenPrice 在部分场景返回 "0"，不能仅用 None 判断，否则入场价恒为 0 导致 SL/TP 被跳过
-        entry_price = _to_float(info.get('breakEvenPrice'))
-        if entry_price is None or entry_price <= 0:
-            entry_price = _to_float(raw_pos.get('entryPrice'), 0.0) or 0.0
+        # 开仓价 = 交易所均价（entryPrice）。不要拿 breakEvenPrice 当开仓价：
+        # Binance 的「回本价」把已实现盈亏也摊进去了——ETH 已实现 +35.49 时回本价
+        # 1,698.36，而真实开仓价是 1,804.84，差 6%（2026-11-15 用户对账时发现）。
+        # 回本价只作为 entryPrice 缺失时的兜底，并单独以 break_even_price 暴露。
+        entry_price = _to_float(raw_pos.get('entryPrice'), 0.0) or 0.0
         if entry_price <= 0:
             entry_price = _to_float(info.get('entryPrice'), 0.0) or 0.0
+        break_even_price = _to_float(info.get('breakEvenPrice'), 0.0) or 0.0
+        if entry_price <= 0:
+            entry_price = break_even_price
 
         mark_price = _to_float(info.get('markPrice'))
         if mark_price is None:
@@ -196,6 +200,7 @@ async def fetch_positions_with_pnl_async(exchange: ccxt.binanceusdm, leverage: i
             side=_position_side(raw_pos),
             contracts=abs(signed_contracts),
             entry_price=entry_price,
+            break_even_price=break_even_price,
             notional=notional,
             mark_price=mark_price,
             pnl=pnl,
