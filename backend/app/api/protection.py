@@ -54,18 +54,22 @@ NUMERIC_RANGES: Dict[str, tuple] = {
     'v2_poll_interval_sec': (1, 60, False),
     'v2_decision_concurrency': (1, 16, True),
     'tier_atr_buffer': (0, 10, False),
-    'tier_min_gap_atr': (0.1, 10, False),
     'risk_min_pct': (0.001, 0.5, False),
     'risk_max_pct': (0.001, 0.5, False),
-    'disaster_atr_buffer': (0, 20, False),
-    # 入场价漂移重建阈值：0.1% ~ 2%（小于噪声没意义，大于 2% 等于允许大幅错位）
-    'entry_replan_pct': (0.001, 0.02, False),
-    'breakeven_trigger_r': (0.1, 100, False),
+    # T1 距离上限（结构位太远时把第一档收回来）
+    't1_max_pct': (0.005, 0.5, False),
+    # 人工干预识别容差
+    'entry_change_tol_pct': (0.00001, 0.05, False),
+    'qty_change_tol_pct': (0.0001, 0.2, False),
+    'intervention_alert_pct': (0, 1, False),
+    'breakeven_trigger_atr': (0.2, 20, False),
     'breakeven_buffer_pct': (0, 0.1, False),
     'breakeven_atr_ratio': (0, 5, False),
     'profit_lock_buffer_pct': (0, 0.1, False),
-    'trailing_start_r': (0, 100, False),
+    'trailing_start_atr': (0.2, 20, False),
     'trailing_atr_mult': (0.5, 20, False),
+    'stop_min_room_atr': (0, 5, False),
+    'stop_min_room_pct': (0, 0.1, False),
     'action_retry_cooldown_sec': (0, 3600, False),
     'tier_maker_retries': (1, 10, True),
     'tier_maker_only_until': (0, 4, True),
@@ -76,7 +80,6 @@ NUMERIC_RANGES: Dict[str, tuple] = {
     'replan_atr_down_ratio': (0.01, 1.0, False),
     'replan_cooldown_sec': (0, 86400, False),
     'tp_keep_ratio': (0, 0.9, False),
-    'tp_slice_cap': (0.05, 1, False),
     # 止盈「突破确认」缓冲：0 ~ 2%（0.001 = 0.1%）
     'tp_breakout_confirm_pct': (0, 0.02, False),
     'emergency_check_interval_sec': (5, 300, False),
@@ -213,6 +216,15 @@ def _validate(conf: Dict[str, Any]) -> None:
     if 'risk_min_pct' in conf and 'risk_max_pct' in conf:
         if float(conf['risk_min_pct']) >= float(conf['risk_max_pct']):
             raise HTTPException(status_code=400, detail="risk_min_pct 必须小于 risk_max_pct。")
+    # T1 距离上限必须落在「最小风险」与「单笔最大亏损」之间，否则四档会被挤成一条线
+    if 't1_max_pct' in conf and 'risk_max_pct' in conf:
+        min_pct = float(conf.get('risk_min_pct', 0.015))
+        if not (min_pct < float(conf['t1_max_pct']) <= float(conf['risk_max_pct'])):
+            raise HTTPException(status_code=400, detail="t1_max_pct 必须大于 risk_min_pct 且不超过 risk_max_pct。")
+    if 'breakeven_trigger_atr' in conf and 'trailing_start_atr' in conf:
+        if float(conf['trailing_start_atr']) < float(conf['breakeven_trigger_atr']):
+            raise HTTPException(status_code=400,
+                                detail="trailing_start_atr 不能小于 breakeven_trigger_atr。")
 
 
 @router.get("")

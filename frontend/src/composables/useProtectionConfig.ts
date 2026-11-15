@@ -53,11 +53,14 @@ const form = reactive({
   tier_ratios: [0.15, 0.2, 0.25, 0.4] as number[],
   tier_confirm_sec: [30, 45, 60, 0] as number[],
   risk_min_pct: 0.015,
-  risk_max_pct: 0.08,
-  breakeven_trigger_r: 0.5,
-  // 保本位至少离开仓价 0.3×ATR（与 0.2% 价格比例取大）；只给死数时保本单贴在现价半个
-  // ATR 以内，一次普通回撤就被扫掉
-  breakeven_atr_ratio: 0.3,
+  // 单笔最大亏损 = 灾难线的位置（旧口径「T4 再外推 1.5ATR」会把兜底推到 −11%）
+  risk_max_pct: 0.06,
+  // T1 的距离上限：结构位太远时把第一档收回来
+  t1_max_pct: 0.04,
+  // 止损阶梯全部按 ATR 计：浮盈 2 ATR 保本、2.5 ATR 起追踪，宽度 1.5 ATR
+  breakeven_trigger_atr: 2,
+  breakeven_atr_ratio: 0.4,
+  trailing_start_atr: 2.5,
   trailing_atr_mult: 1.5,
   timeframe: '2h',
   tp1_r_multiple: 1,
@@ -78,19 +81,14 @@ const form = reactive({
   hard_stop_min_distance_pct: 0.05,
   // 双轨治理：守护端接管开仓端遗留 SL/TP/TS 条件单（默认关，不改变现有行为）
   take_over_external_stops: false,
-  // 连续移动止损：'step'=阶梯跳（现状）| 'continuous'=浮盈达标后按 ATR 平滑追踪
-  trailing_stop_mode: 'step' as 'step' | 'continuous',
-  trailing_trigger_r: 1,
   // v2 止盈阶梯（与后端 V2_DEFAULTS 必须一致）：1.5R/2.5R/4R 各减 20%/25%/30%，
   // 剩 25% 不挂止盈单，交给止损上移/ATR 追踪。
   // 执行方式固定：单子提前挂在交易所（post-only），到价由交易所撮合，引擎不吃单。
   tp_r_multiples: [1.5, 2.5, 4] as number[],
   tp_ratios: [0.2, 0.25, 0.3] as number[],
   tp_keep_ratio: 0.25,
-  tp_slice_cap: 0.5,
   // 止盈「突破确认」缓冲：价格必须越过 TP 这么多才算突破，之后回落才卖
   tp_breakout_confirm_pct: 0.001,
-  tp_verify_interval_sec: 8,
 })
 
 type FormState = typeof form
@@ -174,14 +172,14 @@ function applyConfig(config: Partial<ProtectionConfig>): void {
     'v2_poll_interval_sec',
     'risk_min_pct',
     'risk_max_pct',
-    'breakeven_trigger_r',
+    't1_max_pct',
+    'breakeven_trigger_atr',
     'breakeven_atr_ratio',
+    'trailing_start_atr',
     'trailing_atr_mult',
     'emergency_cooldown_sec',
     'tp_keep_ratio',
-    'tp_slice_cap',
     'tp_breakout_confirm_pct',
-    'tp_verify_interval_sec',
   ] as const) {
     const value = Number(config[key])
     if (Number.isFinite(value)) form[key] = value
@@ -208,11 +206,6 @@ function applyConfig(config: Partial<ProtectionConfig>): void {
   ] as const) {
     if (typeof config[key] === 'boolean') form[key] = config[key] as boolean
   }
-  if (config.trailing_stop_mode === 'step' || config.trailing_stop_mode === 'continuous') {
-    form.trailing_stop_mode = config.trailing_stop_mode
-  }
-  const triggerR = Number(config.trailing_trigger_r)
-  if (Number.isFinite(triggerR) && triggerR > 0) form.trailing_trigger_r = triggerR
   syncSaved()
 }
 

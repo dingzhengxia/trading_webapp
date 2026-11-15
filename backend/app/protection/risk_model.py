@@ -1,31 +1,38 @@
 # backend/app/protection/risk_model.py
-"""仓位保护 v2：纯决策模型（无 IO、无交易所调用）。
+"""仓位保护决策模型（纯函数：无 IO、无交易所调用、可离线回放）。
 
-为什么单独拆一层
-- v1 把「判断」和「下单」揉在一个 500 行的协程里，改一个阈值都要连交易所一起想，
-  参数也没法离线验证。这里把判断抽成纯函数：输入「仓位快照 + 风险周期状态」，
-  输出「动作列表」，可以单测、可以拿历史 K 线回放。
+为什么重写这一层
+- 旧模型有「风险周期」这个概念：一旦识别到加仓就整行重建（`new_state`），
+  已触发档位 / 峰值 / 止损价 / 初始仓位全部归零。人工加一次仓，
+  程序就把「已经卖过几档」忘掉，止损也被重新当成首次挂单——
+  2026-11-15 ETH/BNB 的止损错位、BTC 重复减仓单都是这条路径的产物。
+  新模型没有「重建周期」：只有一个持续演化的状态，加仓/减仓是状态转移。
 
-坐标约定
-- long : 四档减仓线严格递减  t1 > t2 > t3 > t4，灾难线在 t4 之下；
-- short: 四档减仓线严格递增  t1 < t2 < t3 < t4，灾难线在 t4 之上；
-- 所有 ratio 都是「占本风险周期初始仓位」的比例，四档合计 = 1.0；
-- R = |开仓价 - T1|，止盈与保本都以 R 为单位，避免不同币波动率下参数失真。
+四条不变量（后续所有分支都从这里推）
+1. 仓位真值只有交易所的 (数量 q, 均价 E)。账本只记「不变量」和「历史动作」，
+   不记「应该有多少仓位」。
+2. 分批比例的分母是「规模锚 S = 历史最大持仓量」，只增不减。
+   → 人工减仓后 q 变小，比例不会漂移（不会永远卖不完）；
+   → 人工加仓后 S 抬到新 q，新仓位自动纳入后续批次。
+3. 止损阶梯按 ATR 计（ATR 是「正常波动尺度」，跨币可比）；
+   止盈阶梯按 R 计，R 与 TP 价在建计划时冻结——不冻结就永远到不了。
+4. 止损只允许朝盈利方向移动，唯一例外是「加仓」：持仓均价被抬高后，
+   旧止损可能贴到新均价上，必须按新基准重算（含下移），并强制留痕。
 
-优先级（同一轮只出一个减仓动作）
-1. 击穿灾难线     -> 全平（不确认、不等收盘）
-2. 击穿结构档位   -> 累计减仓（实时价 + 持续确认）
-3. 到达止盈档位   -> 累计止盈
-4. 止损上移       -> 与上面独立，永远重算，且只允许朝盈利方向移动
+执行优先级（同一轮只出一个减仓动作，止损动作与之独立）
+1. 击穿灾难线   → 全平（不确认、不等收盘）
+2. 击穿结构档位 → 累计减仓（实时价 + 持续确认，破得越深确认越短）
+3. 止盈         → 「先突破、再回落」才卖（引擎 3s 判定，不在交易所预挂）
+4. 止损上移     → 每轮重算，只朝盈利方向走
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 EPS = 1e-12
-MIN_REMAINING = 0.02  # 低于 2% 视为已平，不再下单
-
+MIN_REMAINING = 0.02   # 低于规模锚的 2% 视为已平，不再下单
+PLAN_VERSION = 2       # 计划结构版本：老账本读进来会按新基准重算一次
 
 # ---------------------------------------------------------------------------
 # 默认参数（用户配置深合并在 runner.load_config 里完成）
@@ -36,107 +43,108 @@ V2_DEFAULTS: Dict[str, Any] = {
     'v2_timeframe': '2h',
     'v2_poll_interval_sec': 3.0,
     'v2_decision_concurrency': 4,
-    # 四档减仓：越破越重，合计 100%
+
+    # ---- 结构减仓四档 ----
+    # 越破越重，合计 100%：最后一档（T4）就是「结构彻底失效」的清仓档。
     'tier_ratios': [0.15, 0.20, 0.25, 0.40],
-    # 每档参考的结构回看根数（最后一档与第三档同源，只靠 ATR 缓冲拉远）
-    'tier_lookbacks': [7, 26, 83, 83],
+    # 每档参考的结构回看根数（只用第一档：T1 由最近的结构位决定，其余三档是预算等分）
+    'tier_lookbacks': [7, 26, 83],
     'tier_atr_buffer': 0.5,
-    'tier_min_gap_atr': 0.8,
     # 每档的「持续确认」秒数；0 = 立即触发（灾难档）
     'tier_confirm_sec': [30, 45, 60, 0],
-    # 破位深度分级（A）：实时价越过档位线 X 个 ATR 时，按档衰减确认秒数。
-    # 深度 >= fast_depth_atr[k] -> 确认秒数 *= fast_confirm_mult[k+1]。
+    # 破位深度分级：实时价越过档位线 X 个 ATR 时按档衰减确认秒数。
     # 2026-11 历史标定（BTC/ETH/SOL/DOGE 1m 回放，tools/sl_calibration/）：
-    # 破 T1 后 30s 内继续深入 >=1.5 ATR 的概率 8%（T2 12%），p90 额外损失 1.4 ATR——
-    # 该尾部即急速破位，直接跳过确认；<0.5 ATR 的浅破位维持原确认防噪声。
+    # 破 T1 后 30s 内继续深入 >=1.5 ATR 的概率 8%，该尾部即急速破位，直接跳过确认。
     'tier_fast_depth_atr': [0.5, 1.0, 1.5],
     'tier_fast_confirm_mult': [1.0, 0.5, 0.25, 0.0],
+
+    # ---- 风险尺度 ----
+    # T1 的允许区间：太近会被噪声扫掉，太远单笔风险失控。
     'risk_min_pct': 0.015,
-    'risk_max_pct': 0.08,
-    # 入场价漂移多少就重建风险周期（加仓 / 平掉后重开）。
-    # Binance 的仓位不返回开仓时间，且「加仓」判定比的是原始 base_contracts——
-    # 回补到 base 以下的加仓两条都看不见，计划会一直按旧开仓价算（2026-11-15 ETH/BNB）。
-    # 交易所均价是唯一无歧义的锚：正常减仓不会改变它，任何加仓/重开都会。
-    'entry_replan_pct': 0.003,
-    # 交易所 STOP 只做兜底：放在灾难线再往外 1.5 ATR，保证内部四档先动作
-    'disaster_atr_buffer': 1.5,
-    # 止盈阶梯：1.5R / 2.5R / 4R，减 20% / 25% / 30%，剩 25% 交给追踪止损。
-    # 旧默认 1R 起跳：1R 恰好是「保本止损刚推到开仓价」的位置，价格到第一波冲高处
-    # 就卖掉 1/4，等于把最大的一段行情让掉（2026-11-15 反馈「止盈太粗糙」）。
+    # T1 的距离上限（结构位太远时把 T1 收回来，否则一次回撤就吃掉 6~8%）
+    't1_max_pct': 0.04,
+    # 单笔最大亏损 = 灾难线的位置（相对持仓均价）。
+    # 灾难线不再「T4 再往外推 1.5 ATR」——那是把「结构失效」当成「风险预算」，
+    # 结果 BTC 的兜底单跑到 −11.3%，比任何一个结构位都远（2026-11-15 反馈）。
+    'risk_max_pct': 0.06,
+
+    # ---- 人工干预识别 ----
+    # 均价变化超过 2bp = 一定加过仓（减仓不改变均价，币安平均成本法）
+    'entry_change_tol_pct': 0.0002,
+    # 数量变化超过 0.2% = 加减仓（挡住交易所精度抖动）
+    'qty_change_tol_pct': 0.002,
+    # 人工减仓幅度超过这个比例才外发提示（避免手动平一点就弹一次）
+    'intervention_alert_pct': 0.10,
+
+    # ---- 止盈阶梯 ----
+    # 1.5R / 2.5R / 4R，减 20% / 25% / 30%，剩 25% 交给追踪止损。
     'tp_r_multiples': [1.5, 2.5, 4.0],
     'tp_ratios': [0.20, 0.25, 0.30],
-    # 止盈触发：价格必须先「真正越过」TP 才算数（突破确认），之后跌回 TP 才卖。
-    # 直接把 maker 卖单挂在 TP 上，第一根触到 TP 的插针就会成交，后面走出的大行情
-    # 一点吃不到（2026-11-15 用户口径：「超过 100 以后跌回 100 才止盈，不是直接挂在 100」）。
-    # 这个缓冲就是「算突破」的额外距离，按 TP 的百分比取。
+    'tp_keep_ratio': 0.25,
+    # 止盈触发口径：价格必须先「真正越过」TP（含这段缓冲）才算突破，
+    # 之后跌回 TP 才卖。直接把单子挂在 TP 上，第一根插针就成交，
+    # 后面走出的大行情一点吃不到（2026-11-15 用户口径）。
     'tp_breakout_confirm_pct': 0.001,
-    'tp_slice_cap': 0.5,             # 单档最多卖「当前剩余」的比例（防一刀清零）
-    # 执行层（B/C）：
-    'tier_marketable_retries': 3,     # maker 失败后吃单价重试次数
-    'reduce_market_fallback': True,   # 吃单价也失败后允许市价兜底（三级降级最后一级）
-    'reduce_retry_fast_sec': 10.0,    # 减仓未成交的快速重试冷却（交易所异常仍用 90s）
-    'breakeven_trigger_r': 0.5,
-    'breakeven_buffer_pct': 0.002,
-    # 保本位至少离开仓价 0.3×ATR（与价格比例取大）。
-    # 旧实现只有死数 +0.2%：1h ATR≈1% 时保本单离现价仅 0.55%，一次普通回撤就被扫掉，
-    # 结果是「0.5R 保本 → 立刻被扫 → 行情继续涨」（2026-11-15 用户反馈）。
-    'breakeven_atr_ratio': 0.3,
+
+    # ---- 止损阶梯（全部按 ATR 计）----
+    # 保本触发：浮盈达到 2×ATR 才把止损推到成本。
+    # 旧口径用 0.5R：BTC 的 R=6.24% 而 2h ATR 只有 1.87%，0.5R=3.1% 就保本，
+    # 止损从 −6.2% 一步跳到成本价，回撤容忍度只剩 3%，1.7 个 ATR 的正常波动就出局。
+    'breakeven_trigger_atr': 2.0,
+    'breakeven_buffer_pct': 0.001,
+    'breakeven_atr_ratio': 0.4,
     'profit_lock_buffer_pct': 0.001,
-    # 追踪起点 0.5R（与保本同步；数学上无害——追踪线低于保本时 max() 仍取保本），
-    # 宽度 1.5 ATR：旧值 1.0R / 2.5 ATR 意味着浮盈 1R 时 peak−2.5ATR 还在开仓价下方，
-    # 实际要到 φ1.8R 才第一次上移，0.5R~1.8R 这段完全没有跟随。
-    'trailing_start_r': 0.5,
+    # 追踪起点 2.5×ATR，宽度 1.5×ATR：浮盈 2.5ATR 时锁住 1ATR，回撤容忍 1.5ATR。
+    'trailing_start_atr': 2.5,
     'trailing_atr_mult': 1.5,
+    # 止损线离现价的最小安全距离：贴太近等于市价单，一个 tick 就出局。
+    # 旧值只有 0.2% 价格，BTC 的 1 ATR=1.87%，等于把止损放在噪声里。
+    'stop_min_room_atr': 0.6,
+    'stop_min_room_pct': 0.003,
+    # 止损推进多少才值得撤单重挂（防抖，避免每 3 秒刷交易所）
     'stop_min_update_pct': 0.0015,
     'stop_min_update_atr_ratio': 0.15,
-    # 交易所保护 STOP 的事实核对间隔（秒）：0 = 不核对，纯账本口径（旧行为）
     'stop_verify_interval_sec': 15.0,
+
+    # ---- 执行层 ----
+    'tier_marketable_retries': 3,     # maker 失败后吃单价重试次数
+    'reduce_market_fallback': True,   # 吃单价也失败后允许市价兜底
+    'reduce_retry_fast_sec': 10.0,    # 减仓未成交的快速重试冷却
     'action_retry_cooldown_sec': 90.0,
     'tier_maker_retries': 3,
     'tier_maker_only_until': 2,
-    # 三档合计 75%，剩 25% 不挂止盈单：交给止损上移/ATR 追踪去博趋势尾段。
-    # 旧值 15% + 1R/2R/3R 的组合，等于「前 85% 都卖在 3R 以内」，趋势单吃不满。
-    'tp_keep_ratio': 0.25,
+
+    # ---- 结构重估（只动未触发的档位线，只许外移）----
+    'replan_enabled': True,
+    'replan_interval_sec': 86400.0,
+    'replan_atr_up_ratio': 1.5,
+    'replan_atr_down_ratio': 0.6,
+    'replan_cooldown_sec': 3600.0,
+
+    # ---- 黑天鹅（唯一允许吃单的全平路径）----
     'emergency_enabled': True,
-    # 判定周期默认 1h（15m 的 3×ATR 只有 ~1%，正常阴线就构成「黑天鹅」，误杀频繁）。
     'emergency_timeframe': '1h',
     'emergency_atr_multiplier': 3.0,
     'emergency_atr_period': 14,
     'emergency_structure_lookback': 4,
-    # 「放量」门槛：本根 K 线量需超过过去 20 根（有成交 K 线）均量的倍数。
-    # 原默认 1.0 等于「高于平均即算放量」，几乎不过滤——2026-11-13 TQQQ/NVDA 误杀即由此来。
     'emergency_vol_multiplier': 3.0,
-    # 放量分支（无结构确认）的位移门槛倍数：比结构分支更严，因为少了破位确认这道关。
     'emergency_vol_atr_multiplier': 4.0,
-    # 位移的绝对下限（占价格比例）：兜住「ATR 被窄幅整理压低 → 一根中等 K 线成数倍 ATR」。
-    # 2026-11-13 AAPL 三倍 ATR 仅 0.63%，一根 0.67% 回落即被全平；1% 可挡住而真闪崩仍触发。
     'emergency_min_move_pct': 0.01,
-    # 黑天鹅全平后同币冷却（秒）：一根 K 线跌够幅度后，剩下的时间里每次开仓都会
-    # 命中同一信号（2026-11-14 ETH 开仓 16 秒被平两次），冷却把这类重复往返挡在门外。
-    # 参考值：一根判定周期 K 线（15m=900 / 1h=3600）；默认 900 足够挡住「同一根 K 线里
-    # 反复追多」，又不至于把一个小时的开仓机会全堵死；0 = 关闭。
     'emergency_cooldown_sec': 900.0,
-    # 开仓前黑天鹅预检（默认关）：它只解决「别在崩盘半途接刀」，属于策略偏好，
-    # 默认交给用户自己开。真正的根因修复是位移锚点（见 market_data._emergency_signal）。
     'emergency_block_new_entries': False,
-    # ---- 静默 K 线剔除（ATR / 均量口径）----
-    # 股票代币在美股休市时段仍 24/7 报价，产出「量极小 + 振幅极小」的 K 线，
-    # 把 ATR 与均量同时压到极低：TQQQ 实测 ATR 0.096 vs 真实 0.6，AAPL 的 3×ATR
-    # 因此只有 0.63%，都被盘中一次正常回落触发全平。
-    # 判定为静默需「量」与「振幅」同时低于该标的自身 75 分位的指定比例——
-    # 单看量会误删缩量插针，单看振幅会误删低波动整理期。
-    'tradable_volume_ratio': 0.10,   # < 活跃量(75分位) 的 10%
-    'tradable_range_ratio': 0.25,    # 且 振幅 < 活跃振幅(75分位) 的 25%
-    'tradable_min_bars': 16,         # 剔除后不足此数则放弃过滤（整体流动性太低，相对口径不适用）
+    'tradable_volume_ratio': 0.10,
+    'tradable_range_ratio': 0.25,
+    'tradable_min_bars': 16,
     'flat_confirm_sec': 30.0,
-    # E 结构重估（docs/v2-replan-design.md）：持仓期间周期性重算档位线/灾难线。
-    # 已触发档冻结、未触发档只许外移（评审定稿）、灾难线与现价保持 buffer*ATR。
-    'replan_enabled': True,
-    'replan_interval_sec': 86400.0,   # 定时触发：距上次重估/建仓 24h
-    'replan_atr_up_ratio': 1.5,       # 波动率放大触发
-    'replan_atr_down_ratio': 0.6,     # 波动率萎缩触发
-    'replan_cooldown_sec': 3600.0,    # 重估后 1h 内不再重估（防抖）
 }
+
+# 旧版本把默认值原样存进 position_protection，升级默认值对老配置完全无效。
+# 键名本身也换了（R 基准 → ATR 基准），老键一律丢弃，由新默认接管。
+LEGACY_KEYS = (
+    'breakeven_trigger_r', 'trailing_start_r', 'trailing_trigger_r',
+    'tp_slice_cap', 'tp_verify_interval_sec', 'tp_rearm_min_interval_sec',
+    'entry_replan_pct', 'disaster_atr_buffer', 'plan_version',
+)
 
 
 @dataclass(frozen=True)
@@ -144,22 +152,24 @@ class Snapshot:
     """一轮巡检拿到的、判断所需要的全部市场事实。"""
     symbol: str
     side: str                 # 'long' | 'short'
-    entry: float              # 本周期开仓均价
+    entry: float              # 交易所持仓均价（唯一真值）
     price: float              # 当前标记价
     last_close: float         # 最近一根已收盘 K 线的收盘价
     contracts: float          # 当前持仓数量
-    base_contracts: float     # 本周期初始持仓数量
     atr: float
     structure: Tuple[float, float, float] = (0.0, 0.0, 0.0)  # 7/26/83 根结构位
     closed_ts: int = 0
     now: float = 0.0
     # 交易所上真实存在的兜底 STOP 触发价（0 = 查过但没找到）。
-    # 账本里的 state['stop'] 只是「我们上次挂了什么」，用户可以在交易所 App 里
-    # 手动撤单/改价，所以判断「要不要补挂/能不能上移」必须以交易所为准。
+    # 账本里的 state['stop'] 只是「我们上次挂了什么」，用户可以在 App 里手改，
+    # 所以「要不要补挂/能不能上移」必须以交易所为准。
     exchange_stop: float = 0.0
-    # 本轮是否真的查过交易所（节流：stop_verify_interval_sec）。
-    # False 时退回旧的账本口径，避免每 3 秒都打一次 openOrders。
+    # 本轮是否真的查过交易所（节流：stop_verify_interval_sec）
     exchange_checked: bool = False
+    # 本轮是否刚因「加仓」重算了风险基准。为 True 时止损允许下移一次。
+    rebased: bool = False
+    # 本周期内累计已实现减仓量（账本口径，仅用于展示）
+    base_contracts: float = 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -195,9 +205,25 @@ def _ints(value: Any) -> List[int]:
     return out
 
 
+def _clamp(value: float, low: float, high: float) -> float:
+    return max(low, min(high, value))
+
+
 def _beyond(price: float, level: float, side: str) -> bool:
     """价格是否已经越过某条线（long 向下破，short 向上破）。"""
     return price <= level if side == 'long' else price >= level
+
+
+def _dist(entry: float, level: float, side: str) -> float:
+    """档位相对持仓均价的距离（正数 = 亏损方向的百分比距离）。"""
+    if entry <= 0:
+        return 0.0
+    return (entry - level) / entry if side == 'long' else (level - entry) / entry
+
+
+def _price_at(entry: float, dist: float, side: str) -> float:
+    """距离 → 价位（dist 为正 = 亏损方向）。"""
+    return entry * (1.0 - dist) if side == 'long' else entry * (1.0 + dist)
 
 
 def floating_r(entry: float, risk: float, side: str, price: float) -> Optional[float]:
@@ -206,16 +232,48 @@ def floating_r(entry: float, risk: float, side: str, price: float) -> Optional[f
     return ((price - entry) / risk) if side == 'long' else ((entry - price) / risk)
 
 
+def size_anchor(state: Dict[str, Any], contracts: float) -> float:
+    """规模锚 S：历史最大持仓量，只增不减。
+
+    它是所有分批比例的分母。用「当前仓位」做分母会让止盈永远卖不完
+    （分母随卖出变小）；用「建仓时的初始仓位」做分母会让人工加仓的新仓位
+    永远不参与分批。取历史最大值的语义是「按我这笔单子最大时的规模分批」。
+    """
+    anchor = _f(state.get('size_anchor')) or _f(state.get('base_contracts')) or contracts
+    return max(anchor, contracts)
+
+
 # ---------------------------------------------------------------------------
-# 风险计划：一个仓位在每个风险周期开始时只算一次
+# 风险计划
 # ---------------------------------------------------------------------------
+def _geometry(entry: float, atr: float, conf: Dict[str, Any]) -> Tuple[float, float, float]:
+    """风险几何（全部用「相对持仓均价的距离」，正数 = 亏损方向）。
+
+    返回 (d_min, d_max, d_t1_far)：
+    · d_min  = T1 的最近距离 = max(risk_min_pct, 0.8×ATR) —— 低于 0.8 ATR 的止损
+      就在噪声里，正常回撤必被扫；
+    · d_max  = 单笔最大亏损（灾难线），至少给 d_min 留 1.5 倍呼吸空间；
+    · d_t1_far = T1 的最远距离，结构位再远也把第一档收回来。
+    """
+    atr_pct = atr / entry if entry > 0 else 0.0
+    d_min = max(_f(conf.get('risk_min_pct'), 0.015), 0.8 * atr_pct)
+    d_max = max(_f(conf.get('risk_max_pct'), 0.06), d_min * 1.5)
+    d_t1_far = _clamp(_f(conf.get('t1_max_pct'), 0.04), d_min, d_max * 0.85)
+    return d_min, d_max, d_t1_far
+
+
 def build_plan(side: str, entry: float, atr: float,
                structure: Sequence[float], conf: Dict[str, Any],
                now: float = 0.0) -> Dict[str, Any]:
-    """把结构位 + ATR 折算成四档减仓线、R、止盈价和交易所兜底线。
+    """结构位 + ATR → 四档减仓线 / R / 止盈阶梯 / 灾难线。
 
-    结构决定「在哪减」，ATR 决定「破多远才算破」；两者相乘做缓冲，
-    所以波动放大时减仓线自动拉远，缩小时自动收紧，不需要分币种调参。
+    档位算法（以 long 为例，short 对称，全程用「距离」运算避免多空符号分叉）
+    · T1 = 最近的结构位再往外 0.5×ATR，距离夹在 [d_min, d_t1_far]——
+      结构位定义「这单什么时候算错了」，ATR 只负责把它推到噪声之外；
+    · T2/T3/T4 = T1 到灾难线之间 25%/50%/75% 等距：结构位只决定第一档，
+      之后是「亏损预算怎么分段消耗」。这样四档永远落在预算内、永远严格单调，
+      不会因为某个周期结构位特别远就把最后一档顶到 −8%、−11%；
+    · 灾难线 = d_max（单笔最大亏损），不再由 T4 再外推 buffer。
     """
     if side not in ('long', 'short'):
         raise ValueError(f'非法方向: {side}')
@@ -229,80 +287,75 @@ def build_plan(side: str, entry: float, atr: float,
     total = sum(ratios)
     if total <= 0:
         raise ValueError('tier_ratios 合计必须大于 0')
-    ratios = [x / total for x in ratios]  # 归一化，避免用户填出 120%
+    ratios = [x / total for x in ratios]          # 归一化，避免用户填出 120%
 
     buffer_mult = max(0.0, _f(conf.get('tier_atr_buffer'), 0.5))
-    gap_mult = max(0.1, _f(conf.get('tier_min_gap_atr'), 0.8))
+    d_min, d_max, d_t1_far = _geometry(entry, atr, conf)
 
-    s1, s2, s3 = (float(x) for x in structure)
+    s1 = float(structure[0])
+    struct_d = _dist(entry, s1, side)
+    # 结构位落在均价错误一侧（例如 long 的结构位在均价上方）时不参与决策
+    d1 = d_max if struct_d <= 0 else struct_d + atr * buffer_mult / entry
+    d1 = _clamp(d1, d_min, d_t1_far)
 
-    # 候选线：结构位外侧再加 ATR 缓冲；越深的一档缓冲越宽，避免四档挤在一起
-    if side == 'long':
-        raw = [s1 - atr * buffer_mult,
-               s2 - atr * buffer_mult * 1.2,
-               s3 - atr * buffer_mult * 1.6,
-               s3 - atr * buffer_mult * 3.0]
-    else:
-        raw = [s1 + atr * buffer_mult,
-               s2 + atr * buffer_mult * 1.2,
-               s3 + atr * buffer_mult * 1.6,
-               s3 + atr * buffer_mult * 3.0]
-
-    # T1 必须落在 [risk_min_pct, risk_max_pct]：太近会被噪声扫掉，太远单笔风险失控
-    min_pct = max(0.0, _f(conf.get('risk_min_pct'), 0.015))
-    max_pct = max(min_pct + 0.001, _f(conf.get('risk_max_pct'), 0.08))
-    if side == 'long':
-        t1 = min(max(raw[0], entry * (1.0 - max_pct)), entry * (1.0 - min_pct))
-    else:
-        t1 = max(min(raw[0], entry * (1.0 + max_pct)), entry * (1.0 + min_pct))
-
-    levels = [float(t1)]
-    unit = atr * gap_mult
-    for i in (1, 2, 3):
-        # 距开仓价至少 (i+1) 个 ATR 间距；再与上一档拉开半个间距，保证严格单调
-        if side == 'long':
-            cand = min(raw[i], entry - unit * (i + 1))
-            cand = min(cand, levels[-1] - unit * 0.5)
-        else:
-            cand = max(raw[i], entry + unit * (i + 1))
-            cand = max(cand, levels[-1] + unit * 0.5)
-        levels.append(float(cand))
-
+    dists = [d1 + (d_max - d1) * (i / 4.0) for i in range(4)]
+    levels = [_price_at(entry, d, side) for d in dists]
+    disaster = _price_at(entry, d_max, side)
     risk = abs(entry - levels[0])
 
     tp_mults = _floats(conf.get('tp_r_multiples'), V2_DEFAULTS['tp_r_multiples'])
     if not (0 < tp_mults[0] < tp_mults[1] < tp_mults[2]):
-        tp_mults = [1.0, 2.0, 3.0]
-    tp_ratios = _floats(conf.get('tp_ratios'), V2_DEFAULTS['tp_ratios'])
-    keep = max(0.0, min(0.9, _f(conf.get('tp_keep_ratio'), 0.15)))
-    tp_ratios = [max(0.0, x) for x in tp_ratios]
+        tp_mults = [1.5, 2.5, 4.0]
+    tp_ratios = [max(0.0, x) for x in
+                 _floats(conf.get('tp_ratios'), V2_DEFAULTS['tp_ratios'])]
+    keep = _clamp(_f(conf.get('tp_keep_ratio'), 0.25), 0.0, 0.9)
     tp_total = sum(tp_ratios)
-    if tp_total > (1.0 - keep):
-        scale = (1.0 - keep) / tp_total
-        tp_ratios = [x * scale for x in tp_ratios]
+    if tp_total > (1.0 - keep) > 0:
+        tp_ratios = [x * (1.0 - keep) / tp_total for x in tp_ratios]
 
-    if side == 'long':
-        tp_prices = [entry + risk * m for m in tp_mults]
-        disaster = levels[3] - atr * max(0.0, _f(conf.get('disaster_atr_buffer'), 1.5))
-    else:
-        tp_prices = [entry - risk * m for m in tp_mults]
-        disaster = levels[3] + atr * max(0.0, _f(conf.get('disaster_atr_buffer'), 1.5))
-
+    sign = 1.0 if side == 'long' else -1.0
     return {
+        'version': PLAN_VERSION,
+        'side': side,
         'entry': float(entry),
         'risk': float(risk),
-        'levels': levels,
+        'levels': [float(x) for x in levels],
         'ratios': ratios,
-        'tp_prices': [float(x) for x in tp_prices],
+        'tp_prices': [float(entry + sign * risk * m) for m in tp_mults],
         'tp_ratios': tp_ratios,
         'disaster_stop': float(disaster),
+        'disaster_pct': float(d_max),
         'atr_at_plan': float(atr),
         'built_at': float(now or 0.0),
     }
 
 
+def rebase_plan(plan: Dict[str, Any], side: str, entry: float, atr: float,
+                structure: Sequence[float], conf: Dict[str, Any],
+                now: float) -> Optional[Dict[str, Any]]:
+    """加仓后按新持仓均价重建风险基准（档位 / R / 止盈 / 灾难线一起换）。
+
+    这是「止损只许上移」的唯一例外，也是档位唯一允许内移的时机：
+    持仓均价变了，旧坐标系的每条线都失去意义。
+
+    保留的是「进度」：tiers_done / tp_done 一律不动（卖过的档不再卖），
+    peak / trough 也不动（那是行情极值，与仓位无关）。调用方负责清 tp_armed。
+    """
+    if entry <= 0 or atr <= 0:
+        return None
+    try:
+        fresh = build_plan(side, entry, atr, structure, conf, now=now)
+    except Exception:
+        return None
+    fresh['rebase_count'] = int(_f(plan.get('rebase_count'))) + 1
+    fresh['rebased_at'] = float(now)
+    fresh['entry_prev'] = _f(plan.get('entry'))
+    fresh['built_at'] = _f(plan.get('built_at')) or float(now)
+    return fresh
+
+
 # ---------------------------------------------------------------------------
-# E 结构重估：持仓期间重算档位线与灾难线（docs/v2-replan-design.md）
+# 结构重估：只动未触发的档位线，只许外移
 # ---------------------------------------------------------------------------
 def replan_plan(plan: Dict[str, Any], side: str, structure: Sequence[float],
                 atr: float, current_price: float, conf: Dict[str, Any],
@@ -310,13 +363,13 @@ def replan_plan(plan: Dict[str, Any], side: str, structure: Sequence[float],
                 reason: str = 'scheduled') -> Optional[Dict[str, Any]]:
     """重算未触发档位线与灾难线，返回新的 plan 副本；无需/不安全重估时返回 None。
 
-    硬约束（评审定稿，逐条可单测）：
+    硬约束：
     1. 已触发档位冻结，不参与重算；
-    2. 未触发档位只许外移（long：新线 <= 旧线；short 对称）——内移会在重算瞬间
-       造成「价格已在线外」的假破位，等于自动在回调低点触发减仓；
-    3. 档位间保持单调 + 最小间距；灾难线与现价保持 disaster_atr_buffer*ATR；
-    4. entry/risk/tp_prices 等 R 语义字段终身锁定，一律沿用旧 plan；
-    5. 重估本身只返回 plan，不发任何交易动作。
+    2. 未触发档位只许外移（long：新线 <= 旧线）——内移会在重算瞬间造成
+       「价格已在线外」的假破位，等于自动在回调低点触发减仓；
+    3. 灾难线只许外移，且始终比 T4 更深；
+    4. entry/risk/tp_prices 终身锁定（R 与 TP 一动，止盈就永远到不了）；
+    5. 只返回 plan，不发任何交易动作。
     """
     if not bool(conf.get('replan_enabled', True)):
         return None
@@ -336,46 +389,37 @@ def replan_plan(plan: Dict[str, Any], side: str, structure: Sequence[float],
         return None
 
     done = set(_ints(tiers_done))
-    merged = list(old_levels)
+    old_d = [_dist(entry, lv, side) for lv in old_levels]
+    old_disaster = _f(plan.get('disaster_stop'))
+    # 灾难线只许外移：ATR 缩小时不许把它收回（收回等于放宽止损）
+    d_max = max(_dist(entry, old_disaster, side) if old_disaster > 0 else 0.0,
+                _f(fresh.get('disaster_pct')))
+    # T1 冻结（已触发）或只许外移（未触发）；其余三档按新基准重新等距
+    d1 = old_d[0] if 0 in done else max(old_d[0], _dist(entry, fresh['levels'][0], side))
+    d1 = min(d1, d_max * 0.85)
+    dists = [d1 + (d_max - d1) * (i / 4.0) for i in range(4)]
+
+    merged: List[float] = []
     for i in range(4):
-        if i in done:
-            continue  # 约束 1：已触发档冻结
-        new_lv = _f(fresh['levels'][i])
-        # 约束 2：只许外移（远离现价），内移沿用旧线
-        if side == 'long' and new_lv < merged[i]:
-            merged[i] = new_lv
-        elif side == 'short' and new_lv > merged[i]:
-            merged[i] = new_lv
+        d = old_d[i] if i in done else max(old_d[i], dists[i])
+        if merged:
+            # 严格单调：不得比上一档更靠内（已触发档不会被推，可以放心兜底）
+            d = max(d, merged[-1] + EPS)
+        merged.append(d)
 
-    # 约束 3：单调 + 最小间距（从浅到深逐档推；未触发档不得被推回内移方向）
-    unit = atr * max(0.1, _f(conf.get('tier_min_gap_atr'), 0.8))
-    for i in (1, 2, 3):
-        if side == 'long':
-            if merged[i] > merged[i - 1] - unit * 0.5:
-                merged[i] = merged[i - 1] - unit * 0.5
-            if i not in done and merged[i] > old_levels[i]:
-                merged[i] = old_levels[i]
-        else:
-            if merged[i] < merged[i - 1] + unit * 0.5:
-                merged[i] = merged[i - 1] + unit * 0.5
-            if i not in done and merged[i] < old_levels[i]:
-                merged[i] = old_levels[i]
+    levels = [_price_at(entry, d, side) for d in merged]
+    disaster = _price_at(entry, d_max, side)
 
-    # 灾难线：跟新 T4 重建，且与现价保持最小距离（防止重估把它拉到现价附近误杀全平）
-    buffer = max(0.0, _f(conf.get('disaster_atr_buffer'), 1.5))
-    if side == 'long':
-        disaster = min(merged[3] - atr * buffer, current_price - atr * buffer)
-    else:
-        disaster = max(merged[3] + atr * buffer, current_price + atr * buffer)
-
-    changed = merged != old_levels or abs(disaster - _f(plan.get('disaster_stop'))) > EPS
-    atr_changed = abs(atr - _f(plan.get('atr_at_plan'))) > atr * 0.01
-    if not changed and not atr_changed:
+    if all(abs(a - b) <= max(EPS, entry * 1e-9)
+           for a, b in zip(levels, old_levels)) \
+            and abs(disaster - old_disaster) <= max(EPS, entry * 1e-9) \
+            and abs(atr - _f(plan.get('atr_at_plan'))) <= atr * 1e-6:
         return None
 
     new_plan = dict(plan)
-    new_plan['levels'] = [float(x) for x in merged]
+    new_plan['levels'] = [float(x) for x in levels]
     new_plan['disaster_stop'] = float(disaster)
+    new_plan['disaster_pct'] = float(d_max)
     new_plan['atr_at_plan'] = float(atr)
     new_plan['replanned_at'] = float(now)
     new_plan['replan_count'] = int(_f(plan.get('replan_count'))) + 1
@@ -383,17 +427,26 @@ def replan_plan(plan: Dict[str, Any], side: str, structure: Sequence[float],
     return new_plan
 
 
+# ---------------------------------------------------------------------------
+# 状态
+# ---------------------------------------------------------------------------
 def new_state(cycle_id: str, side: str, entry: float, base_contracts: float,
               plan: Dict[str, Any], now: float) -> Dict[str, Any]:
     return {
         'cycle_id': cycle_id,
         'side': side,
-        'base_contracts': float(base_contracts),
+        'version': 2,
+        # 仓位真值镜像（每轮由交易所刷新）
         'contracts': float(base_contracts),
-        'version': 1,
+        # 规模锚：所有分批比例的分母，只增不减
+        'size_anchor': float(base_contracts),
+        # 上一轮看到的仓位事实，用于识别人工干预
+        'q_seen': float(base_contracts),
+        'e_seen': float(entry),
         'plan': plan,
         'tiers_done': [],
         'tp_done': [],
+        'tp_armed': [],
         'pending': {},
         'stop': None,
         'peak': float(entry),
@@ -402,35 +455,89 @@ def new_state(cycle_id: str, side: str, entry: float, base_contracts: float,
         'created_at': float(now),
         'updated_at': float(now),
         'attempts': {},
+        'interventions': [],
     }
 
 
 # ---------------------------------------------------------------------------
-# 止盈挂单（纯计算）：引擎只决定「挂哪一档、挂多少、挂什么价」，撮合交给交易所
+# 人工干预识别
 # ---------------------------------------------------------------------------
-def tp_order_qty(state: Dict[str, Any], plan: Dict[str, Any], contracts: float,
-                 level: int, conf: Dict[str, Any]) -> float:
-    """本档挂单数量 = min(初始仓位×档位比例, 当前剩余×单档上限)。
+def detect_intervention(state: Optional[Dict[str, Any]], side: str,
+                        contracts: float, entry: float,
+                        conf: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+    """识别「这笔仓位被人工（或别的策略）加过 / 减过」。
 
-    乘数用「本风险周期初始仓位」：tp_ratios 就是按初始仓位设计的。
-    再加一道「当前剩余 × tp_slice_cap」上限兜住仓位已被结构减仓砍小的情况——
-    2026-11-15 BTC 的「标称减 25%、实际 -79%」就是这个分母混用造成的。
+    判据只用两个交易所事实，不猜：
+    · 持仓均价变了 → 一定加过仓。币安按平均成本法，减仓不改变 entryPrice，
+      只有增加仓位才会让它移动。这一条比「比较初始仓位」可靠得多：
+      减仓后再加仓回补到初始仓位以下的场景（ETH 0.112→0.333 < base 0.733）
+      旧逻辑完全看不见。
+    · 数量变了（均价没变）→ 加/减仓。
+
+    返回 {'kind': 'add'|'reduce', 'delta_qty', 'delta_entry', 'implied_price', ...}
     """
-    base = _f(state.get('base_contracts'), contracts) or contracts
-    ratios = _floats(plan.get('tp_ratios'), V2_DEFAULTS['tp_ratios'])
-    if level < 0 or level >= len(ratios) or contracts <= 0 or base <= 0:
+    conf = conf or {}
+    if not state or not isinstance(state.get('plan'), dict):
+        return None
+    prev_e = _f(state.get('e_seen')) or _f((state.get('plan') or {}).get('entry'))
+    prev_q = (_f(state.get('q_seen')) or _f(state.get('contracts'))
+              or _f(state.get('base_contracts')))
+    if prev_q <= 0 or contracts <= 0 or prev_e <= 0 or entry <= 0:
+        return None
+
+    ent_tol = max(1e-6, _f(conf.get('entry_change_tol_pct'), 0.0002))
+    qty_tol = max(1e-6, _f(conf.get('qty_change_tol_pct'), 0.002))
+    d_entry = abs(entry - prev_e) / prev_e
+    delta_q = contracts - prev_q
+
+    kind: Optional[str] = None
+    if d_entry > ent_tol:
+        kind = 'add'          # 均价动了只可能是加仓
+    elif delta_q > prev_q * qty_tol:
+        kind = 'add'          # 加在同价位：均价没动但量变多
+    elif delta_q < -prev_q * qty_tol:
+        kind = 'reduce'
+
+    if kind is None:
+        return None
+
+    implied = entry
+    if kind == 'add' and abs(delta_q) > 1e-12:
+        # 反解这次加仓的成交均价：均价从 prev_e 移到 entry 的唯一来源就是这一笔
+        implied = (entry * contracts - prev_e * prev_q) / delta_q
+    return {
+        'kind': kind,
+        'delta_qty': float(delta_q),
+        'delta_entry': float(entry - prev_e),
+        'implied_price': float(implied),
+        'prev_qty': float(prev_q),
+        'prev_entry': float(prev_e),
+        'qty_pct': float(delta_q / prev_q),
+    }
+
+
+# ---------------------------------------------------------------------------
+# 减仓数量：只有这一处口径
+# ---------------------------------------------------------------------------
+def sell_qty(state: Dict[str, Any], contracts: float, ratio: float,
+             keep_frac: float) -> float:
+    """本档卖出量 = min(规模锚 × 档位比例, 当前持仓 × (1 − 保留比例))。
+
+    min 的第二项是硬保险：
+    · 人工减仓后 contracts 变小 → 最多卖到保留比例，不会一刀清零；
+    · 人工加仓后 size_anchor 抬到新 q → 后续档位按新规模分批。
+    旧实现用「本风险周期初始仓位」做分母，加仓后分母过期，
+    出现「标称减 25%、实际砍掉剩余 79%」（2026-11-15 BTC）。
+    """
+    anchor = size_anchor(state, contracts)
+    if contracts <= 0 or anchor <= 0 or ratio <= 0:
         return 0.0
-    cap = min(1.0, max(0.0, _f(conf.get('tp_slice_cap'), 0.5)))
-    return max(0.0, min(base * ratios[level], contracts * cap, contracts))
+    keep = _clamp(keep_frac, 0.0, 0.95)
+    return max(0.0, min(anchor * ratio, contracts * (1.0 - keep)))
 
 
 def tp_breakout_price(tp_price: float, side: str, conf: Dict[str, Any]) -> float:
-    """「算突破」的价格：价格必须先越过 TP 这么远，这一档才进入待触发状态。
-
-    为什么需要它：3 秒轮询本来就是为了「盯住价格怎么走」，把 maker 卖单直接挂在 TP 上
-    等于把判断权交给撮合——插针碰到 TP 就成交，真正的大行情一点吃不到。
-    现在的口径是：越过 TP（含缓冲）记一次突破，之后价格回到 TP 才止盈。
-    """
+    """「算突破」的价格：价格必须先越过 TP 这么远，这一档才进入待回落状态。"""
     tp = _f(tp_price)
     if tp <= 0:
         return 0.0
@@ -442,13 +549,6 @@ def tp_breakout_price(tp_price: float, side: str, conf: Dict[str, Any]) -> float
 # ---------------------------------------------------------------------------
 # 决策
 # ---------------------------------------------------------------------------
-def _remaining_ratio(state: Dict[str, Any], snap: Snapshot) -> float:
-    base = _f(state.get('base_contracts'), snap.base_contracts) or snap.base_contracts
-    if base <= 0:
-        return 0.0
-    return max(0.0, min(1.0, snap.contracts / base))
-
-
 def decide(state: Dict[str, Any], snap: Snapshot, conf: Dict[str, Any]) -> Dict[str, Any]:
     """核心决策：返回 {'actions': [...], 'patch': {...}}。
 
@@ -462,11 +562,13 @@ def decide(state: Dict[str, Any], snap: Snapshot, conf: Dict[str, Any]) -> Dict[
     side = snap.side
     price = _f(snap.price)
     now = _f(snap.now)
+    contracts = _f(snap.contracts)
 
     if len(levels) != 4 or entry <= 0 or risk <= 0 or price <= 0:
         return {'actions': [], 'patch': {}, 'reason': 'plan_invalid'}
 
-    remaining = _remaining_ratio(state, snap)
+    anchor = size_anchor(state, contracts)
+    remaining = contracts / anchor if anchor > 0 else 0.0
     patch: Dict[str, Any] = {}
 
     # 跟踪极值，供移动止损使用（只在本周期内累积）
@@ -484,14 +586,14 @@ def decide(state: Dict[str, Any], snap: Snapshot, conf: Dict[str, Any]) -> Dict[
         patch['pending'] = {}
         return {
             'actions': [{
-                'type': 'exit', 'ratio': remaining, 'tag': 'disaster',
+                'type': 'exit', 'ratio': 1.0, 'qty': contracts, 'tag': 'disaster',
                 'level': 'error',
-                'reason': f'击穿灾难线 {disaster:.8g}',
+                'reason': f'击穿灾难线 {disaster:.8g}（单笔亏损上限）',
             }],
             'patch': patch,
         }
 
-    # ---------- 2. 结构档位：实时价 + 持续确认（深度分级加速，见 A） ----------
+    # ---------- 2. 结构档位：实时价 + 持续确认（深度分级加速） ----------
     atr_now = _f(snap.atr) or _f(plan.get('atr_at_plan'))
     fast_depths = _floats(conf.get('tier_fast_depth_atr'), V2_DEFAULTS['tier_fast_depth_atr'])
     fast_mults = _floats(conf.get('tier_fast_confirm_mult'), V2_DEFAULTS['tier_fast_confirm_mult'])
@@ -505,7 +607,6 @@ def decide(state: Dict[str, Any], snap: Snapshot, conf: Dict[str, Any]) -> Dict[
             continue
         confirm = confirm_secs[i] if i < len(confirm_secs) else 0.0
         if confirm > 0 and atr_now > 0:
-            # 破位深度（ATR 归一）：越深确认越短，急速破位直接跳过
             depth = ((level - price) if side == 'long' else (price - level)) / atr_now
             for j, th in enumerate(fast_depths):
                 if depth >= th:
@@ -521,22 +622,21 @@ def decide(state: Dict[str, Any], snap: Snapshot, conf: Dict[str, Any]) -> Dict[
     patch['pending'] = pending
 
     actions: List[Dict[str, Any]] = []
-    if breached:
-        ratio = sum(ratios[i] for i in breached if i < len(ratios))
-        ratio = min(ratio, remaining)
+    if breached and remaining > MIN_REMAINING:
+        ratio = min(sum(ratios[i] for i in breached if i < len(ratios)), remaining)
+        # 最后一档（T4）= 结构彻底失效，允许清仓；其余档至少留 10% 给后续
+        keep_frac = 0.0 if max(breached) >= 3 else 0.10
+        qty = sell_qty(state, contracts, ratio, keep_frac)
         label = '/'.join(str(i + 1) for i in breached)
-        if ratio > 0 and remaining > MIN_REMAINING:
+        if qty > 0:
             actions.append({
-                'type': 'reduce', 'ratio': round(ratio, 6),
+                'type': 'reduce', 'ratio': round(ratio, 6), 'qty': qty,
                 'tiers': breached, 'tag': f'tier:{label}',
                 'level': 'error' if max(breached) >= 2 else 'warning',
                 'reason': f'结构破位 T{label}',
             })
 
     # ---------- 3. 止盈：程序判定「突破 → 回落」（不预挂到交易所） ----------
-    # 3 秒轮询的意义就在这里：盯着「有没有真的越过 TP」，再等它跌回 TP 才动手。
-    # 旧做法是把 reduceOnly 限价单挂在 TP 上，等于把判断交给撮合——插针碰到 TP 就成交，
-    # 之后的行情全错过；本轮起不再往交易所挂止盈单，全部由引擎自己判断、自己减仓。
     tp_prices = [_f(x) for x in (plan.get('tp_prices') or [])]
     tp_ratios = _floats(plan.get('tp_ratios'), V2_DEFAULTS['tp_ratios'])
     tp_done = set(_ints(state.get('tp_done')))
@@ -562,11 +662,13 @@ def decide(state: Dict[str, Any], snap: Snapshot, conf: Dict[str, Any]) -> Dict[
                 continue
             pulled_back = price <= tp if side == 'long' else price >= tp
             if not pulled_back:
-                continue  # 这一档还没回落，更低的档更不可能（继续往下找没意义，但代价极小）
+                continue
             ratio = min(tp_ratios[i] if i < len(tp_ratios) else 0.0, remaining)
-            if ratio > 0 and remaining > MIN_REMAINING:
+            keep = _clamp(_f(conf.get('tp_keep_ratio'), 0.25), 0.0, 0.9)
+            qty = sell_qty(state, contracts, ratio, keep)
+            if qty > 0 and remaining > MIN_REMAINING:
                 actions.append({
-                    'type': 'reduce', 'ratio': round(ratio, 6),
+                    'type': 'reduce', 'ratio': round(ratio, 6), 'qty': qty,
                     'tps': [i], 'tag': f'tp:{i + 1}',
                     'level': 'success',
                     'reason': f'分批止盈 TP{i + 1}（突破后回落至 {tp:.6g}）',
@@ -578,8 +680,7 @@ def decide(state: Dict[str, Any], snap: Snapshot, conf: Dict[str, Any]) -> Dict[
     if stop_action:
         actions.append(stop_action)
     elif snap.exchange_checked and snap.exchange_stop > 0:
-        # 交易所 STOP 与账本不一致（例如用户在 App 里手动改过价）：以交易所为准回写账本。
-        # 不回写的话，下一轮还会拿账本旧值去比较，反复提议同一张单或长期卡在「无需推进」。
+        # 交易所 STOP 与账本不一致（例如用户在 App 里手动改过价）：以交易所为准回写
         actual = _f(snap.exchange_stop)
         if abs(_f(state.get('stop')) - actual) > max(actual * 1e-6, 1e-12):
             patch['stop'] = actual
@@ -600,8 +701,13 @@ def _stop_action(state: Dict[str, Any], snap: Snapshot, plan: Dict[str, Any],
                  conf: Dict[str, Any], tiers_done: set) -> Optional[Dict[str, Any]]:
     """计算本轮应当挂到交易所的兜底 STOP。
 
-    交易所 STOP 的职责是「引擎挂了也要保住仓位」，所以它的起点是灾难线；
-    随着减仓推进、浮盈扩大，才逐步抬到保本 / 锁利 / ATR 追踪位。
+    交易所 STOP 的职责是「引擎挂了也要保住仓位」，起点是灾难线；
+    随着减仓推进、浮盈扩大，逐步抬到保本 / 锁利 / ATR 追踪位。
+
+    候选全部按 ATR 归一（不按 R）：
+    · R 由结构决定，与波动尺度脱钩——BTC 的 R=6.24% 而 2h ATR 只有 1.87%，
+      用 0.5R 触发保本，回撤容忍只剩 3%，1.7 个 ATR 就出局；
+    · ATR 是「正常波动尺度」，浮盈 2 ATR 保本、2.5 ATR 起追踪，跨币一致。
     """
     side = snap.side
     price = _f(snap.price)
@@ -612,39 +718,37 @@ def _stop_action(state: Dict[str, Any], snap: Snapshot, plan: Dict[str, Any],
     if price <= 0 or entry <= 0 or risk <= 0 or len(levels) != 4:
         return None
 
-    be_buf = max(0.0, _f(conf.get('breakeven_buffer_pct'), 0.002))
-    be_atr = max(0.0, _f(conf.get('breakeven_atr_ratio'), 0.3))
+    be_buf = max(0.0, _f(conf.get('breakeven_buffer_pct'), 0.001))
+    be_atr = max(0.0, _f(conf.get('breakeven_atr_ratio'), 0.4))
     lock_buf = max(0.0, _f(conf.get('profit_lock_buffer_pct'), 0.001))
-    fr = floating_r(entry, risk, side, price)
+    sign = 1.0 if side == 'long' else -1.0
+    # 浮盈以 ATR 计：+2.3 表示"赚了 2.3 个 ATR"
+    gap_atr = ((price - entry) / atr * sign) if atr > 0 else None
     tp_done = set(_ints(state.get('tp_done')))
+    tp_prices = [_f(x) for x in (plan.get('tp_prices') or [])]
 
-    # 保本位：距开仓价 max(价格比例, ATR 比例)。
-    # 只用固定 +0.2% 时，止损会贴在现价下方半个 ATR 以内，1h 上的普通回撤就能扫到，
-    # 于是「保本出局 + 行情继续走」反复发生。ATR 缓冲随波动自适应。
-    be_offset = max(entry * be_buf, atr * be_atr)
-    be_price = entry + be_offset if side == 'long' else entry - be_offset
+    candidates: List[float] = [_f(plan.get('disaster_stop')) or levels[3]]
 
-    candidates = [_f(plan.get('disaster_stop')) or levels[3]]
-    if fr is not None and fr >= _f(conf.get('breakeven_trigger_r'), 0.5):
-        candidates.append(be_price)
-    if 0 in tp_done:
-        candidates.append(be_price)
-    if 1 in tp_done and plan.get('tp_prices'):
-        tp1 = _f(plan['tp_prices'][0])
-        if tp1 > 0:
-            candidates.append(tp1 * (1 + lock_buf) if side == 'long' else tp1 * (1 - lock_buf))
-
-    # 每减一档，止损推进到下一档：敞口和仓位同步收紧
+    # L1 破位推进：破了第 i 档，止损就跟到第 i+1 档（敞口与仓位同步收紧）
     if tiers_done:
-        deepest = max(tiers_done)
-        nxt = min(deepest + 1, 3)
+        nxt = min(max(tiers_done) + 1, 3)
         candidates.append(levels[nxt])
 
-    start_r = _f(conf.get('trailing_start_r'), 0.5)
-    mult = _f(conf.get('trailing_atr_mult'), 1.5)
-    if atr > 0 and fr is not None and fr >= start_r:
+    # L2 保本：浮盈 >= breakeven_trigger_atr×ATR
+    if gap_atr is not None and gap_atr >= _f(conf.get('breakeven_trigger_atr'), 2.0):
+        offset = max(entry * be_buf, atr * be_atr)
+        candidates.append(entry + sign * offset)
+
+    # L3 锁利：已止盈的档，止损推到该档之上
+    for i in tp_done:
+        if 0 <= i < len(tp_prices) and tp_prices[i] > 0:
+            candidates.append(tp_prices[i] * (1 + sign * lock_buf))
+
+    # L4 追踪：浮盈 >= trailing_start_atr×ATR 后按 peak − k×ATR 跟随
+    if gap_atr is not None and gap_atr >= _f(conf.get('trailing_start_atr'), 2.5) and atr > 0:
         peak = _f(state.get('peak'), price)
         trough = _f(state.get('trough'), price)
+        mult = _f(conf.get('trailing_atr_mult'), 1.5)
         candidates.append(peak - mult * atr if side == 'long' else trough + mult * atr)
 
     candidates = [c for c in candidates if c > 0]
@@ -652,37 +756,45 @@ def _stop_action(state: Dict[str, Any], snap: Snapshot, plan: Dict[str, Any],
         return None
     desired = max(candidates) if side == 'long' else min(candidates)
 
-    # 止损绝不能落在价格错误一侧，否则会变成立即成交的市价单
-    guard = max(1e-6, price * 0.002)
+    # 止损绝不能落在价格错误一侧（否则是立即成交的市价单），也不能贴太近：
+    # 至少要留 stop_min_room_atr×ATR 的呼吸空间，否则一个 tick 就打掉。
+    room = max(atr * _f(conf.get('stop_min_room_atr'), 0.6),
+               price * _f(conf.get('stop_min_room_pct'), 0.003))
     if side == 'long':
-        desired = min(desired, price - guard)
+        desired = min(desired, price - room)
     else:
-        desired = max(desired, price + guard)
+        desired = max(desired, price + room)
     if desired <= 0:
         return None
 
     # 交易所没单：用户手动撤了 / 被触发 / 当初挂单失败。
-    # 这时不能拿账本里的旧价做「有没有推进」的比较——账本以为还在，就永远不会补挂。
+    # 这时不能拿账本旧价做「有没有推进」的比较——账本以为还在，就永远不会补挂。
     ledger_stop = _f(state.get('stop'))
     actual = _f(snap.exchange_stop) if snap.exchange_checked else 0.0
     if snap.exchange_checked and actual <= 0:
-        if ledger_stop > 0:
-            return {'type': 'stop', 'price': desired, 'tag': 'stop:restore',
-                    'reason': '交易所STOP已不在（被撤销或已触发），重新挂出',
-                    'level': 'warning', 'previous_stop': ledger_stop}
-        # 账本里也没有：就是首次挂单，直接放兜底线，让内部四档先动作
-        return {'type': 'stop', 'price': desired, 'tag': 'stop:init',
-                'reason': '建立交易所兜底STOP', 'level': 'info', 'previous_stop': 0.0}
+        tag = 'stop:restore' if ledger_stop > 0 else 'stop:init'
+        reason = ('交易所STOP已不在（被撤销或已触发），重新挂出' if ledger_stop > 0
+                  else '建立交易所兜底STOP')
+        return {'type': 'stop', 'price': desired, 'tag': tag, 'reason': reason,
+                'level': 'warning' if ledger_stop > 0 else 'info',
+                'previous_stop': ledger_stop, 'force': True}
 
-    # 有交易所真相就用它当基准（可能被手动改过价），否则退回账本
     current = actual if actual > 0 else ledger_stop
     if current <= 0:
         return {'type': 'stop', 'price': desired, 'tag': 'stop:init',
-                'reason': '建立交易所兜底STOP', 'level': 'info', 'previous_stop': 0.0}
+                'reason': '建立交易所兜底STOP', 'level': 'info',
+                'previous_stop': 0.0, 'force': True}
 
     improvement = (desired - current) if side == 'long' else (current - desired)
     if improvement <= 0:
-        return None  # 绝不放宽
+        # 加仓后持仓均价被抬高，旧止损可能贴到新均价上：这一轮必须按新基准重算，
+        # 允许一次下移（其余任何场景都不许放宽）。
+        if not snap.rebased:
+            return None
+        return {'type': 'stop', 'price': desired, 'tag': 'stop:rebase',
+                'reason': '加仓后按新持仓均价重算止损',
+                'level': 'warning', 'previous_stop': current, 'force': True}
+
     threshold = max(price * _f(conf.get('stop_min_update_pct'), 0.0015),
                     atr * _f(conf.get('stop_min_update_atr_ratio'), 0.15))
     if improvement < threshold:
@@ -690,4 +802,4 @@ def _stop_action(state: Dict[str, Any], snap: Snapshot, plan: Dict[str, Any],
 
     return {'type': 'stop', 'price': desired, 'tag': 'stop:move',
             'reason': _stop_move_reason(side, entry, price, desired),
-            'level': 'info', 'previous_stop': current}
+            'level': 'info', 'previous_stop': current, 'force': False}

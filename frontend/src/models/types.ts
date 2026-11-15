@@ -340,8 +340,27 @@ export interface ProtectionPositionRow {
   risk?: number | null
   tier_levels?: number[]
   disaster_stop?: number | null
+  /** 灾难线相对持仓均价的百分比（= 单笔最大亏损） */
+  disaster_pct?: number | null
+  /** 分批比例的分母：历史最大持仓量，人工加仓后跟进、减仓不缩 */
+  size_anchor?: number | null
+  /** 兼容字段，与 size_anchor 同值 */
   base_contracts?: number | null
+  /** 因加仓重算过几次风险基准（0 = 建仓以来没加过仓） */
+  rebase_count?: number | null
+  /** 最近的人工加减仓记录 */
+  interventions?: ProtectionIntervention[]
   updated_at?: number | null
+}
+
+/** 人工（或其它策略）对仓位的干预记录 */
+export interface ProtectionIntervention {
+  ts: number
+  kind: 'add' | 'reduce'
+  delta_qty: number
+  qty_pct: number
+  prev_qty: number
+  prev_entry: number
 }
 
 export interface ProtectionActionRow {
@@ -387,10 +406,17 @@ export interface ProtectionConfig {
   tier_ratios?: number[]
   tier_confirm_sec?: number[]
   risk_min_pct?: number
+  /** 单笔最大亏损 = 灾难线的位置（相对持仓均价的百分比） */
   risk_max_pct?: number
-  breakeven_trigger_r?: number
+  /** T1 的距离上限：结构位太远时把第一档收回来 */
+  t1_max_pct?: number
+  /** 浮盈多少个 ATR 才把止损推到成本价 */
+  breakeven_trigger_atr?: number
   /** 保本位至少距离开仓价多少个 ATR（与 breakeven_buffer_pct 取大） */
   breakeven_atr_ratio?: number
+  /** 浮盈多少个 ATR 开始按 ATR 追踪 */
+  trailing_start_atr?: number
+  /** 追踪宽度（峰值 − n×ATR） */
   trailing_atr_mult?: number
   timeframe: string
   tp1_r_multiple: number
@@ -420,17 +446,11 @@ export interface ProtectionConfig {
   tp_ratios?: number[]
   /** 三档之后不挂止盈单、留给追踪止损的仓位比例（默认 0.25） */
   tp_keep_ratio?: number
-  /** 单档最多卖「当前剩余」的比例，防止一刀清零（默认 0.5） */
-  tp_slice_cap?: number
   /** 「算突破」的缓冲：价格要越过 TP 这么多，才进入等回落状态 */
   tp_breakout_confirm_pct?: number
-  /** 止盈挂单核对间隔（秒） */
-  tp_verify_interval_sec?: number
   exchange_hard_stop_enabled: boolean
-  // 双轨治理 + 连续移动止损（v1/v2 引擎共用）
+  // 双轨治理（接管开仓端遗留的 SL/TP/TS 单）
   take_over_external_stops?: boolean
-  trailing_stop_mode?: 'step' | 'continuous'
-  trailing_trigger_r?: number
   hard_stop_min_distance_pct: number
   hard_stop_atr_multiplier: number
   dynamic_stop_max_distance_pct: number

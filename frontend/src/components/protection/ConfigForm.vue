@@ -72,13 +72,30 @@
                 step="0.01"
                 min="0.001"
                 max="0.5"
-                label="最大单笔风险（占价格比例）"
+                label="单笔最大亏损（灾难线）"
                 density="compact"
                 variant="outlined"
                 hide-details
               >
                 <template #append-inner>
                   <HelpTip :text="HELP.protection.riskMaxPct" />
+                </template>
+              </v-text-field>
+            </v-col>
+            <v-col cols="12" sm="6" md="3">
+              <v-text-field
+                v-model.number="form.t1_max_pct"
+                type="number"
+                step="0.005"
+                min="0.005"
+                max="0.5"
+                label="T1 最远距离（结构位封顶）"
+                density="compact"
+                variant="outlined"
+                hide-details
+              >
+                <template #append-inner>
+                  <HelpTip :text="HELP.protection.t1MaxPct" />
                 </template>
               </v-text-field>
             </v-col>
@@ -124,18 +141,18 @@
           <v-row dense class="mt-1">
             <v-col cols="12" sm="6" md="3">
               <v-text-field
-                v-model.number="form.breakeven_trigger_r"
+                v-model.number="form.breakeven_trigger_atr"
                 type="number"
-                step="0.1"
-                min="0.1"
-                max="100"
-                label="保本触发（R）"
+                step="0.5"
+                min="0.2"
+                max="20"
+                label="保本触发（ATR 倍数）"
                 density="compact"
                 variant="outlined"
                 hide-details
               >
                 <template #append-inner>
-                  <HelpTip :text="HELP.protection.breakevenTriggerR" />
+                  <HelpTip :text="HELP.protection.breakevenTriggerAtr" />
                 </template>
               </v-text-field>
             </v-col>
@@ -158,12 +175,29 @@
             </v-col>
             <v-col cols="12" sm="6" md="3">
               <v-text-field
+                v-model.number="form.trailing_start_atr"
+                type="number"
+                step="0.5"
+                min="0.2"
+                max="20"
+                label="追踪起点（ATR 倍数）"
+                density="compact"
+                variant="outlined"
+                hide-details
+              >
+                <template #append-inner>
+                  <HelpTip :text="HELP.protection.trailingStartAtr" />
+                </template>
+              </v-text-field>
+            </v-col>
+            <v-col cols="12" sm="6" md="3">
+              <v-text-field
                 v-model.number="form.trailing_atr_mult"
                 type="number"
                 step="0.5"
                 min="0.5"
                 max="20"
-                label="追踪止损（ATR 倍数）"
+                label="追踪宽度（ATR 倍数）"
                 density="compact"
                 variant="outlined"
                 hide-details
@@ -192,8 +226,11 @@
             </v-col>
           </v-row>
           <v-alert type="info" variant="tonal" density="compact" class="mt-3 text-caption">
-            四档合计应等于 100%：越破越重，T4 为全平档。交易所 STOP 只做兜底（灾难线再往外 1.5
-            ATR）， 正常情况由这四档先动作；减一档，止损就推进到下一档。
+            <strong>四档怎么算：</strong>T1 = 最近的结构低点再往外 0.5×ATR（夹在「最小风险」与「T1
+            最远距离」之间），T2/T3/T4 = T1 到灾难线之间的 25/50/75% 等距。
+            灾难线就是「单笔最大亏损」，不再由 T4 再外推——旧口径会把兜底线推到 −11%。
+            T4 允许清仓（结构彻底失效），T1~T3 至少留 10% 给后面的档。
+            交易所 STOP 只做兜底；减一档，止损就推进到下一档。
           </v-alert>
         </v-expansion-panel-text>
       </v-expansion-panel>
@@ -264,23 +301,6 @@
             </v-col>
             <v-col cols="6" sm="3" md="3">
               <v-text-field
-                v-model.number="form.tp_slice_cap"
-                type="number"
-                step="0.05"
-                min="0.05"
-                max="1"
-                label="单档最多卖剩余"
-                density="compact"
-                variant="outlined"
-                hide-details
-              >
-                <template #append-inner>
-                  <HelpTip :text="HELP.protection.tpSliceCap" />
-                </template>
-              </v-text-field>
-            </v-col>
-            <v-col cols="6" sm="3" md="3">
-              <v-text-field
                 v-model.number="form.tp_breakout_confirm_pct"
                 type="number"
                 step="0.001"
@@ -332,37 +352,6 @@
           </v-row>
           <v-row dense class="mt-1">
             <v-col cols="12" sm="6" md="3">
-              <v-switch
-                :model-value="form.trailing_stop_mode === 'continuous'"
-                color="primary"
-                density="compact"
-                inset
-                hide-details
-                @update:model-value="onTrailingModeSwitch($event)"
-              >
-                <template #label>
-                  连续移动止损<HelpTip :text="HELP.protection.switchTrailingMode" />
-                </template>
-              </v-switch>
-            </v-col>
-            <v-col cols="12" sm="6" md="3">
-              <v-text-field
-                v-model.number="form.trailing_trigger_r"
-                type="number"
-                step="0.1"
-                min="0.1"
-                max="100"
-                label="连续追踪触发 (R)"
-                density="compact"
-                variant="outlined"
-                hide-details
-              >
-                <template #append-inner>
-                  <HelpTip :text="HELP.protection.trailingTriggerR" />
-                </template>
-              </v-text-field>
-            </v-col>
-            <v-col cols="12" sm="6" md="3">
               <v-text-field
                 v-model.number="form.emergency_cooldown_sec"
                 type="number"
@@ -400,8 +389,8 @@
           <v-alert type="info" variant="tonal" density="compact" class="mt-3 text-caption">
             开关改动立即生效；数值参数改动后需点右上角「保存参数」。
             接管开仓端止盈止损：开启后守护引擎会撤销开仓时挂的固定 SL/TP/TS 单（先确认自己的保护
-            STOP 已就位才撤，绝不裸仓），止盈止损由守护引擎独家管理。连续移动止损：浮盈达到触发 R
-            倍数后，止损线按 价格 ± ATR×倍数 平滑追踪（只在盈利方向推进）。
+            STOP 已就位才撤，绝不裸仓），止盈止损由守护引擎独家管理。
+            止损阶梯全部按 ATR 计：浮盈 2 ATR 推到成本价、2.5 ATR 起按「峰值 − 1.5 ATR」跟随。
           </v-alert>
         </v-expansion-panel-text>
       </v-expansion-panel>
@@ -457,25 +446,21 @@ const onBooleanSwitch = (key: BooleanSwitchKey, value: boolean | null): void => 
   void applySwitch(key, value === true)
 }
 
-const onTrailingModeSwitch = (value: boolean | null): void => {
-  void applySwitch('trailing_stop_mode', value === true ? 'continuous' : 'step')
-}
-
 // ---- 折叠面板标题行的当前值摘要（收起状态也能读到关键值） ----
 const onOff = (value: boolean): string => (value ? '开' : '关')
+const pct = (value: number): string => `${Math.round(value * 100)}%`
 const tierSummary = computed(
   () =>
-    `风险 ${form.risk_min_pct}–${form.risk_max_pct} / 追踪 ${form.trailing_atr_mult} ATR / ` +
+    `T1 风险 ${pct(form.risk_min_pct)}–${pct(form.t1_max_pct)} / 亏损上限 ${pct(form.risk_max_pct)} / ` +
+    `保本 ${form.breakeven_trigger_atr} ATR / 追踪 ${form.trailing_atr_mult} ATR / ` +
     `黑天鹅 ${form.emergency_timeframe} / 巡检 ${form.v2_poll_interval_sec}s`,
 )
 const switchSummary = computed(
   () =>
     `浮盈保护 ${onOff(form.profit_protection_enabled)} / 紧急止损 ${onOff(form.emergency_enabled)} / ` +
     `灾难止损 ${onOff(form.exchange_hard_stop_enabled)} / 接管外部止盈止损 ${onOff(form.take_over_external_stops)} / ` +
-    `连续移动止损 ${form.trailing_stop_mode === 'continuous' ? '开' : '关'} / ` +
     `黑天鹅禁开仓 ${onOff(form.emergency_block_new_entries)}`,
 )
-const pct = (value: number): string => `${Math.round(value * 100)}%`
 const tpSummary = computed(() => {
   const r = form.tp_r_multiples.map((x) => `${x}R`).join(' / ')
   return `${r} 减 ${form.tp_ratios.map(pct).join(' / ')}，保留 ${pct(form.tp_keep_ratio)} 追踪`

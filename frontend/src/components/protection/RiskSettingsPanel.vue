@@ -86,11 +86,20 @@
             >
               TP{{ row.tp_wait_level }} 待突破
             </v-chip>
+            <v-chip
+              v-if="row.rebase_count"
+              size="x-small"
+              variant="tonal"
+              color="warning"
+              title="检测到人工加仓，已按新持仓均价重算止损与止盈；卖过的档位不会重复卖"
+            >
+              加仓重算 ×{{ row.rebase_count }}
+            </v-chip>
             <span v-if="!hasTriggered(row)" class="text-caption text-medium-emphasis">等待触发</span>
           </div>
           <div v-if="isGuardRowExpanded(row)" class="text-caption text-medium-emphasis mt-2">
             <div>
-              开仓价 <span class="num">{{ formatNumber(row.entry_price) }}</span>
+              持仓均价 <span class="num">{{ formatNumber(row.entry_price) }}</span>
               · TP1 <span class="num">{{ formatNumber(row.tp1_price) }}</span>
               / TP2 <span class="num">{{ formatNumber(row.tp2_price) }}</span>
               / 躺平 <span class="num">{{ formatNumber(row.tp3_price) }}</span>
@@ -102,6 +111,13 @@
                 <template v-if="row.disaster_stop">{{ formatNumber(row.disaster_stop) }}</template>
                 <template v-else>—</template>
               </span>
+              <template v-if="row.disaster_pct">
+                （{{ (row.disaster_pct * 100).toFixed(1) }}%）
+              </template>
+            </div>
+            <div v-if="isV2" class="mt-1">
+              规模锚 <span class="num">{{ formatNumber(row.size_anchor, 4) }}</span>
+              <span class="text-medium-emphasis">· 分批比例的分母（加仓跟进、减仓不缩）</span>
             </div>
           </div>
         </div>
@@ -115,7 +131,7 @@
               <th class="text-left">币种</th>
               <th class="text-left">方向</th>
               <th class="text-right">数量</th>
-              <th v-if="lgAndUp" class="text-right">开仓价</th>
+              <th v-if="lgAndUp" class="text-right">均价</th>
               <th class="text-right">标记价</th>
               <th class="text-right">保护止损</th>
               <th class="text-right">TP1 / TP2 / 躺平</th>
@@ -154,6 +170,9 @@
               <td v-if="isV2" class="text-right text-caption">
                 <span v-if="row.disaster_stop">{{ formatNumber(row.disaster_stop) }}</span>
                 <span v-else class="text-medium-emphasis">—</span>
+                <span v-if="row.disaster_pct" class="text-medium-emphasis">
+                  ({{ (row.disaster_pct * 100).toFixed(1) }}%)
+                </span>
               </td>
               <td>
                 <div class="d-flex flex-wrap ga-1">

@@ -41,7 +41,6 @@ def test_tp_ladder_defaults_are_valid():
         'tp_r_multiples': list(V2_DEFAULTS['tp_r_multiples']),
         'tp_ratios': list(V2_DEFAULTS['tp_ratios']),
         'tp_keep_ratio': V2_DEFAULTS['tp_keep_ratio'],
-        'tp_slice_cap': V2_DEFAULTS['tp_slice_cap'],
         'tp_breakout_confirm_pct': V2_DEFAULTS['tp_breakout_confirm_pct'],
     })
 
@@ -53,11 +52,18 @@ def test_tp_r_multiples_must_increase(value):
     assert exc.value.status_code == 400
 
 
-@pytest.mark.parametrize('value', [0, 1.5, -0.2])
-def test_tp_slice_cap_range(value):
-    """单档上限必须落在 (0, 1]：0 会让挂单量恒为 0，>1 等于不设上限。"""
+@pytest.mark.parametrize('value', [-0.1, 0.6])
+def test_t1_max_pct_must_stay_inside_risk_budget(value):
+    """T1 距离上限必须落在 (risk_min_pct, risk_max_pct]：越界会让四档挤成一条线。"""
     with pytest.raises(HTTPException) as exc:
-        _validate({'tp_slice_cap': value})
+        _validate({'risk_min_pct': 0.015, 'risk_max_pct': 0.06, 't1_max_pct': value})
+    assert exc.value.status_code == 400
+
+
+def test_stop_ladder_params_are_consistent():
+    """追踪起点不能早于保本：否则追踪线还在亏损侧就开始跟随。"""
+    with pytest.raises(HTTPException) as exc:
+        _validate({'breakeven_trigger_atr': 2.0, 'trailing_start_atr': 1.0})
     assert exc.value.status_code == 400
 
 
