@@ -152,53 +152,43 @@ def test_budget_never_exceeds_one():
 
 
 # ---------------------------------------------------------------------------
-# 决策：止盈与保本
+# 止盈：决策层已不产出动作，改由交易所预挂 post-only 单
 # ---------------------------------------------------------------------------
-def test_take_profit_hits_tp1_then_tp2():
+def test_take_profit_ladder_defaults():
+    """默认阶梯 1.5R / 2.5R / 4R，减 20%/25%/30%，留 25% 给追踪。"""
+    plan = _plan()
+    assert plan["tp_ratios"] == pytest.approx([0.20, 0.25, 0.30])
+    risk = plan["risk"]
+    for i, mult in enumerate((1.5, 2.5, 4.0)):
+        assert plan["tp_prices"][i] == pytest.approx(100.0 + risk * mult)
+
+
+def test_take_profit_leaves_keep_ratio():
+    """三档合计 75%，剩 25% 不挂止盈单（keep_ratio 默认 0.25）。"""
+    conf = CONF
+    assert conf["tp_keep_ratio"] == pytest.approx(0.25)
+    plan = _plan()
+    assert sum(plan["tp_ratios"]) == pytest.approx(1.0 - conf["tp_keep_ratio"])
+
+
+def test_take_profit_still_raises_stop_after_tp1():
+    """TP1 成交后止损推到保本：止盈执行方式变了，保护链不能断。"""
     state = _state()
-    tp1, tp2, _ = state["plan"]["tp_prices"]
-
-    actions = _apply(state, risk_model.decide(state, _snap(price=tp1 + 0.01, now=1000.0), CONF))
-    assert [a["tag"] for a in actions if a["type"] == "reduce"] == ["tp:1"]
-    assert actions[0]["ratio"] == pytest.approx(0.25)
-
     state["tp_done"] = [0]
-    actions = _apply(state, risk_model.decide(state, _snap(price=tp2 + 0.01, now=1010.0), CONF))
-    tp_actions = [a for a in actions if a["type"] == "reduce"]
-    assert tp_actions and tp_actions[0]["tag"] == "tp:2"
-    assert tp_actions[0]["ratio"] == pytest.approx(0.30)
+    actions = _apply(state, risk_model.decide(state, _snap(price=101.0, now=1000.0), CONF))
+    stops = [a for a in actions if a["type"] == "stop"]
+    assert stops and stops[0]["price"] > 100.0
 
 
-def test_take_profit_leaves_keep_ratio_when_gapped():
-    """跳空直接越过全部 TP：默认单轮单档（D），本轮只卖第一档，后续轮次逐档推进。"""
+def test_next_tp_level_skips_done():
+    """挂单层只挂「下一个未完成档」，已完成档不再重复挂。"""
     state = _state()
-    tp3 = state["plan"]["tp_prices"][2]
-    actions = _apply(state, risk_model.decide(state, _snap(price=tp3 + 0.01, now=1000.0), CONF))
-    reduce = [a for a in actions if a["type"] == "reduce"][0]
-    assert reduce["tps"] == [0]
-    assert reduce["ratio"] == pytest.approx(0.25)
-    # 价格维持高位，后续轮次继续卖 TP2/TP3（各 30%），合计仍是 85%
-    state["tp_done"] = [0]
-    actions = _apply(state, risk_model.decide(state, _snap(price=tp3 + 0.01, now=1003.0), CONF))
-    reduce = [a for a in actions if a["type"] == "reduce"][0]
-    assert reduce["tps"] == [1]
+    plan = state["plan"]
+    assert risk_model.next_tp_level(state, plan) == 0
     state["tp_done"] = [0, 1]
-    actions = _apply(state, risk_model.decide(state, _snap(price=tp3 + 0.01, now=1006.0), CONF))
-    reduce = [a for a in actions if a["type"] == "reduce"][0]
-    assert reduce["tps"] == [2]
-    assert reduce["ratio"] == pytest.approx(0.30)
-
-
-def test_take_profit_multi_level_merge_when_disabled():
-    """关闭 tp_one_level_per_round：恢复多档合并旧行为（85% 一轮打光）。"""
-    conf = dict(CONF)
-    conf["tp_one_level_per_round"] = False
-    state = _state()
-    tp3 = state["plan"]["tp_prices"][2]
-    actions = _apply(state, risk_model.decide(state, _snap(price=tp3 + 0.01, now=1000.0), conf))
-    reduce = [a for a in actions if a["type"] == "reduce"][0]
-    assert reduce["tps"] == [0, 1, 2]
-    assert reduce["ratio"] == pytest.approx(0.85)
+    assert risk_model.next_tp_level(state, plan) == 2
+    state["tp_done"] = [0, 1, 2]
+    assert risk_model.next_tp_level(state, plan) is None
 
 
 def test_breakeven_stop_after_half_r():

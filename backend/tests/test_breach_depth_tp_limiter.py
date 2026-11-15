@@ -1,5 +1,10 @@
 # tests/test_breach_depth_tp_limiter.py
-"""A 破位深度分级确认 + D TP 单轮单档：纯决策层单测（无 IO）。"""
+"""A 破位深度分级确认：纯决策层单测（无 IO）。
+
+止盈已从决策层整体迁到「交易所预挂 post-only 限价单」（见 tp_orders.py 与
+test_tp_passive.py），decide 不再产生 tps 动作，所以原来的单轮单档/多档合并
+测试随之作废。
+"""
 import os
 import sys
 
@@ -79,36 +84,11 @@ def test_depth_decay_disabled_by_shallow_depth():
     assert r2['patch']['pending'] == {}
 
 
-def test_tp_one_level_per_round():
-    """插针扫过全部 TP：单轮只触发第一档，保留阶梯。"""
+def test_take_profit_is_not_decided_here():
+    """价格越过全部 TP：决策层不出任何减仓动作（止盈已交给挂单层）。"""
     conf, plan, state = _mk()
     tp3 = float(plan['tp_prices'][2])
     result = risk_model.decide(state, _snap(state, tp3 + 0.5, 1000.0), conf)
-    acts = _reduce_actions(result)
-    assert len(acts) == 1
-    assert acts[0]['tps'] == [0]
-    assert abs(acts[0]['ratio'] - float(plan['tp_ratios'][0])) < 1e-6
-
-
-def test_tp_multi_level_when_disabled():
-    """关闭单轮单档：恢复旧行为（多档合并触发）。"""
-    conf, plan, state = _mk()
-    conf['tp_one_level_per_round'] = False
-    tp3 = float(plan['tp_prices'][2])
-    result = risk_model.decide(state, _snap(state, tp3 + 0.5, 1000.0), conf)
-    acts = _reduce_actions(result)
-    assert acts[0]['tps'] == [0, 1, 2]
-
-
-def test_tp_ladder_progression():
-    """单轮单档下，后续轮次逐档推进：TP1 → TP2 → TP3。"""
-    conf, plan, state = _mk()
-    prices = [float(plan['tp_prices'][i]) + 0.1 for i in range(3)]
-    fired = []
-    for price in prices:
-        result = risk_model.decide(state, _snap(state, price, 1000.0), conf)
-        acts = _reduce_actions(result)
-        if acts:
-            fired.extend(acts[0]['tps'])
-            state['tp_done'] = sorted(set(risk_model._ints(state.get('tp_done'))) | set(acts[0]['tps']))
-    assert fired == [0, 1, 2]
+    assert _reduce_actions(result) == []
+    # 档位仍在，挂单层据此判断「下一档该挂哪一档」
+    assert risk_model.next_tp_level(state, plan) == 0

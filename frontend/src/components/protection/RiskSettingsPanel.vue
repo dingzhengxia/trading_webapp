@@ -68,6 +68,15 @@
             <v-chip v-if="row.t2_done" size="x-small" variant="tonal" color="warning">T2</v-chip>
             <v-chip v-if="row.t3_done" size="x-small" variant="tonal" color="warning">T3</v-chip>
             <v-chip v-if="row.t4_done" size="x-small" variant="tonal" color="error">T4</v-chip>
+            <v-chip
+              v-if="row.tp_order_level"
+              size="x-small"
+              variant="tonal"
+              color="success"
+              :title="`止盈单已挂在交易所 ${formatNumber(row.tp_order_price)}（post-only，到价成交）`"
+            >
+              TP{{ row.tp_order_level }} 挂单中
+            </v-chip>
             <span v-if="!hasTriggered(row)" class="text-caption text-medium-emphasis">等待触发</span>
           </div>
           <div v-if="isGuardRowExpanded(row)" class="text-caption text-medium-emphasis mt-2">
@@ -146,6 +155,15 @@
                   <v-chip v-if="row.t2_done" size="x-small" variant="tonal" color="warning">T2</v-chip>
                   <v-chip v-if="row.t3_done" size="x-small" variant="tonal" color="warning">T3</v-chip>
                   <v-chip v-if="row.t4_done" size="x-small" variant="tonal" color="error">T4</v-chip>
+                  <v-chip
+                    v-if="row.tp_order_level"
+                    size="x-small"
+                    variant="tonal"
+                    color="success"
+                    :title="`止盈单已挂在交易所 ${formatNumber(row.tp_order_price)}（post-only，到价成交）`"
+                  >
+                    TP{{ row.tp_order_level }} 挂单中
+                  </v-chip>
                   <span
                     v-if="!hasTriggered(row)"
                     class="text-caption text-medium-emphasis"

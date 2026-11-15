@@ -185,15 +185,17 @@ async def _market_reduce_and_confirm(exchange, symbol, side, position, requested
 async def _limit_reduce_with_maker_retry(
     exchange, symbol, side, position, requested_qty, reason, conf, expected_version, pos_state,
     max_retries=15, check_interval_sec=1.0, timeout_sec=10.0, allow_market_fallback=True, maker_only=False,
-    marketable_retries=0, skip_maker=False,
+    marketable_retries=0,
 ):
-    """非紧急减仓：三级降级挂单循环。
+    """非紧急减仓：三级降级挂单循环（结构破位专用）。
 
     第一级 maker：限价挂在本方价（maker_only 时 GTX Post-Only，会被立即成交则拒单重试）；
     第二级吃单价（marketable_retries>0 时）：限价挂到对手价立即吃单成交（taker）；
     第三级市价：allow_market_fallback 时兜底全平剩余。
     maker_only 只控制第一级是否用 GTX，不再禁止后两级（B：破位减仓不再永久禁市价）。
-    max_retries<=0 表示持续循环；skip_maker 直接跳过第一级（用于止盈：见 _apply_reduce）。
+
+    止盈不走这条路径：止盈单提前挂在交易所（post-only），引擎不参与撮合，
+    见 tp_orders.py。这里是风险退出，允许吃单兜底，否则破位后可能卖不掉。
     """
     raw_ps = _raw_position_side(position)
     before = _position_size(position)
@@ -217,7 +219,7 @@ async def _limit_reduce_with_maker_retry(
     remaining_qty = qty
 
     attempt = 0
-    while not skip_maker and (max_retries <= 0 or attempt < max_retries):
+    while max_retries <= 0 or attempt < max_retries:
         attempt += 1
         ticker = await _fetch_ticker(exchange, symbol, conf, priority="HIGH", force=True)
         if order_side == "sell":

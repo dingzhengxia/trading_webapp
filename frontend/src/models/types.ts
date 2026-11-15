@@ -326,6 +326,10 @@ export interface ProtectionPositionRow {
   tp1_done: boolean
   tp2_done: boolean
   tp3_done: boolean
+  /** v2：当前挂在交易所上的止盈档位（1/2/3，无挂单为 null） */
+  tp_order_level?: number | null
+  /** v2：止盈挂单的挂出价（post-only，到价由交易所撮合） */
+  tp_order_price?: number | null
   risk_cycle_started_at: number | null
   position_version: number | null
   // v2 专属（v1 引擎不返回）
@@ -408,10 +412,16 @@ export interface ProtectionConfig {
   emergency_cooldown_sec?: number
   /** 开仓前黑天鹅预检：命中当前崩盘状态则不下单 */
   emergency_block_new_entries?: boolean
-  /** 止盈到价即走（吃单），不挂 maker 死等 */
-  tp_taker_first?: boolean
-  /** 止盈减仓量按「当前剩余」而不是「初始仓位」的比例 */
-  tp_reduce_by_remaining?: boolean
+  /** v2 止盈阶梯：三档的 R 倍数（默认 1.5 / 2.5 / 4） */
+  tp_r_multiples?: number[]
+  /** v2 止盈阶梯：三档各减初始仓位的比例（默认 0.20 / 0.25 / 0.30） */
+  tp_ratios?: number[]
+  /** 三档之后不挂止盈单、留给追踪止损的仓位比例（默认 0.25） */
+  tp_keep_ratio?: number
+  /** 单档最多卖「当前剩余」的比例，防止一刀清零（默认 0.5） */
+  tp_slice_cap?: number
+  /** 止盈挂单核对间隔（秒） */
+  tp_verify_interval_sec?: number
   exchange_hard_stop_enabled: boolean
   // 双轨治理 + 连续移动止损（v1/v2 引擎共用）
   take_over_external_stops?: boolean

@@ -198,7 +198,99 @@
         </v-expansion-panel-text>
       </v-expansion-panel>
 
-      <!-- 组 2：执行开关（浮盈保护 · 紧急止损 · 灾难止损 · 双轨治理 · 连续追踪） -->
+      <!-- 组 2：止盈阶梯（R 倍数 + 减仓比例 + 保留仓位） -->
+      <v-expansion-panel>
+        <v-expansion-panel-title>
+          <div class="d-flex flex-wrap align-baseline ga-2">
+            <span class="text-subtitle-2 font-weight-medium">止盈阶梯</span>
+            <HelpTip :text="HELP.protection.switchTpPassive" />
+            <span class="text-caption text-medium-emphasis">{{ tpSummary }}</span>
+          </div>
+        </v-expansion-panel-title>
+        <v-expansion-panel-text>
+          <v-row dense>
+            <v-col v-for="(_, i) in 3" :key="`tp-r-${i}`" cols="6" sm="3" md="3">
+              <v-text-field
+                v-model.number="form.tp_r_multiples[i]"
+                type="number"
+                step="0.1"
+                min="0.1"
+                max="50"
+                :label="`TP${i + 1} 触发（R）`"
+                density="compact"
+                variant="outlined"
+                hide-details
+              >
+                <template #append-inner>
+                  <HelpTip :text="HELP.protection.tpRMultiple" />
+                </template>
+              </v-text-field>
+            </v-col>
+          </v-row>
+          <v-row dense class="mt-1">
+            <v-col v-for="(_, i) in 3" :key="`tp-ratio-${i}`" cols="6" sm="3" md="3">
+              <v-text-field
+                v-model.number="form.tp_ratios[i]"
+                type="number"
+                step="0.05"
+                min="0"
+                max="1"
+                :label="`TP${i + 1} 减仓比例`"
+                density="compact"
+                variant="outlined"
+                hide-details
+              >
+                <template #append-inner>
+                  <HelpTip :text="HELP.protection.tpRatio" />
+                </template>
+              </v-text-field>
+            </v-col>
+            <v-col cols="6" sm="3" md="3">
+              <v-text-field
+                v-model.number="form.tp_keep_ratio"
+                type="number"
+                step="0.05"
+                min="0"
+                max="0.9"
+                label="保留仓位（追踪）"
+                density="compact"
+                variant="outlined"
+                hide-details
+              >
+                <template #append-inner>
+                  <HelpTip :text="HELP.protection.tpKeepRatio" />
+                </template>
+              </v-text-field>
+            </v-col>
+            <v-col cols="6" sm="3" md="3">
+              <v-text-field
+                v-model.number="form.tp_slice_cap"
+                type="number"
+                step="0.05"
+                min="0.05"
+                max="1"
+                label="单档最多卖剩余"
+                density="compact"
+                variant="outlined"
+                hide-details
+              >
+                <template #append-inner>
+                  <HelpTip :text="HELP.protection.tpSliceCap" />
+                </template>
+              </v-text-field>
+            </v-col>
+          </v-row>
+          <v-alert type="success" variant="tonal" density="compact" class="mt-3 text-caption">
+            <strong>止盈全程挂单成交，不吃单。</strong>
+            止盈单在建仓后立即挂到交易所（post-only 限价、reduceOnly）：价格走到目标价由交易所撮合，
+            成交价就是目标价、费率是 maker；价格冲过目标价时，挂单价自动跟到盘口被动一侧继续排队，
+            不会主动吃单、不打市价。一次只挂当前一档，插针只卖这一档。
+            全系统唯一允许吃单的是黑天鹅 / 灾难线的紧急全平。
+          </v-alert>
+        </v-expansion-panel-text>
+      </v-expansion-panel>
+
+      <!-- 组 3：执行开关（浮盈保护 · 紧急止损 · 灾难止损 · 双轨治理 · 连续追踪） -->
       <v-expansion-panel>
         <v-expansion-panel-title>
           <div class="d-flex flex-wrap align-baseline ga-2">
@@ -341,16 +433,6 @@ const booleanSwitches = [
     label: '黑天鹅期间禁止开仓',
     help: HELP.protection.switchBlockEntries,
   },
-  {
-    key: 'tp_taker_first',
-    label: '止盈立即吃单',
-    help: HELP.protection.switchTpTakerFirst,
-  },
-  {
-    key: 'tp_reduce_by_remaining',
-    label: '止盈按剩余仓位减',
-    help: HELP.protection.switchTpByRemaining,
-  },
 ] as const
 
 type BooleanSwitchKey = (typeof booleanSwitches)[number]['key']
@@ -377,4 +459,9 @@ const switchSummary = computed(
     `连续移动止损 ${form.trailing_stop_mode === 'continuous' ? '开' : '关'} / ` +
     `黑天鹅禁开仓 ${onOff(form.emergency_block_new_entries)}`,
 )
+const pct = (value: number): string => `${Math.round(value * 100)}%`
+const tpSummary = computed(() => {
+  const r = form.tp_r_multiples.map((x) => `${x}R`).join(' / ')
+  return `${r} 减 ${form.tp_ratios.map(pct).join(' / ')}，保留 ${pct(form.tp_keep_ratio)} 追踪`
+})
 </script>

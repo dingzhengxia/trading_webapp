@@ -81,10 +81,14 @@ const form = reactive({
   // 连续移动止损：'step'=阶梯跳（现状）| 'continuous'=浮盈达标后按 ATR 平滑追踪
   trailing_stop_mode: 'step' as 'step' | 'continuous',
   trailing_trigger_r: 1,
-  // 止盈执行口径：到价即走（吃单）+ 按当前剩余仓位减，避免「maker 死等被拖到回落后成交」
-  // 和「结构破位已减大半再按初始比例卖 → 一刀清零」
-  tp_taker_first: true,
-  tp_reduce_by_remaining: true,
+  // v2 止盈阶梯（与后端 V2_DEFAULTS 必须一致）：1.5R/2.5R/4R 各减 20%/25%/30%，
+  // 剩 25% 不挂止盈单，交给止损上移/ATR 追踪。
+  // 执行方式固定：单子提前挂在交易所（post-only），到价由交易所撮合，引擎不吃单。
+  tp_r_multiples: [1.5, 2.5, 4] as number[],
+  tp_ratios: [0.2, 0.25, 0.3] as number[],
+  tp_keep_ratio: 0.25,
+  tp_slice_cap: 0.5,
+  tp_verify_interval_sec: 8,
 })
 
 type FormState = typeof form
@@ -158,6 +162,12 @@ function applyConfig(config: Partial<ProtectionConfig>): void {
   if (Array.isArray(config.tier_confirm_sec) && config.tier_confirm_sec.length === 4) {
     form.tier_confirm_sec = config.tier_confirm_sec.map((x) => Number(x))
   }
+  if (Array.isArray(config.tp_r_multiples) && config.tp_r_multiples.length === 3) {
+    form.tp_r_multiples = config.tp_r_multiples.map((x) => Number(x))
+  }
+  if (Array.isArray(config.tp_ratios) && config.tp_ratios.length === 3) {
+    form.tp_ratios = config.tp_ratios.map((x) => Number(x))
+  }
   for (const key of [
     'v2_poll_interval_sec',
     'risk_min_pct',
@@ -166,6 +176,9 @@ function applyConfig(config: Partial<ProtectionConfig>): void {
     'breakeven_atr_ratio',
     'trailing_atr_mult',
     'emergency_cooldown_sec',
+    'tp_keep_ratio',
+    'tp_slice_cap',
+    'tp_verify_interval_sec',
   ] as const) {
     const value = Number(config[key])
     if (Number.isFinite(value)) form[key] = value
@@ -189,8 +202,6 @@ function applyConfig(config: Partial<ProtectionConfig>): void {
     'exchange_hard_stop_enabled',
     'take_over_external_stops',
     'emergency_block_new_entries',
-    'tp_taker_first',
-    'tp_reduce_by_remaining',
   ] as const) {
     if (typeof config[key] === 'boolean') form[key] = config[key] as boolean
   }

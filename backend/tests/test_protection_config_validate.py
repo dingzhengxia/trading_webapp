@@ -34,16 +34,34 @@ def test_emergency_timeframe_defaults_to_1h():
     assert V2_DEFAULTS['emergency_timeframe'] == '1h'
 
 
-# ---------------------------------------------- 止盈执行口径
-@pytest.mark.parametrize('key', ['tp_taker_first', 'tp_reduce_by_remaining'])
-def test_tp_execution_flags_accept_bool(key):
-    _validate({key: True})
-    _validate({key: False})
+# ---------------------------------------------- 止盈阶梯参数
+def test_tp_ladder_defaults_are_valid():
+    """默认阶梯必须能通过接口校验（1.5/2.5/4R，20/25/30%，保留 25%）。"""
+    _validate({
+        'tp_r_multiples': list(V2_DEFAULTS['tp_r_multiples']),
+        'tp_ratios': list(V2_DEFAULTS['tp_ratios']),
+        'tp_keep_ratio': V2_DEFAULTS['tp_keep_ratio'],
+        'tp_slice_cap': V2_DEFAULTS['tp_slice_cap'],
+        'tp_verify_interval_sec': V2_DEFAULTS['tp_verify_interval_sec'],
+    })
 
 
-@pytest.mark.parametrize('key', ['tp_taker_first', 'tp_reduce_by_remaining'])
-def test_tp_execution_flags_reject_non_bool(key):
+@pytest.mark.parametrize('value', [[4.0, 2.5, 1.5], [1.5, 1.5, 4.0], [0, 2.5, 4.0]])
+def test_tp_r_multiples_must_increase(value):
     with pytest.raises(HTTPException) as exc:
-        _validate({key: 'yes'})
+        _validate({'tp_r_multiples': value})
     assert exc.value.status_code == 400
-    assert key in exc.value.detail
+
+
+@pytest.mark.parametrize('value', [0, 1.5, -0.2])
+def test_tp_slice_cap_range(value):
+    """单档上限必须落在 (0, 1]：0 会让挂单量恒为 0，>1 等于不设上限。"""
+    with pytest.raises(HTTPException) as exc:
+        _validate({'tp_slice_cap': value})
+    assert exc.value.status_code == 400
+
+
+def test_tp_ratios_length_checked():
+    with pytest.raises(HTTPException) as exc:
+        _validate({'tp_ratios': [0.5, 0.5]})
+    assert exc.value.status_code == 400

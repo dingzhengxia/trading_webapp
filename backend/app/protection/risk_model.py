@@ -55,19 +55,20 @@ V2_DEFAULTS: Dict[str, Any] = {
     'risk_max_pct': 0.08,
     # 交易所 STOP 只做兜底：放在灾难线再往外 1.5 ATR，保证内部四档先动作
     'disaster_atr_buffer': 1.5,
-    'tp_r_multiples': [1.0, 2.0, 3.0],
-    'tp_ratios': [0.25, 0.30, 0.30],
-    # TP 单轮单档（D）：同一轮巡检最多触发一个 TP 档。
-    # 标定：首次触 TP 的 1m 里 ~50% 是插针（收盘回线下），且插针后 4h 内 93~96% 会再次触及——
-    # 单轮单档让插针只卖掉第一档、保留阶梯，真突破也只多等 3s/档。
-    'tp_one_level_per_round': True,
-    # 止盈执行口径（2026-11-15 BTC 反馈「才回调一点就减仓」）：
-    # · tp_taker_first：止盈直接吃单，不像结构减仓那样先挂 maker 死等 30s——
-    #   价格已越过目标位，maker 挂在卖一价，行情一回落就不成交，最后卖在回撤之后；
-    # · tp_reduce_by_remaining：止盈量按「当前剩余」的比例算。tp_ratios 是按初始仓位
-    #   设计的，结构破位先减掉大半后，再按初始比例卖会一刀清零（标称 25% 实际 -79%）。
-    'tp_taker_first': True,
-    'tp_reduce_by_remaining': True,
+    # 止盈阶梯：1.5R / 2.5R / 4R，减 20% / 25% / 30%，剩 25% 交给追踪止损。
+    # 旧默认 1R 起跳：1R 恰好是「保本止损刚推到开仓价」的位置，价格到第一波冲高处
+    # 就卖掉 1/4，等于把最大的一段行情让掉（2026-11-15 反馈「止盈太粗糙」）。
+    'tp_r_multiples': [1.5, 2.5, 4.0],
+    'tp_ratios': [0.20, 0.25, 0.30],
+    # 止盈执行口径（2026-11-15 第二次改版）：单子提前挂在交易所，引擎不撮合、不吃单。
+    # 旧实现是「轮询发现价格越过 TP → 下一张单」，两个结构性缺陷：
+    #   ① 3s 轮询 + 下单往返，价格已回撤才成交（用户看到「回调才减仓」）；
+    #   ② 走可成交价（bid/ask 或市价），每笔都在付 taker 手续费 + 滑点。
+    # 现在把 reduceOnly 限价单提前挂到 TP 价（GTX post-only），到价由交易所撮合成交，
+    # 成交价就是 TP 价、费率是 maker；引擎只负责「挂 / 核对 / 换档」。
+    # 全系统唯一允许吃单的路径只剩黑天鹅/灾难线的紧急全平。
+    'tp_slice_cap': 0.5,             # 单档最多卖「当前剩余」的比例（防一刀清零）
+    'tp_verify_interval_sec': 8.0,   # 挂单核对间隔（秒）；价格贴近 TP 时每轮都核对
     # 执行层（B/C）：
     'tier_marketable_retries': 3,     # maker 失败后吃单价重试次数
     'reduce_market_fallback': True,   # 吃单价也失败后允许市价兜底（三级降级最后一级）
@@ -91,7 +92,9 @@ V2_DEFAULTS: Dict[str, Any] = {
     'action_retry_cooldown_sec': 90.0,
     'tier_maker_retries': 3,
     'tier_maker_only_until': 2,
-    'tp_keep_ratio': 0.15,
+    # 三档合计 75%，剩 25% 不挂止盈单：交给止损上移/ATR 追踪去博趋势尾段。
+    # 旧值 15% + 1R/2R/3R 的组合，等于「前 85% 都卖在 3R 以内」，趋势单吃不满。
+    'tp_keep_ratio': 0.25,
     'emergency_enabled': True,
     # 判定周期默认 1h（15m 的 3×ATR 只有 ~1%，正常阴线就构成「黑天鹅」，误杀频繁）。
     'emergency_timeframe': '1h',
@@ -401,6 +404,57 @@ def new_state(cycle_id: str, side: str, entry: float, base_contracts: float,
 
 
 # ---------------------------------------------------------------------------
+# 止盈挂单（纯计算）：引擎只决定「挂哪一档、挂多少、挂什么价」，撮合交给交易所
+# ---------------------------------------------------------------------------
+def next_tp_level(state: Dict[str, Any], plan: Dict[str, Any]) -> Optional[int]:
+    """下一个未完成止盈档的下标；三档都完成返回 None。
+
+    一次只挂当前一档，不像网格那样三档全挂：插针扫过 TP1 时只卖掉这一档，
+    后面的档位要等价格重新走到再挂，否则一根针能把 75% 仓位一次打光。
+    """
+    prices = [_f(x) for x in (plan.get('tp_prices') or [])]
+    done = set(_ints(state.get('tp_done')))
+    for i, price in enumerate(prices):
+        if price > 0 and i not in done:
+            return i
+    return None
+
+
+def tp_order_qty(state: Dict[str, Any], plan: Dict[str, Any], contracts: float,
+                 level: int, conf: Dict[str, Any]) -> float:
+    """本档挂单数量 = min(初始仓位×档位比例, 当前剩余×单档上限)。
+
+    乘数用「本风险周期初始仓位」：tp_ratios 就是按初始仓位设计的。
+    再加一道「当前剩余 × tp_slice_cap」上限兜住仓位已被结构减仓砍小的情况——
+    2026-11-15 BTC 的「标称减 25%、实际 -79%」就是这个分母混用造成的。
+    """
+    base = _f(state.get('base_contracts'), contracts) or contracts
+    ratios = _floats(plan.get('tp_ratios'), V2_DEFAULTS['tp_ratios'])
+    if level < 0 or level >= len(ratios) or contracts <= 0 or base <= 0:
+        return 0.0
+    cap = min(1.0, max(0.0, _f(conf.get('tp_slice_cap'), 0.5)))
+    return max(0.0, min(base * ratios[level], contracts * cap, contracts))
+
+
+def tp_limit_price(side: str, tp_price: float, best_bid: float, best_ask: float) -> float:
+    """止盈挂单价：永远落在被动侧，配合 GTX(post-only) 双保险，成交必然是 maker。
+
+    · 价格还没到 TP：多单挂 TP 价（在卖一之上）、空单挂 TP 价（在买一之下），等价格自己走过来；
+    · 价格已经越过 TP：多单改挂卖一、空单改挂买一，贴着盘口等对手单来吃，
+      不往回压价（压价就变成主动成交 = taker）。
+    没有盘口数据时退回 TP 价，交给 GTX 兜底（会被拒单，下一轮重试）。
+    """
+    tp = _f(tp_price)
+    if tp <= 0:
+        return 0.0
+    bid = _f(best_bid)
+    ask = _f(best_ask)
+    if side == 'long':
+        return max(tp, ask) if ask > 0 else tp
+    return min(tp, bid) if bid > 0 else tp
+
+
+# ---------------------------------------------------------------------------
 # 决策
 # ---------------------------------------------------------------------------
 def _remaining_ratio(state: Dict[str, Any], snap: Snapshot) -> float:
@@ -435,12 +489,9 @@ def decide(state: Dict[str, Any], snap: Snapshot, conf: Dict[str, Any]) -> Dict[
     patch['trough'] = min(_f(state.get('trough'), entry), price)
 
     tiers_done = set(_ints(state.get('tiers_done')))
-    tp_done = set(_ints(state.get('tp_done')))
     pending = {str(k): _f(v) for k, v in (state.get('pending') or {}).items()}
     ratios = _floats(plan.get('ratios'), V2_DEFAULTS['tier_ratios'])
     confirm_secs = _floats(conf.get('tier_confirm_sec'), V2_DEFAULTS['tier_confirm_sec'])
-    tp_prices = [_f(x) for x in (plan.get('tp_prices') or [])]
-    tp_ratios = _floats(plan.get('tp_ratios'), V2_DEFAULTS['tp_ratios'])
 
     # ---------- 1. 灾难线：不确认、不等收盘，直接全平 ----------
     disaster = _f(plan.get('disaster_stop'))
@@ -497,25 +548,11 @@ def decide(state: Dict[str, Any], snap: Snapshot, conf: Dict[str, Any]) -> Dict[
                 'reason': f'结构破位 T{label}',
             })
 
-    # ---------- 3. 止盈（与减仓互斥：同一轮只出一个减仓动作） ----------
-    elif tp_prices and len(tp_done) < len(tp_prices):
-        hits = [i for i, p in enumerate(tp_prices)
-                if i not in tp_done and p > 0 and (
-                    price >= p if side == 'long' else price <= p)]
-        # D 单轮单档：插针扫过多档时只卖第一档，保留阶梯等回触（标定 93~96% 4h 内回触）
-        if hits and bool(conf.get('tp_one_level_per_round', True)):
-            hits = hits[:1]
-        if hits:
-            ratio = sum(tp_ratios[i] for i in hits if i < len(tp_ratios))
-            ratio = min(ratio, max(0.0, remaining - MIN_REMAINING))
-            label = '/'.join(str(i + 1) for i in hits)
-            if ratio > 0:
-                actions.append({
-                    'type': 'reduce', 'ratio': round(ratio, 6),
-                    'tps': hits, 'tag': f'tp:{label}',
-                    'level': 'success',
-                    'reason': f'分批止盈 TP{label}',
-                })
+    # ---------- 3. 止盈不在这里决策 ----------
+    # 止盈单是提前挂在交易所的 reduceOnly 限价单（GTX post-only），价格到档由交易所撮合，
+    # 成交价就是 TP 价、费率是 maker。引擎不再「发现越过 TP 才下一张单」——那条路径既有
+    # 3s 轮询 + 下单往返的延迟（回落之后才成交），又必然是 taker 成交。
+    # 挂单的挂/核对/换档见 tp_orders.py 与 runner._ensure_tp_orders。
 
     # ---------- 4. 止损上移（独立计算，只朝盈利方向走） ----------
     stop_action = _stop_action(state, snap, plan, conf, tiers_done)

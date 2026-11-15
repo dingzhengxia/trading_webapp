@@ -74,6 +74,8 @@ NUMERIC_RANGES: Dict[str, tuple] = {
     'replan_atr_down_ratio': (0.01, 1.0, False),
     'replan_cooldown_sec': (0, 86400, False),
     'tp_keep_ratio': (0, 0.9, False),
+    'tp_slice_cap': (0.05, 1, False),
+    'tp_verify_interval_sec': (1, 120, False),
     'emergency_check_interval_sec': (5, 300, False),
     'flat_confirm_sec': (0, 600, False),
 }
@@ -125,8 +127,7 @@ def _validate(conf: Dict[str, Any]) -> None:
         raise HTTPException(status_code=400, detail="take_over_external_stops 必须是布尔值。")
     if 'replan_enabled' in conf and not isinstance(conf['replan_enabled'], bool):
         raise HTTPException(status_code=400, detail="replan_enabled 必须是布尔值。")
-    for _bool_key in ('tp_one_level_per_round', 'reduce_market_fallback',
-                      'tp_taker_first', 'tp_reduce_by_remaining'):
+    for _bool_key in ('reduce_market_fallback',):
         if _bool_key in conf and not isinstance(conf[_bool_key], bool):
             raise HTTPException(status_code=400, detail=f"{_bool_key} 必须是布尔值。")
 
