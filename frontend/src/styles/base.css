@@ -136,13 +136,29 @@
 }
 
 /* 横向溢出兜底（P0）：宽表必须在自己容器里横滚，绝不能把页面撑宽。
-   页面一旦横向溢出，手机浏览器会把「布局视口」拉到内容宽度，
-   position:fixed 的底部 Tab 栏 / 操作条随之铺满整条宽度 ——
-   表现就是「底部菜单被撑开、只看得到两个」。
-   overflow-x: clip 不创建滚动容器（不像 hidden 会连带影响 position: sticky），
-   老浏览器不支持时只是退回默认行为，不会更糟。 */
-html {
-  overflow-x: clip;
+   页面一旦横向溢出，手机浏览器会把「布局视口」拉到内容宽度（shrink-to-fit），
+   整页被缩小、内容只剩左半屏、字号变小、表格列被挤成一字一行 ——
+   用户看到的就是「页面被撑得很大/很乱」。position:fixed 的底栏也会跟着错位。
+   注意：overflow-x: clip 只有较新的 Chrome 内核支持，微信 X5 等老内核会退回 visible，
+   那正是最糟的情况。所以默认用到处都支持的 hidden，只在支持 clip 的内核上换成 clip
+   （clip 不创建滚动容器，不会影响内部 position: sticky 的吸顶/吸左）。 */
+html,
+body {
+  overflow-x: hidden;
+  max-width: 100%;
+}
+@supports (overflow-x: clip) {
+  html,
+  body {
+    overflow-x: clip;
+  }
+}
+
+/* 右侧抽屉（执行日志 420px / 配置 520px）比手机视口宽：
+   关闭时它停在视口右侧之外，宽度超过视口就会把文档撑宽。
+   锁到视口宽度，配合上面的裁剪兜底，杜绝「关着的抽屉撑坏整页」。 */
+.v-navigation-drawer {
+  max-width: 100vw;
 }
 
 /* 宽表的统一横滚容器：配合 min-width: 0，先在内部消化溢出 */

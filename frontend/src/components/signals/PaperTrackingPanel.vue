@@ -6,7 +6,7 @@
     <template v-if="liveExit.positions.length > 0">
       <SectionHeader icon="mdi-shield-half-full" title="实盘已登记" :description="`${liveExit.positions.length} 个`" />
       <div class="table-scroll">
-        <v-table density="compact">
+        <v-table density="compact" class="paper-table">
           <thead>
             <tr>
               <th class="text-left">币种</th>
@@ -39,7 +39,7 @@
       <v-col cols="12" md="7">
         <SectionHeader icon="mdi-flask-outline" title="纸面持仓" :description="`${tracking.open_positions.length} 个`" />
         <div v-if="tracking.open_positions.length > 0" class="table-scroll">
-          <v-table density="compact">
+          <v-table density="compact" class="paper-table">
             <thead>
               <tr>
                 <th class="text-left">币种</th>
@@ -111,9 +111,12 @@
           还没有平仓记录，样本攒够后这里会显示胜率与平均收益。
         </div>
 
-        <div v-if="tracking.trades.length > 0" class="text-caption text-medium-emphasis mt-2">
-          最近：
-          <span v-for="trade in tracking.trades.slice(0, 5)" :key="trade.id" class="mr-2 text-no-wrap">
+        <div
+          v-if="tracking.trades.length > 0"
+          class="recent-trades text-caption text-medium-emphasis mt-2"
+        >
+          <span class="mr-1">最近：</span>
+          <span v-for="trade in tracking.trades.slice(0, 5)" :key="trade.id" class="text-no-wrap">
             {{ trade.symbol }}{{ directionTone(trade.direction).label }}
             <span :class="pnlClass(trade.pnl_pct)">{{ formatSignedPercent(trade.pnl_pct) }}</span>
             <span class="text-medium-emphasis">({{ exitReasonLabel(trade.reason) }})</span>
@@ -129,7 +132,7 @@
       spaced
     />
     <div v-if="tracking.forward_stats.length > 0" class="table-scroll">
-      <v-table density="compact">
+      <v-table density="compact" class="paper-table">
         <thead>
           <tr>
             <th class="text-left">周期</th>
@@ -194,3 +197,25 @@ const exitReasonLabel = (reason: string): string => {
   return labels[reason] ?? reason
 }
 </script>
+
+<style scoped>
+/* 表格一律「不换行 + 容器横滚」：
+   窄屏（尤其手机上「纸面持仓」7 列）以前是把列压到只剩一两个字的宽度，
+   于是出现「纸面跟 / 踪明细」「均线 / 突破」这种一字一行的竖排，
+   看起来像整页被撑坏；现在改成表格保持自然宽度，由 .table-scroll 横滚。
+   注意：这里只影响纸面跟踪的三张表，信号列表的表格另有自己的样式。 */
+.paper-table :deep(th),
+.paper-table :deep(td) {
+  white-space: nowrap;
+}
+
+/* 「最近」一行：以前是一串 nowrap 的 inline 元素，窄容器里会顶出卡片右边界，
+   把页面撑宽（手机端表现为整页缩放/错位）。改成 flex + 换行，宁可两行也不溢出。 */
+.recent-trades {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 8px;
+  min-width: 0;
+}
+</style>

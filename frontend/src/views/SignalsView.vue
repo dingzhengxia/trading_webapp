@@ -108,9 +108,11 @@
     <!-- 纸面跟踪明细：默认收起，只读数据（参数在抽屉的「出场规则」Tab） -->
     <v-expansion-panels class="mt-3">
       <v-expansion-panel>
+        <!-- 标题行：窄屏下标题不换行，摘要用省略号截断。
+             以前两段都是自由文本，手机上被挤成「纸面跟/踪明细」的竖排，看着像整页被撑坏。 -->
         <v-expansion-panel-title>
-          <span class="text-subtitle-1 font-weight-medium">纸面跟踪明细</span>
-          <span class="text-caption text-medium-emphasis ml-3">
+          <span class="text-subtitle-1 font-weight-medium text-no-wrap">纸面跟踪明细</span>
+          <span class="text-caption text-medium-emphasis ml-3 text-truncate panel-title-hint">
             {{ paperEnabled ? '启用中' : '未启用' }} · 纸面持仓 {{ tracking.open_positions.length }} ·
             已平仓样本 {{ tracking.paper_stats.total }}
           </span>
@@ -315,6 +317,11 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
+/* 展开面板标题里的摘要：只能在剩余空间里省略号截断，不能反推把标题挤成竖排 */
+.panel-title-hint {
+  min-width: 0;
+  flex: 1 1 auto;
+}
 .status-strip {
   font-size: 12px;
   color: rgba(var(--v-theme-on-surface), 0.72);
