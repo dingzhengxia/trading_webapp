@@ -84,11 +84,10 @@ def test_depth_decay_disabled_by_shallow_depth():
     assert r2['patch']['pending'] == {}
 
 
-def test_take_profit_is_not_decided_here():
-    """价格越过全部 TP：决策层不出任何减仓动作（止盈已交给挂单层）。"""
+def test_take_profit_waits_for_pullback():
+    """价格越过全部 TP 的那一轮只登记突破，不出减仓动作（止盈见 test_tp_pullback）。"""
     conf, plan, state = _mk()
     tp3 = float(plan['tp_prices'][2])
     result = risk_model.decide(state, _snap(state, tp3 + 0.5, 1000.0), conf)
     assert _reduce_actions(result) == []
-    # 档位仍在，挂单层据此判断「下一档该挂哪一档」
-    assert risk_model.next_tp_level(state, plan) == 0
+    assert result['patch']['tp_armed'] == [0, 1, 2]

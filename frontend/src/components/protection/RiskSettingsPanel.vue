@@ -69,13 +69,22 @@
             <v-chip v-if="row.t3_done" size="x-small" variant="tonal" color="warning">T3</v-chip>
             <v-chip v-if="row.t4_done" size="x-small" variant="tonal" color="error">T4</v-chip>
             <v-chip
-              v-if="row.tp_order_level"
+              v-if="row.tp_armed_level"
               size="x-small"
               variant="tonal"
               color="success"
-              :title="`止盈单已挂在交易所 ${formatNumber(row.tp_order_price)}（post-only，到价成交）`"
+              title="已突破止盈价，等价格回到该档就分批止盈（引擎每 3 秒判断）"
             >
-              TP{{ row.tp_order_level }} 挂单中
+              TP{{ row.tp_armed_level }} 待回落
+            </v-chip>
+            <v-chip
+              v-else-if="row.tp_wait_level"
+              size="x-small"
+              variant="outlined"
+              color="info"
+              title="价格还没真正越过这一档止盈价；越过之后回落才会卖"
+            >
+              TP{{ row.tp_wait_level }} 待突破
             </v-chip>
             <span v-if="!hasTriggered(row)" class="text-caption text-medium-emphasis">等待触发</span>
           </div>
@@ -156,13 +165,13 @@
                   <v-chip v-if="row.t3_done" size="x-small" variant="tonal" color="warning">T3</v-chip>
                   <v-chip v-if="row.t4_done" size="x-small" variant="tonal" color="error">T4</v-chip>
                   <v-chip
-                    v-if="row.tp_order_level"
+                    v-if="row.tp_armed_level"
                     size="x-small"
                     variant="tonal"
                     color="success"
-                    :title="`止盈单已挂在交易所 ${formatNumber(row.tp_order_price)}（post-only，到价成交）`"
+                    title="已突破止盈价，等价格回到该档就分批止盈（引擎每 3 秒判断）"
                   >
-                    TP{{ row.tp_order_level }} 挂单中
+                    TP{{ row.tp_armed_level }} 待回落
                   </v-chip>
                   <span
                     v-if="!hasTriggered(row)"

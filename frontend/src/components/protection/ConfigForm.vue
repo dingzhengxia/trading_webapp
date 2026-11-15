@@ -279,13 +279,29 @@
                 </template>
               </v-text-field>
             </v-col>
+            <v-col cols="6" sm="3" md="3">
+              <v-text-field
+                v-model.number="form.tp_breakout_confirm_pct"
+                type="number"
+                step="0.001"
+                min="0"
+                max="0.02"
+                label="突破确认（0.001=0.1%）"
+                density="compact"
+                variant="outlined"
+                hide-details
+              >
+                <template #append-inner>
+                  <HelpTip :text="HELP.protection.tpBreakoutConfirm" />
+                </template>
+              </v-text-field>
+            </v-col>
           </v-row>
-          <v-alert type="success" variant="tonal" density="compact" class="mt-3 text-caption">
-            <strong>止盈全程挂单成交，不吃单。</strong>
-            止盈单在建仓后立即挂到交易所（post-only 限价、reduceOnly）：价格走到目标价由交易所撮合，
-            成交价就是目标价、费率是 maker；价格冲过目标价时，挂单价自动跟到盘口被动一侧继续排队，
-            不会主动吃单、不打市价。一次只挂当前一档，插针只卖这一档。
-            全系统唯一允许吃单的是黑天鹅 / 灾难线的紧急全平。
+          <v-alert type="info" variant="tonal" density="compact" class="mt-3 text-caption">
+            <strong>止盈由引擎判断：先突破，再回落才卖。</strong>
+            引擎每 3 秒核对一次价格：只有真正越过目标价（含「突破确认」缓冲）才算突破，
+            之后价格回到目标价才分批卖出——插针碰到目标价不会成交，也不会把单子挂在交易所等撮合。
+            一次只卖当前一档，后面的档位要自己重新突破。执行复用保护性减仓通道（reduceOnly）。
           </v-alert>
         </v-expansion-panel-text>
       </v-expansion-panel>

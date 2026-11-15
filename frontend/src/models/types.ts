@@ -327,9 +327,11 @@ export interface ProtectionPositionRow {
   tp2_done: boolean
   tp3_done: boolean
   /** v2：当前挂在交易所上的止盈档位（1/2/3，无挂单为 null） */
-  tp_order_level?: number | null
+  /** 已突破、等回落到该档就止盈（引擎判定，交易所无挂单） */
+  tp_armed_level?: number | null
+  /** 还没突破的下一档：价格越过它之后才开始等回落 */
+  tp_wait_level?: number | null
   /** v2：止盈挂单的挂出价（post-only，到价由交易所撮合） */
-  tp_order_price?: number | null
   risk_cycle_started_at: number | null
   position_version: number | null
   // v2 专属（v1 引擎不返回）
@@ -420,6 +422,8 @@ export interface ProtectionConfig {
   tp_keep_ratio?: number
   /** 单档最多卖「当前剩余」的比例，防止一刀清零（默认 0.5） */
   tp_slice_cap?: number
+  /** 「算突破」的缓冲：价格要越过 TP 这么多，才进入等回落状态 */
+  tp_breakout_confirm_pct?: number
   /** 止盈挂单核对间隔（秒） */
   tp_verify_interval_sec?: number
   exchange_hard_stop_enabled: boolean

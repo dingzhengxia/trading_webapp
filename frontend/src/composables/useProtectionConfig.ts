@@ -88,6 +88,8 @@ const form = reactive({
   tp_ratios: [0.2, 0.25, 0.3] as number[],
   tp_keep_ratio: 0.25,
   tp_slice_cap: 0.5,
+  // 止盈「突破确认」缓冲：价格必须越过 TP 这么多才算突破，之后回落才卖
+  tp_breakout_confirm_pct: 0.001,
   tp_verify_interval_sec: 8,
 })
 
@@ -178,6 +180,7 @@ function applyConfig(config: Partial<ProtectionConfig>): void {
     'emergency_cooldown_sec',
     'tp_keep_ratio',
     'tp_slice_cap',
+    'tp_breakout_confirm_pct',
     'tp_verify_interval_sec',
   ] as const) {
     const value = Number(config[key])

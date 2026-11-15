@@ -42,7 +42,7 @@ def test_tp_ladder_defaults_are_valid():
         'tp_ratios': list(V2_DEFAULTS['tp_ratios']),
         'tp_keep_ratio': V2_DEFAULTS['tp_keep_ratio'],
         'tp_slice_cap': V2_DEFAULTS['tp_slice_cap'],
-        'tp_verify_interval_sec': V2_DEFAULTS['tp_verify_interval_sec'],
+        'tp_breakout_confirm_pct': V2_DEFAULTS['tp_breakout_confirm_pct'],
     })
 
 

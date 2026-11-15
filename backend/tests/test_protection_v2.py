@@ -180,15 +180,12 @@ def test_take_profit_still_raises_stop_after_tp1():
     assert stops and stops[0]["price"] > 100.0
 
 
-def test_next_tp_level_skips_done():
-    """挂单层只挂「下一个未完成档」，已完成档不再重复挂。"""
+def test_tp_order_qty_follows_ladder_ratios():
+    """止盈数量按档位比例；已完成档不会再产生动作（见 test_tp_pullback）。"""
     state = _state()
     plan = state["plan"]
-    assert risk_model.next_tp_level(state, plan) == 0
-    state["tp_done"] = [0, 1]
-    assert risk_model.next_tp_level(state, plan) == 2
-    state["tp_done"] = [0, 1, 2]
-    assert risk_model.next_tp_level(state, plan) is None
+    assert risk_model.tp_order_qty(state, plan, 10.0, 0, CONF) == pytest.approx(2.0)
+    assert risk_model.tp_order_qty(state, plan, 10.0, 2, CONF) == pytest.approx(3.0)
 
 
 def test_breakeven_stop_after_half_r():

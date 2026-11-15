@@ -77,7 +77,8 @@ NUMERIC_RANGES: Dict[str, tuple] = {
     'replan_cooldown_sec': (0, 86400, False),
     'tp_keep_ratio': (0, 0.9, False),
     'tp_slice_cap': (0.05, 1, False),
-    'tp_verify_interval_sec': (1, 120, False),
+    # 止盈「突破确认」缓冲：0 ~ 2%（0.001 = 0.1%）
+    'tp_breakout_confirm_pct': (0, 0.02, False),
     'emergency_check_interval_sec': (5, 300, False),
     'flat_confirm_sec': (0, 600, False),
 }

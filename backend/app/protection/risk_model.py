@@ -65,18 +65,12 @@ V2_DEFAULTS: Dict[str, Any] = {
     # 就卖掉 1/4，等于把最大的一段行情让掉（2026-11-15 反馈「止盈太粗糙」）。
     'tp_r_multiples': [1.5, 2.5, 4.0],
     'tp_ratios': [0.20, 0.25, 0.30],
-    # 止盈执行口径（2026-11-15 第二次改版）：单子提前挂在交易所，引擎不撮合、不吃单。
-    # 旧实现是「轮询发现价格越过 TP → 下一张单」，两个结构性缺陷：
-    #   ① 3s 轮询 + 下单往返，价格已回撤才成交（用户看到「回调才减仓」）；
-    #   ② 走可成交价（bid/ask 或市价），每笔都在付 taker 手续费 + 滑点。
-    # 现在把 reduceOnly 限价单提前挂到 TP 价（GTX post-only），到价由交易所撮合成交，
-    # 成交价就是 TP 价、费率是 maker；引擎只负责「挂 / 核对 / 换档」。
-    # 全系统唯一允许吃单的路径只剩黑天鹅/灾难线的紧急全平。
+    # 止盈触发：价格必须先「真正越过」TP 才算数（突破确认），之后跌回 TP 才卖。
+    # 直接把 maker 卖单挂在 TP 上，第一根触到 TP 的插针就会成交，后面走出的大行情
+    # 一点吃不到（2026-11-15 用户口径：「超过 100 以后跌回 100 才止盈，不是直接挂在 100」）。
+    # 这个缓冲就是「算突破」的额外距离，按 TP 的百分比取。
+    'tp_breakout_confirm_pct': 0.001,
     'tp_slice_cap': 0.5,             # 单档最多卖「当前剩余」的比例（防一刀清零）
-    'tp_verify_interval_sec': 8.0,   # 挂单核对间隔（秒）；价格贴近 TP 时每轮都核对
-    # 同一档撤单重挂的最短间隔：数量对不上时不要每 3s 撤一次重挂一次（订单历史会刷满）。
-    # 唯一的例外是「挂单量 > 当前持仓」——reduceOnly 超仓会变成超卖，必须立刻撤。
-    'tp_rearm_min_interval_sec': 8.0,
     # 执行层（B/C）：
     'tier_marketable_retries': 3,     # maker 失败后吃单价重试次数
     'reduce_market_fallback': True,   # 吃单价也失败后允许市价兜底（三级降级最后一级）
@@ -414,20 +408,6 @@ def new_state(cycle_id: str, side: str, entry: float, base_contracts: float,
 # ---------------------------------------------------------------------------
 # 止盈挂单（纯计算）：引擎只决定「挂哪一档、挂多少、挂什么价」，撮合交给交易所
 # ---------------------------------------------------------------------------
-def next_tp_level(state: Dict[str, Any], plan: Dict[str, Any]) -> Optional[int]:
-    """下一个未完成止盈档的下标；三档都完成返回 None。
-
-    一次只挂当前一档，不像网格那样三档全挂：插针扫过 TP1 时只卖掉这一档，
-    后面的档位要等价格重新走到再挂，否则一根针能把 75% 仓位一次打光。
-    """
-    prices = [_f(x) for x in (plan.get('tp_prices') or [])]
-    done = set(_ints(state.get('tp_done')))
-    for i, price in enumerate(prices):
-        if price > 0 and i not in done:
-            return i
-    return None
-
-
 def tp_order_qty(state: Dict[str, Any], plan: Dict[str, Any], contracts: float,
                  level: int, conf: Dict[str, Any]) -> float:
     """本档挂单数量 = min(初始仓位×档位比例, 当前剩余×单档上限)。
@@ -444,22 +424,19 @@ def tp_order_qty(state: Dict[str, Any], plan: Dict[str, Any], contracts: float,
     return max(0.0, min(base * ratios[level], contracts * cap, contracts))
 
 
-def tp_limit_price(side: str, tp_price: float, best_bid: float, best_ask: float) -> float:
-    """止盈挂单价：永远落在被动侧，配合 GTX(post-only) 双保险，成交必然是 maker。
+def tp_breakout_price(tp_price: float, side: str, conf: Dict[str, Any]) -> float:
+    """「算突破」的价格：价格必须先越过 TP 这么远，这一档才进入待触发状态。
 
-    · 价格还没到 TP：多单挂 TP 价（在卖一之上）、空单挂 TP 价（在买一之下），等价格自己走过来；
-    · 价格已经越过 TP：多单改挂卖一、空单改挂买一，贴着盘口等对手单来吃，
-      不往回压价（压价就变成主动成交 = taker）。
-    没有盘口数据时退回 TP 价，交给 GTX 兜底（会被拒单，下一轮重试）。
+    为什么需要它：3 秒轮询本来就是为了「盯住价格怎么走」，把 maker 卖单直接挂在 TP 上
+    等于把判断权交给撮合——插针碰到 TP 就成交，真正的大行情一点吃不到。
+    现在的口径是：越过 TP（含缓冲）记一次突破，之后价格回到 TP 才止盈。
     """
     tp = _f(tp_price)
     if tp <= 0:
         return 0.0
-    bid = _f(best_bid)
-    ask = _f(best_ask)
-    if side == 'long':
-        return max(tp, ask) if ask > 0 else tp
-    return min(tp, bid) if bid > 0 else tp
+    pct = max(0.0, _f(conf.get('tp_breakout_confirm_pct'),
+                      V2_DEFAULTS['tp_breakout_confirm_pct']))
+    return tp * (1 + pct) if side == 'long' else tp * (1 - pct)
 
 
 # ---------------------------------------------------------------------------
@@ -556,11 +533,45 @@ def decide(state: Dict[str, Any], snap: Snapshot, conf: Dict[str, Any]) -> Dict[
                 'reason': f'结构破位 T{label}',
             })
 
-    # ---------- 3. 止盈不在这里决策 ----------
-    # 止盈单是提前挂在交易所的 reduceOnly 限价单（GTX post-only），价格到档由交易所撮合，
-    # 成交价就是 TP 价、费率是 maker。引擎不再「发现越过 TP 才下一张单」——那条路径既有
-    # 3s 轮询 + 下单往返的延迟（回落之后才成交），又必然是 taker 成交。
-    # 挂单的挂/核对/换档见 tp_orders.py 与 runner._ensure_tp_orders。
+    # ---------- 3. 止盈：程序判定「突破 → 回落」（不预挂到交易所） ----------
+    # 3 秒轮询的意义就在这里：盯着「有没有真的越过 TP」，再等它跌回 TP 才动手。
+    # 旧做法是把 reduceOnly 限价单挂在 TP 上，等于把判断交给撮合——插针碰到 TP 就成交，
+    # 之后的行情全错过；本轮起不再往交易所挂止盈单，全部由引擎自己判断、自己减仓。
+    tp_prices = [_f(x) for x in (plan.get('tp_prices') or [])]
+    tp_ratios = _floats(plan.get('tp_ratios'), V2_DEFAULTS['tp_ratios'])
+    tp_done = set(_ints(state.get('tp_done')))
+    armed = set(_ints(state.get('tp_armed')))
+    if tp_prices and not actions:
+        peak = _f(patch.get('peak'), price)
+        trough = _f(patch.get('trough'), price)
+        # ① 登记突破：从低档往高档扫，没越过的档之后的不可能越过
+        for i, tp in enumerate(tp_prices):
+            if i in tp_done or tp <= 0 or i in armed:
+                continue
+            confirm = tp_breakout_price(tp, side, conf)
+            crossed = peak >= confirm if side == 'long' else trough <= confirm
+            if not crossed:
+                break
+            armed.add(i)
+            patch['tp_armed'] = sorted(armed)
+        # ② 回落触发：从高档往低档扫。一次跌穿多档时先卖离现价最近的那一档，
+        #    否则会先卖掉 TP1（价格早已低于 TP2/TP3），等于把高位那几档贱卖。
+        for i in range(len(tp_prices) - 1, -1, -1):
+            tp = tp_prices[i]
+            if i in tp_done or i not in armed or tp <= 0:
+                continue
+            pulled_back = price <= tp if side == 'long' else price >= tp
+            if not pulled_back:
+                continue  # 这一档还没回落，更低的档更不可能（继续往下找没意义，但代价极小）
+            ratio = min(tp_ratios[i] if i < len(tp_ratios) else 0.0, remaining)
+            if ratio > 0 and remaining > MIN_REMAINING:
+                actions.append({
+                    'type': 'reduce', 'ratio': round(ratio, 6),
+                    'tps': [i], 'tag': f'tp:{i + 1}',
+                    'level': 'success',
+                    'reason': f'分批止盈 TP{i + 1}（突破后回落至 {tp:.6g}）',
+                })
+            break  # 单轮只卖一档，一根针不会把整条阶梯一次打光
 
     # ---------- 4. 止损上移（独立计算，只朝盈利方向走） ----------
     stop_action = _stop_action(state, snap, plan, conf, tiers_done)

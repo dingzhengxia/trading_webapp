@@ -417,6 +417,12 @@ async def _prepare(exchange, conf: Dict[str, Any], symbol: str, side: str,
                                  old_disaster=old_disaster,
                                  new_disaster=new_plan['disaster_stop'])
 
+    # 止盈口径迁移：旧版本把 reduceOnly 限价单预挂在交易所，价格一碰 TP 就被撮合，
+    # 「先突破、再回落」根本来不及判断。现在全部交给引擎（3s 一轮），旧单必须撤掉。
+    if state.get('tp_mode') != 'engine':
+        state['tp_mode'] = 'engine'
+        state['tp_sweep_pending'] = True
+
     # 双轨治理（每轮检查，幂等 + 60s 节流）：接管开仓端遗留 SL/TP/TS 条件单。
     # -1 = 守护端 STOP 未就位（标志不置，节流后下轮重试）；>=0 = 接管流程完成。
     if bool(conf.get('take_over_external_stops', False)) \
@@ -625,11 +631,18 @@ async def _apply_reduce(exchange, conf: Dict[str, Any], bundle: Dict[str, Any],
         return
 
     tiers = act.get('tiers') or []
+    tps = act.get('tps') or []
     ratio = _f(act.get('ratio'))
 
     # 减仓量的分母固定为「本风险周期初始仓位」：tier_ratios 合计 100%，
     # 每档是一块固定份额，与当前剩余多少无关。
-    qty = min(current, base * ratio)
+    # 止盈复用 risk_model.tp_order_qty：它额外加了 tp_slice_cap，兜住「结构减仓先砍掉
+    # 大半、再按初始比例卖会一刀清零」（2026-11-15 BTC：标称减 25%，实际砍掉剩余 79%）。
+    if tps:
+        qty = risk_model.tp_order_qty(state, state.get('plan') or {}, current,
+                                      int(tps[0]), conf)
+    else:
+        qty = min(current, base * ratio)
     if qty <= 0:
         return
 
@@ -644,15 +657,21 @@ async def _apply_reduce(exchange, conf: Dict[str, Any], bundle: Dict[str, Any],
         max_retries=int(_f(conf.get('tier_maker_retries'), 3)),
         check_interval_sec=1.0, timeout_sec=10.0,
         marketable_retries=int(_f(conf.get('tier_marketable_retries'), 3)),
-        # B 三级降级：maker(GTX) → 吃单价 → 市价兜底。市价只在最后一级，
-        # 不再因 T1/T2 永久禁市价（reduce_market_fallback 开关可关回旧行为）。
-        # 这是风险退出（结构破位），允许吃单兜底；止盈全程不吃单，见 tp_orders.py。
+        # B 三级降级：maker(GTX) → 吃单价 → 市价兜底。市价只在最后一级。
         allow_market_fallback=bool(conf.get('reduce_market_fallback', True)),
         maker_only=maker_only,
+        # 止盈不排队等 maker：价格已经跌破 TP，挂在盘口上方只会越等越低，
+        # 最后变成「回撤之后才卖」。直接以可成交价出手，吃掉 TP 附近的这段。
+        skip_maker=bool(tps),
     )
 
     if after >= current - max(1e-12, current * 1e-8):
         logger.warning(f'[{symbol}] {tag} 未成交（{current} -> {after}），保留档位下轮重试')
+        # 止盈未成交必须留痕：这是「价格到过目标位却没卖掉」的唯一证据。
+        if tps:
+            ledger.log_event(symbol, side, 'skip',
+                             f"{act.get('reason') or tag} 未成交（{current:.6g} → {after:.6g}），"
+                             f"下轮重试", level='warning', trigger=tag, tps=tps)
         # C 冷却分级：未成交 ≠ 交易所异常。行情在跑，未成交用短冷却快速重试；
         # 交易所报错走异常路径，仍按 action_retry_cooldown_sec(90s) 冷却。
         attempts[tag] = now - cooldown + max(1.0, _f(conf.get('reduce_retry_fast_sec'), 10.0))
@@ -663,12 +682,14 @@ async def _apply_reduce(exchange, conf: Dict[str, Any], bundle: Dict[str, Any],
     state['position_version'] = int(_f(state.get('position_version'), 1)) + 1
     if tiers:
         state['tiers_done'] = sorted(set(risk_model._ints(state.get('tiers_done'))) | set(tiers))
+    if tps:
+        state['tp_done'] = sorted(set(risk_model._ints(state.get('tp_done'))) | set(tps))
     state['last_action_ts'] = now
     ledger.save(symbol, side, state)
 
     text = f"{act.get('reason')}：{current:.6g} → {after:.6g}（减 {ratio:.0%}）"
     ledger.log_event(symbol, side, 'reduce', text, level=str(act.get('level') or 'warning'),
-                     ratio=act.get('ratio'), after=after, tiers=tiers)
+                     ratio=act.get('ratio'), after=after, tiers=tiers, tps=tps)
     V2.note_action(symbol, side, text, str(act.get('level') or 'warning'))
     send_alert(conf, f"风控提示: {act.get('reason', '减仓')}", f'[{symbol}] {text}', symbol=symbol)
 
@@ -719,269 +740,32 @@ async def _apply_stop(exchange, conf: Dict[str, Any], bundle: Dict[str, Any],
 
 
 # ---------------------------------------------------------------------------
-# 止盈挂单维护：提前挂 post-only 限价单，到价由交易所撮合
+# 遗留清理：止盈不再预挂到交易所
 # ---------------------------------------------------------------------------
-async def _ticker_pair(exchange, symbol: str, conf: Dict[str, Any],
-                       force: bool = False) -> Tuple[float, float]:
-    """(bid, ask)；取不到返回 (0, 0)，由挂价函数退回 TP 价。"""
-    try:
-        ticker = await engine._fetch_ticker(exchange, symbol, conf,
-                                            priority='HIGH', force=force)
-    except Exception as exc:  # noqa: BLE001 - 盘口缺失不该阻断挂单
-        logger.debug(f'[{symbol}] 取盘口失败: {exc}')
-        return 0.0, 0.0
-    if not isinstance(ticker, dict):
-        return 0.0, 0.0
-    return _f(ticker.get('bid')), _f(ticker.get('ask'))
-
-
-def _tp_should_verify(order: Dict[str, Any], snap: 'risk_model.Snapshot',
-                      conf: Dict[str, Any]) -> bool:
-    """本轮要不要核对这张止盈单。
-
-    每 3 秒每仓打一次 fetch_order 没必要：成交只可能发生在价格贴近/越过挂单价的时候，
-    其余时间按 tp_verify_interval_sec 低频确认「单子还在不在」就够了。
-    """
-    price = _f(order.get('price'))
-    atr = _f(snap.atr) or snap.price * 0.002
-    near = price > 0 and abs(snap.price - price) <= max(atr, snap.price * 0.002)
-    # 仓位已经比挂单量还小：中途被结构减仓砍过，必须核对，否则永远以为单还在场
-    shrunk = _f(order.get('qty')) > snap.contracts * 1.02
-    interval = max(0.0, _f(conf.get('tp_verify_interval_sec'), 8.0))
-    return near or shrunk or snap.now - _f(order.get('checked_at')) >= interval
-
-
-def _settle_tp_fill(conf: Dict[str, Any], bundle: Dict[str, Any], order: Dict[str, Any],
-                    filled: float, avg: float) -> None:
-    """止盈单成交落地：标记档位完成、清挂单记录、写台账 + 外发。"""
-    symbol, side = bundle['symbol'], bundle['side']
+# 止盈改回「引擎每 3 秒判断：先突破、再回落才卖」。交易所上遗留的止盈单
+# （旧版本留下的 PM_WS_TP_ 前缀 reduceOnly 限价单）会抢在引擎前面成交——
+# 价格刚碰到 TP 就被撮合掉，突破回落的判断等于失效。所以每个仓位/周期只清一次。
+async def _sweep_legacy_tp_orders(exchange, conf: Dict[str, Any],
+                                  bundle: Dict[str, Any]) -> None:
     state = bundle['state']
-    level = int(_f(order.get('level')))
-    target = _f(order.get('price'))
-    state['tp_done'] = sorted(set(risk_model._ints(state.get('tp_done'))) | {level})
-    state.pop('tp_order', None)
-
-    text = f'TP{level + 1} 挂单成交 {filled:.6g} @ {avg:.6g}（目标 {target:.6g}，maker）'
-    logger.success(f'[{symbol}] 🎯 {text}')
-    ledger.log_event(symbol, side, 'tp_fill', text, level='success',
-                     price=avg, qty=filled, tps=[level])
-    V2.note_action(symbol, side, text, 'success')
-    send_alert(conf, f'止盈提示: TP{level + 1} 已成交', f'[{symbol}] {text}', symbol=symbol)
-
-
-async def _verify_tp_order(exchange, conf: Dict[str, Any], bundle: Dict[str, Any],
-                           order: Dict[str, Any]) -> bool:
-    """核对一张在挂的止盈单。True = 单子已不在场（成交或终结），需要继续处理。"""
-    symbol = bundle['symbol']
-    state, snap = bundle['state'], bundle['snap']
-    if not _tp_should_verify(order, snap, conf):
-        return False
-    order['checked_at'] = snap.now
+    if not state.pop('tp_sweep_pending', False):
+        return
     try:
-        fresh = await tp_orders.fetch_tp_order(
-            exchange, symbol, str(order.get('id')), conf)
-    except Exception as exc:  # noqa: BLE001 - 查询失败按「还在挂」处理
-        logger.debug(f'[{symbol}] 核对止盈单失败: {exc}')
-        return False
-
-    full, filled, dead = tp_orders.tp_fill_state(fresh)
-    level = int(_f(order.get('level')))
-    qty = _f(order.get('qty'))
-    avg = _f((fresh or {}).get('average')) or _f((fresh or {}).get('price')) \
-        or _f(order.get('price'))
-
-    if full or (qty > 0 and filled >= qty * 0.999):
-        _settle_tp_fill(conf, bundle, order, filled or qty, avg)
-        return True
-    if dead:
-        logger.info(f'[{symbol}] 止盈单 TP{level + 1} 已终结'
-                    f'（{str((fresh or {}).get("status"))}），本轮重挂')
+        await tp_orders.cancel_all_tp_orders(
+            exchange, bundle['symbol'], bundle['side'], conf,
+            reason='止盈改为程序判定（突破→回落），清理交易所上的旧止盈单')
         state.pop('tp_order', None)
-        return True
-    if filled > 0:
-        # 部分成交：保留原始下单量（qty 是「这张单总共要卖多少」，不是「还剩多少」）。
-        # 以前这里把 qty 改成剩余量，下一轮校对又拿它去比「本档应卖量」，必然不等 →
-        # 撤掉重挂，刚成交的那部分等于白排一次队，还多两次 REST。剩余量由交易所在
-        # 挂单里自己维护，我们只记录已成交。
-        order['filled'] = filled
-        logger.info(f'[{symbol}] 止盈单 TP{level + 1} 部分成交 {filled:.6g}，'
-                    f'剩余 {max(0.0, qty - filled):.6g} 继续挂')
-    return False
-
-
-def _desired_tp_qty(exchange, symbol: str, state: Dict[str, Any], plan: Dict[str, Any],
-                    contracts: float, level: int, conf: Dict[str, Any]) -> float:
-    """本档「交易所上应该挂多少」——挂单与校对共用同一口径（含精度取整）。
-
-    必须和真正下单走同一个取整函数。否则校对时拿「未取整的理论值」去比
-    「已按交易所网格取整的挂单量」，只要理论值不在网格上（几乎必然），
-    两者就永远差一档，于是每轮都判「数量不符」→ 撤单 → 重挂 → 仍不符……
-    2026-11-15 BTC 就是这个死循环：TP1 理论 0.0015、网格 0.001，
-    订单历史里每 3 秒一张「已取消」，一屏能被刷满。
-    """
-    raw = risk_model.tp_order_qty(state, plan, contracts, level, conf)
-    raw = min(raw, contracts)
-    if raw <= 0:
-        return 0.0
-    try:
-        qty = _f(exchange.amount_to_precision(symbol, raw))
-        if qty > contracts:
-            # 取整后反超持仓：reduceOnly 单超过持仓会被交易所拒（或部分成交），
-            # 按持仓本身再取一次整，仍超就当作挂不出去。
-            qty = _f(exchange.amount_to_precision(symbol, contracts))
-    except Exception:  # noqa: BLE001 - 精度换算失败按数量无效处理
-        return 0.0
-    return qty if 0 < qty <= contracts + 1e-12 else 0.0
-
-
-async def _place_next_tp_order(exchange, conf: Dict[str, Any],
-                               bundle: Dict[str, Any]) -> bool:
-    """挂下一档止盈单。返回本轮是否真的挂出去了。"""
-    symbol, side = bundle['symbol'], bundle['side']
-    state, snap, pos = bundle['state'], bundle['snap'], bundle['pos']
-    plan = state.get('plan') or {}
-    level = risk_model.next_tp_level(state, plan)
-    if level is None:
-        return False
-
-    tp_price = _f((plan.get('tp_prices') or [])[level])
-    if tp_price <= 0:
-        return False
-
-    qty = _desired_tp_qty(exchange, symbol, state, plan, snap.contracts, level, conf)
-    if qty <= 0:
-        # 剩余仓位已经小于交易所最小下单量：这一档永远挂不出去，标记完成避免每轮重试
-        logger.info(f'[{symbol}] TP{level + 1} 数量低于交易所精度'
-                    f'（剩余 {snap.contracts:.6g}），跳过该档')
-        state['tp_done'] = sorted(set(risk_model._ints(state.get('tp_done'))) | {level})
-        return False
-
-    bid, ask = await _ticker_pair(exchange, symbol, conf)
-    price = risk_model.tp_limit_price(side, tp_price, bid, ask)
-
-    order: Optional[Dict[str, Any]] = None
-    for _ in range(2):
-        try:
-            order = await tp_orders.place_tp_order(
-                exchange, symbol, side, pos, qty, price, level, conf)
-            break
-        except Exception as exc:  # noqa: BLE001 - 拒单要识别，其它异常直接放弃本轮
-            if not tp_orders.is_post_only_reject(exc):
-                logger.warning(f'[{symbol}] 止盈挂单失败（TP{level + 1}）: {exc}')
-                return False
-            # post-only 被拒 = 挂价已经跑进盘口（价格刚穿过 TP）。用最新盘口把价格
-            # 推到被动侧再挂一次；仍被拒就等下一轮，绝不吃单。
-            bid, ask = await _ticker_pair(exchange, symbol, conf, force=True)
-            retry_price = risk_model.tp_limit_price(side, tp_price, bid, ask)
-            logger.info(f'[{symbol}] 止盈单 TP{level + 1} post-only 被拒'
-                        f'（挂价 {price:.8g}），改挂 {retry_price:.8g}')
-            if retry_price <= 0 or retry_price == price:
-                return False
-            price = retry_price
-
-    if not order:
-        return False
-
-    state['tp_order'] = {
-        'id': order.get('id'), 'level': level, 'price': price,
-        'qty': qty, 'ts': snap.now, 'checked_at': snap.now,
-    }
-    text = f'TP{level + 1} 挂单 {qty:.6g} @ {price:.8g}（post-only，目标 {tp_price:.8g}）'
-    logger.info(f'[{symbol}] 🎯 {text}')
-    ledger.log_event(symbol, side, 'tp_arm', text, level='info',
-                     price=price, qty=qty, tps=[level])
-    return True
-
-
-def _tp_order_stale(order: Dict[str, Any], want: float) -> bool:
-    """在挂止盈单的数量与「现在应该挂多少」是否真的不一致。
-
-    `want` 必须是由 `_desired_tp_qty` 算出的「已按交易所精度取整」的数量，
-    两边同口径才可能相等。以前这里拿未取整的理论值比已取整的挂单量、再用 5%
-    相对误差做阈值：数量本身只有 1~2 个网格步长，一档取整误差轻松超过 5%，
-    于是「什么都没变」也会被判成「变了」——每 3 秒撤一次重挂一次，永不停。
-    """
-    have = _f(order.get('qty'))
-    if have <= 0:
-        return False
-    if want <= 0:
-        # 当前仓位已经挂不出这一档（低于交易所最小下单量）：撤掉，别再挂着超仓的单
-        return True
-    return abs(have - want) > max(want * 1e-6, 1e-12)
-
-
-async def _ensure_tp_orders(exchange, conf: Dict[str, Any],
-                            bundle: Dict[str, Any]) -> None:
-    """维持「当前一档」止盈挂单：核对成交 → 校正数量 → 换档 → 挂新单。
-
-    为什么不是「到价才下单」：3s 轮询 + 下单往返，价格早就回落了，而且那条路径
-    只能吃单成交。这里把单子提前挂到交易所，价格到档由撮合完成，成交价就是目标价。
-    一次只维护一档（不是三档全挂）：插针扫过 TP1 只卖掉这一档，后面的档位要等
-    价格重新走到再挂，否则一根针能把 75% 仓位一次打光。
-    """
-    if not bool(conf.get('take_profit_enabled', True)):
-        return
-    symbol, side = bundle['symbol'], bundle['side']
-    state, snap = bundle['state'], bundle['snap']
-    plan = state.get('plan') or {}
-    if not plan.get('tp_prices') or snap.contracts <= 0:
-        return
-
-    # 新周期 / 引擎重启：交易所上可能残留上一周期的止盈单，每个周期只扫一次
-    if state.pop('tp_sweep_pending', False):
-        await tp_orders.cancel_all_tp_orders(exchange, symbol, side, conf,
-                                             reason='新周期清理旧止盈挂单')
-        state.pop('tp_order', None)
-
-    order = tp_orders.tp_order_of(state)
-    if order.get('id'):
-        gone = await _verify_tp_order(exchange, conf, bundle, order)
-        if not gone:
-            level = int(_f(order.get('level')))
-            want = _desired_tp_qty(exchange, symbol, state, plan,
-                                   snap.contracts, level, conf)
-            if not _tp_order_stale(order, want):
-                return
-            # 仓位变了但单子还挂着：撤掉重挂，否则成交时会按旧数量下。
-            # 但先加一道防抖：只有「单子比仓位还大」（reduceOnly 会超卖，必须马上处理）
-            # 才允许无视间隔；其余情况同一档最短间隔 tp_rearm_min_interval_sec 才重挂一次，
-            # 免得任何判定抖动都变成刷屏式的撤单/重挂。
-            have = _f(order.get('qty'))
-            gap = max(0.0, _f(conf.get('tp_rearm_min_interval_sec'), 8.0))
-            too_soon = snap.now - _f(order.get('ts')) < gap
-            oversized = have > snap.contracts * 1.001
-            if too_soon and not oversized:
-                logger.debug(f'[{symbol}] 止盈挂单数量待校正 '
-                             f'（{have:.6g} → {want:.6g}），{gap:.0f}s 内已重挂过，稍后处理')
-                return
-            try:
-                await tp_orders.cancel_tp_order(exchange, symbol, str(order['id']), conf)
-            except Exception as exc:  # noqa: BLE001 - 撤不掉就下轮再试
-                logger.warning(f'[{symbol}] 撤销止盈挂单失败: {exc}')
-                return
-            logger.info(f'[{symbol}] 止盈挂单数量 {have:.6g} 与当前应挂 {want:.6g} 不符，'
-                        f'撤单重挂（仓位 {snap.contracts:.6g}）')
-            state.pop('tp_order', None)
-        # 成交/终结/撤单后同一轮就补下一档，减少「价格冲过去了但下一档还没挂」的空窗
-    await _place_next_tp_order(exchange, conf, bundle)
-
-
-async def _safe_ensure_tp_orders(exchange, conf: Dict[str, Any],
-                                 bundle: Dict[str, Any]) -> None:
-    """挂单维护的异常边界：失败只记日志，绝不能拖垮整个守护循环。"""
-    if bundle.get('_exited'):
-        return
-    try:
-        await _ensure_tp_orders(exchange, conf, bundle)
-    except Exception as exc:  # noqa: BLE001 - 挂单失败下轮重试，不影响守护
-        logger.error(f"[{bundle['symbol']}/{bundle['side']}] 止盈挂单维护失败: {exc}")
+    except Exception as exc:  # noqa: BLE001 - 清理失败不影响守护，下轮还会重试
+        logger.warning(f"[{bundle['symbol']}] 清理旧止盈挂单失败: {exc}")
+        state['tp_sweep_pending'] = True
 
 
 async def _execute(exchange, conf: Dict[str, Any], bundle: Dict[str, Any]) -> None:
     symbol, side = bundle['symbol'], bundle['side']
     actions = bundle['actions']
+    # 有遗留止盈单就先撤掉：交易所上的单会抢在引擎判断之前成交
+    await _sweep_legacy_tp_orders(exchange, conf, bundle)
     if not actions:
-        await _safe_ensure_tp_orders(exchange, conf, bundle)
         if bundle.get('_dirty'):
             ledger.save(symbol, side, bundle['state'])
         return
@@ -997,8 +781,6 @@ async def _execute(exchange, conf: Dict[str, Any], bundle: Dict[str, Any]) -> No
                 logger.error(f'[{symbol}/{side}] v2 执行 {act.get("tag")} 失败: {exc}')
                 ledger.log_event(symbol, side, 'error',
                                  f'{act.get("tag")} 执行失败: {exc}', level='error')
-        # 止盈挂单维护放在动作之后：结构减仓/全平会改变仓位，先让它们落地再定挂单量
-        await _safe_ensure_tp_orders(exchange, conf, bundle)
 
 
 # ---------------------------------------------------------------------------
@@ -1015,7 +797,8 @@ async def protect_positions_main_v2(exchange) -> None:
     logger.info(f'🛡️ v2 参数 | 周期:{conf.get("v2_timeframe")} | 四档:{conf.get("tier_ratios")} '
                 f'| 确认秒:{conf.get("tier_confirm_sec")} | 演练模式:{bool(conf.get("dry_run"))}')
     logger.info(f'🎯 止盈 | 阶梯:{conf.get("tp_r_multiples")}R | 比例:{conf.get("tp_ratios")} '
-                f'| 保留:{conf.get("tp_keep_ratio")} | 执行:交易所 post-only 挂单（不吃单）')
+                f'| 保留:{conf.get("tp_keep_ratio")} | 触发:突破确认 '
+                f'+{_f(conf.get("tp_breakout_confirm_pct"), 0.001):.3%} 后回落（引擎 3s 判定，不预挂）')
 
     while True:
         started = time.time()
@@ -1094,7 +877,13 @@ def status() -> Dict[str, Any]:
         tps = plan.get('tp_prices') or [None, None, None]
         done = set(risk_model._ints(state.get('tiers_done')))
         tp_done = set(risk_model._ints(state.get('tp_done')))
-        tp_order = tp_orders.tp_order_of(state)
+        armed = set(risk_model._ints(state.get('tp_armed')))
+        # 止盈不再挂到交易所，前端要区分三种状态：
+        #   待突破（还没越过 TP）/ 待回落（已突破，等价格回到 TP）/ 已完成
+        tp_wait_level = next((i + 1 for i in range(len(tps))
+                              if i not in tp_done and i not in armed and tps[i]), None)
+        tp_armed_level = next((i + 1 for i in range(len(tps))
+                               if i not in tp_done and i in armed and tps[i]), None)
         rows.append({
             'symbol': symbol,
             'side': side,
@@ -1115,10 +904,11 @@ def status() -> Dict[str, Any]:
             'tp1_done': 0 in tp_done,
             'tp2_done': 1 in tp_done,
             'tp3_done': 2 in tp_done,
-            # 当前挂在交易所上的那一档止盈单（前端标「已挂」）：止盈是被动挂单，
-            # 没有这条就无法区分「还没挂出去」和「挂在场上等成交」。
-            'tp_order_level': (int(_f(tp_order.get('level'))) + 1) if tp_order.get('id') else None,
-            'tp_order_price': _f(tp_order.get('price')) or None,
+            # 止盈状态：引擎自己判断（3s 一轮），交易所上没有对应的挂单
+            'tp_wait_level': tp_wait_level,      # 还没突破的下一档（等价格越过）
+            'tp_armed_level': tp_armed_level,    # 已突破、等回落到 TP 就卖
+            'tp_order_level': None,              # 兼容旧前端字段：不再预挂，恒为 None
+            'tp_order_price': None,
             # v2 专属：四档线、R、灾难线、周期
             'engine': 'v2',
             'cycle_id': state.get('cycle_id'),
