@@ -85,6 +85,9 @@ DEFAULT_CONFIG = {
  'api_429_base_backoff_sec': 2.0,
  'api_418_cooldown_sec': 60.0,
  'stop_maintenance_interval_sec': 5.0,
+ # 交易所保护 STOP 的「事实核对」间隔（秒）：以交易所实际挂单为准，
+ # 用户手动撤销后能自动补挂，手动改价后账本跟着纠正。0 = 不核对（退回纯账本口径）。
+ 'stop_verify_interval_sec': 15.0,
  'stop_min_update_pct': 0.0005,
  'stop_min_update_atr_ratio': 0.05,
  'price_source_tolerance_pct': 0.01,

@@ -90,70 +90,72 @@
       </div>
 
       <!-- sm+：表格。md（及 sm）隐藏「开仓价」列避免横滚，lg+ 全列 -->
-      <v-table v-else-if="status.positions.length > 0" density="compact">
-        <thead>
-          <tr>
-            <th class="text-left">币种</th>
-            <th class="text-left">方向</th>
-            <th class="text-right">数量</th>
-            <th v-if="lgAndUp" class="text-right">开仓价</th>
-            <th class="text-right">标记价</th>
-            <th class="text-right">保护止损</th>
-            <th class="text-right">TP1 / TP2 / 躺平</th>
-            <th v-if="isV2" class="text-right">四档减仓线</th>
-            <th v-if="isV2" class="text-right">灾难线</th>
-            <th class="text-left">已触发</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="row in status.positions" :key="`${row.symbol}-${row.side}`">
-            <td class="font-weight-medium">{{ row.symbol }}</td>
-            <td>
-              <span class="dir-badge" :class="`dir-badge--${directionTone(row.side).key}`">
-                <v-icon>{{ directionTone(row.side).icon }}</v-icon
-                >{{ directionTone(row.side).label }}
-              </span>
-            </td>
-            <td class="text-right">{{ formatNumber(row.contracts, 4) }}</td>
-            <td v-if="lgAndUp" class="text-right">{{ formatNumber(row.entry_price) }}</td>
-            <td class="text-right">{{ formatNumber(row.mark_price) }}</td>
-            <td class="text-right">
-              <span v-if="row.protected_stop">{{ formatNumber(row.protected_stop) }}</span>
-              <span v-else-if="row.stop_price">{{ formatNumber(row.stop_price) }}</span>
-              <span v-else class="text-medium-emphasis">—</span>
-            </td>
-            <td class="text-right text-caption">
-              {{ formatNumber(row.tp1_price) }} / {{ formatNumber(row.tp2_price) }} /
-              {{ formatNumber(row.tp3_price) }}
-            </td>
-            <td v-if="isV2" class="text-right text-caption">
-              <span v-if="row.tier_levels?.length">
-                {{ row.tier_levels.map((v) => formatNumber(v)).join(' / ') }}
-              </span>
-              <span v-else class="text-medium-emphasis">—</span>
-            </td>
-            <td v-if="isV2" class="text-right text-caption">
-              <span v-if="row.disaster_stop">{{ formatNumber(row.disaster_stop) }}</span>
-              <span v-else class="text-medium-emphasis">—</span>
-            </td>
-            <td>
-              <div class="d-flex flex-wrap ga-1">
-                <v-chip v-if="row.tp1_done" size="x-small" variant="tonal" color="info">TP1</v-chip>
-                <v-chip v-if="row.tp2_done" size="x-small" variant="tonal" color="info">TP2</v-chip>
-                <v-chip v-if="row.tp3_done" size="x-small" variant="tonal" color="info">躺平</v-chip>
-                <v-chip v-if="row.t1_done" size="x-small" variant="tonal" color="warning">T1</v-chip>
-                <v-chip v-if="row.t2_done" size="x-small" variant="tonal" color="warning">T2</v-chip>
-                <v-chip v-if="row.t3_done" size="x-small" variant="tonal" color="warning">T3</v-chip>
-                <v-chip v-if="row.t4_done" size="x-small" variant="tonal" color="error">T4</v-chip>
-                <span
-                  v-if="!hasTriggered(row)"
-                  class="text-caption text-medium-emphasis"
-                >等待触发</span>
-              </div>
-            </td>
-          </tr>
-        </tbody>
-      </v-table>
+      <div v-else-if="status.positions.length > 0" class="table-scroll">
+        <v-table density="compact">
+          <thead>
+            <tr>
+              <th class="text-left">币种</th>
+              <th class="text-left">方向</th>
+              <th class="text-right">数量</th>
+              <th v-if="lgAndUp" class="text-right">开仓价</th>
+              <th class="text-right">标记价</th>
+              <th class="text-right">保护止损</th>
+              <th class="text-right">TP1 / TP2 / 躺平</th>
+              <th v-if="isV2" class="text-right">四档减仓线</th>
+              <th v-if="isV2" class="text-right">灾难线</th>
+              <th class="text-left">已触发</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="row in status.positions" :key="`${row.symbol}-${row.side}`">
+              <td class="font-weight-medium">{{ row.symbol }}</td>
+              <td>
+                <span class="dir-badge" :class="`dir-badge--${directionTone(row.side).key}`">
+                  <v-icon>{{ directionTone(row.side).icon }}</v-icon
+                  >{{ directionTone(row.side).label }}
+                </span>
+              </td>
+              <td class="text-right">{{ formatNumber(row.contracts, 4) }}</td>
+              <td v-if="lgAndUp" class="text-right">{{ formatNumber(row.entry_price) }}</td>
+              <td class="text-right">{{ formatNumber(row.mark_price) }}</td>
+              <td class="text-right">
+                <span v-if="row.protected_stop">{{ formatNumber(row.protected_stop) }}</span>
+                <span v-else-if="row.stop_price">{{ formatNumber(row.stop_price) }}</span>
+                <span v-else class="text-medium-emphasis">—</span>
+              </td>
+              <td class="text-right text-caption">
+                {{ formatNumber(row.tp1_price) }} / {{ formatNumber(row.tp2_price) }} /
+                {{ formatNumber(row.tp3_price) }}
+              </td>
+              <td v-if="isV2" class="text-right text-caption">
+                <span v-if="row.tier_levels?.length">
+                  {{ row.tier_levels.map((v) => formatNumber(v)).join(' / ') }}
+                </span>
+                <span v-else class="text-medium-emphasis">—</span>
+              </td>
+              <td v-if="isV2" class="text-right text-caption">
+                <span v-if="row.disaster_stop">{{ formatNumber(row.disaster_stop) }}</span>
+                <span v-else class="text-medium-emphasis">—</span>
+              </td>
+              <td>
+                <div class="d-flex flex-wrap ga-1">
+                  <v-chip v-if="row.tp1_done" size="x-small" variant="tonal" color="info">TP1</v-chip>
+                  <v-chip v-if="row.tp2_done" size="x-small" variant="tonal" color="info">TP2</v-chip>
+                  <v-chip v-if="row.tp3_done" size="x-small" variant="tonal" color="info">躺平</v-chip>
+                  <v-chip v-if="row.t1_done" size="x-small" variant="tonal" color="warning">T1</v-chip>
+                  <v-chip v-if="row.t2_done" size="x-small" variant="tonal" color="warning">T2</v-chip>
+                  <v-chip v-if="row.t3_done" size="x-small" variant="tonal" color="warning">T3</v-chip>
+                  <v-chip v-if="row.t4_done" size="x-small" variant="tonal" color="error">T4</v-chip>
+                  <span
+                    v-if="!hasTriggered(row)"
+                    class="text-caption text-medium-emphasis"
+                  >等待触发</span>
+                </div>
+              </td>
+            </tr>
+          </tbody>
+        </v-table>
+      </div>
       <EmptyState
         v-else
         icon="mdi-shield-outline"

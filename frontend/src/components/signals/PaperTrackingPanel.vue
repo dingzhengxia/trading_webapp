@@ -5,66 +5,70 @@
   <div>
     <template v-if="liveExit.positions.length > 0">
       <SectionHeader icon="mdi-shield-half-full" title="实盘已登记" :description="`${liveExit.positions.length} 个`" />
-      <v-table density="compact">
-        <thead>
-          <tr>
-            <th class="text-left">币种</th>
-            <th class="text-left">方向</th>
-            <th class="text-left">周期</th>
-            <th class="text-right">已持有</th>
-            <th class="text-right">上限</th>
-            <th class="text-left">策略</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="row in liveExit.positions" :key="row.full_symbol || row.symbol">
-            <td class="font-weight-medium">{{ row.symbol }}</td>
-            <td>
-              <span class="dir-badge" :class="`dir-badge--${directionTone(row.side).key}`">
-                <v-icon>{{ directionTone(row.side).icon }}</v-icon>{{ directionTone(row.side).label }}
-              </span>
-            </td>
-            <td class="text-medium-emphasis">{{ row.timeframe || '—' }}</td>
-            <td class="text-right num">{{ row.bars_held ?? '—' }} 根</td>
-            <td class="text-right num text-medium-emphasis">{{ row.max_bars }} 根</td>
-            <td class="text-medium-emphasis">{{ row.strategy || '—' }}</td>
-          </tr>
-        </tbody>
-      </v-table>
-    </template>
-
-    <v-row dense class="mt-2">
-      <v-col cols="12" md="7">
-        <SectionHeader icon="mdi-flask-outline" title="纸面持仓" :description="`${tracking.open_positions.length} 个`" />
-        <v-table v-if="tracking.open_positions.length > 0" density="compact">
+      <div class="table-scroll">
+        <v-table density="compact">
           <thead>
             <tr>
               <th class="text-left">币种</th>
               <th class="text-left">方向</th>
               <th class="text-left">周期</th>
-              <th class="text-right">入场</th>
-              <th class="text-right">止损</th>
-              <th class="text-right">止盈</th>
-              <th class="text-left">开仓时间</th>
+              <th class="text-right">已持有</th>
+              <th class="text-right">上限</th>
+              <th class="text-left">策略</th>
             </tr>
           </thead>
           <tbody>
-            <tr v-for="position in tracking.open_positions" :key="position.id">
-              <td class="font-weight-medium">{{ position.symbol }}</td>
+            <tr v-for="row in liveExit.positions" :key="row.full_symbol || row.symbol">
+              <td class="font-weight-medium">{{ row.symbol }}</td>
               <td>
-                <span class="dir-badge" :class="`dir-badge--${directionTone(position.direction).key}`">
-                  <v-icon>{{ directionTone(position.direction).icon }}</v-icon
-                  >{{ directionTone(position.direction).label }}
+                <span class="dir-badge" :class="`dir-badge--${directionTone(row.side).key}`">
+                  <v-icon>{{ directionTone(row.side).icon }}</v-icon>{{ directionTone(row.side).label }}
                 </span>
               </td>
-              <td class="text-medium-emphasis">{{ position.timeframe }}</td>
-              <td class="text-right num">{{ formatPrice(position.entry_price) }}</td>
-              <td class="text-right num text-short">{{ formatPrice(position.stop_loss) }}</td>
-              <td class="text-right num text-long">{{ formatPrice(position.take_profit) }}</td>
-              <td class="text-caption text-medium-emphasis">{{ formatTime(position.opened_at) }}</td>
+              <td class="text-medium-emphasis">{{ row.timeframe || '—' }}</td>
+              <td class="text-right num">{{ row.bars_held ?? '—' }} 根</td>
+              <td class="text-right num text-medium-emphasis">{{ row.max_bars }} 根</td>
+              <td class="text-medium-emphasis">{{ row.strategy || '—' }}</td>
             </tr>
           </tbody>
         </v-table>
+      </div>
+    </template>
+
+    <v-row dense class="mt-2">
+      <v-col cols="12" md="7">
+        <SectionHeader icon="mdi-flask-outline" title="纸面持仓" :description="`${tracking.open_positions.length} 个`" />
+        <div v-if="tracking.open_positions.length > 0" class="table-scroll">
+          <v-table density="compact">
+            <thead>
+              <tr>
+                <th class="text-left">币种</th>
+                <th class="text-left">方向</th>
+                <th class="text-left">周期</th>
+                <th class="text-right">入场</th>
+                <th class="text-right">止损</th>
+                <th class="text-right">止盈</th>
+                <th class="text-left">开仓时间</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="position in tracking.open_positions" :key="position.id">
+                <td class="font-weight-medium">{{ position.symbol }}</td>
+                <td>
+                  <span class="dir-badge" :class="`dir-badge--${directionTone(position.direction).key}`">
+                    <v-icon>{{ directionTone(position.direction).icon }}</v-icon
+                    >{{ directionTone(position.direction).label }}
+                  </span>
+                </td>
+                <td class="text-medium-emphasis">{{ position.timeframe }}</td>
+                <td class="text-right num">{{ formatPrice(position.entry_price) }}</td>
+                <td class="text-right num text-short">{{ formatPrice(position.stop_loss) }}</td>
+                <td class="text-right num text-long">{{ formatPrice(position.take_profit) }}</td>
+                <td class="text-caption text-medium-emphasis">{{ formatTime(position.opened_at) }}</td>
+              </tr>
+            </tbody>
+          </v-table>
+        </div>
         <EmptyState
           v-else
           icon="mdi-flask-empty-outline"
@@ -124,32 +128,34 @@
       description="按周期 × 策略，扣成本前"
       spaced
     />
-    <v-table v-if="tracking.forward_stats.length > 0" density="compact">
-      <thead>
-        <tr>
-          <th class="text-left">周期</th>
-          <th class="text-left">策略</th>
-          <th class="text-right">样本</th>
-          <th v-for="bar in tracking.params.forward_bars" :key="bar" class="text-right">
-            T+{{ bar }}
-          </th>
-          <th class="text-right">胜率</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr v-for="row in tracking.forward_stats" :key="`${row.timeframe}-${row.strategy}`">
-          <td>{{ row.timeframe }}</td>
-          <td>{{ strategyLabel(row.strategy) }}</td>
-          <td class="text-right num">{{ row.samples }}</td>
-          <td v-for="bar in tracking.params.forward_bars" :key="bar" class="text-right num">
-            <span :class="pnlClass(Number(row[`h${bar}`]))">{{
-              formatSignedPercent(Number(row[`h${bar}`]))
-            }}</span>
-          </td>
-          <td class="text-right num">{{ row.h4_win ?? '—' }}%</td>
-        </tr>
-      </tbody>
-    </v-table>
+    <div v-if="tracking.forward_stats.length > 0" class="table-scroll">
+      <v-table density="compact">
+        <thead>
+          <tr>
+            <th class="text-left">周期</th>
+            <th class="text-left">策略</th>
+            <th class="text-right">样本</th>
+            <th v-for="bar in tracking.params.forward_bars" :key="bar" class="text-right">
+              T+{{ bar }}
+            </th>
+            <th class="text-right">胜率</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="row in tracking.forward_stats" :key="`${row.timeframe}-${row.strategy}`">
+            <td>{{ row.timeframe }}</td>
+            <td>{{ strategyLabel(row.strategy) }}</td>
+            <td class="text-right num">{{ row.samples }}</td>
+            <td v-for="bar in tracking.params.forward_bars" :key="bar" class="text-right num">
+              <span :class="pnlClass(Number(row[`h${bar}`]))">{{
+                formatSignedPercent(Number(row[`h${bar}`]))
+              }}</span>
+            </td>
+            <td class="text-right num">{{ row.h4_win ?? '—' }}%</td>
+          </tr>
+        </tbody>
+      </v-table>
+    </div>
     <EmptyState
       v-else
       icon="mdi-chart-timeline"

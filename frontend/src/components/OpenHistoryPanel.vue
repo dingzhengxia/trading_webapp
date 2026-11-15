@@ -53,7 +53,7 @@
             </div>
 
             <!-- 每笔结果（5 列 ≤ 降级判据，xs 保留横滚 + 首列 sticky） -->
-            <div class="open-history-scroll">
+            <div class="table-scroll">
               <v-table density="compact" class="open-history-table">
                 <thead>
                   <tr>
@@ -284,10 +284,8 @@ const snapshotDetail = (rec: OpenHistoryRecord) => {
   border-radius: 8px;
 }
 /* 列数判定：每笔结果表 5 列（币种/方向/目标价值/结果/说明）≤ 5，
-   按规格走「横滚 + 首列 sticky」，不做卡片化 */
-.open-history-scroll {
-  overflow-x: auto;
-}
+   按规格走「横滚 + 首列 sticky」，不做卡片化。
+   横滚容器统一用全局 .table-scroll（base.css），避免页面被撑宽后拉坏底部 Tab 栏 */
 .open-history-table :is(th, td):first-child {
   position: sticky;
   left: 0;

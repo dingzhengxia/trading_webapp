@@ -4,6 +4,8 @@
 """
 from __future__ import annotations
 
+import dataclasses
+
 import pytest
 
 from app.core import database
@@ -235,6 +237,58 @@ def test_stop_never_lands_above_price_for_long():
     for act in actions:
         if act["type"] == "stop":
             assert act["price"] < level - 1.0
+
+
+# ---------------------------------------------------------------------------
+# 交易所 STOP 是真相源：手动撤单要补挂、手动改价要纠正账本
+# ---------------------------------------------------------------------------
+def _snap_with_exchange(price=100.0, exchange_stop=0.0, checked=True):
+    # Snapshot 是 frozen dataclass：只能 replace，不能原地赋值
+    return dataclasses.replace(
+        _snap(price=price, now=1000.0),
+        exchange_stop=exchange_stop, exchange_checked=checked)
+
+
+def test_missing_exchange_stop_is_restored():
+    """用户在币安 App 里撤掉兜底 STOP：账本还记着旧价，也必须补挂。"""
+    state = _state()
+    state["stop"] = 95.0  # 账本以为还有一张 95 的 STOP
+    actions = _apply(state, risk_model.decide(state, _snap_with_exchange(), CONF))
+    stops = [a for a in actions if a["type"] == "stop"]
+    assert stops, "交易所没有保护 STOP 时必须补挂，否则等于裸仓"
+    assert stops[0]["tag"] == "stop:restore"
+    assert stops[0]["price"] > 0
+    assert stops[0]["previous_stop"] == pytest.approx(95.0)
+
+
+def test_unchecked_exchange_keeps_ledger_baseline():
+    """没到核对窗口（exchange_checked=False）时行为不变，不能每轮重复挂单。"""
+    state = _state()
+    state["stop"] = 95.0
+    actions = _apply(state, risk_model.decide(state, _snap_with_exchange(checked=False), CONF))
+    assert [a for a in actions if a["type"] == "stop"] == []
+
+
+def test_exchange_stop_price_wins_over_stale_ledger():
+    """交易所在 96.9（比账本的 95 更优）：按交易所算推进，并把账本纠正回来。"""
+    state = _state()
+    state["stop"] = 95.0
+    actions = _apply(state, risk_model.decide(
+        state, _snap_with_exchange(exchange_stop=96.9), CONF))
+    assert [a for a in actions if a["type"] == "stop"] == []
+    assert state["stop"] == pytest.approx(96.9)
+
+
+def test_restore_keeps_price_below_market():
+    """补挂的 STOP 必须还在价格正确一侧，否则会变成立即成交的市价单。"""
+    state = _state()
+    state["stop"] = 99.0
+    price = state["plan"]["levels"][0] - 0.5  # 已经跌破 T1
+    actions = _apply(state, risk_model.decide(
+        state, _snap_with_exchange(price=price), CONF))
+    for act in actions:
+        if act["type"] == "stop":
+            assert act["price"] < price
 
 
 # ---------------------------------------------------------------------------

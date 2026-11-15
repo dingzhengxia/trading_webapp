@@ -97,11 +97,9 @@
         <div class="open-summary flex-grow-1">
           <div class="open-summary__line">
             <span class="open-summary__counts">
-              <span class="open-summary__count text-long">多 {{ compactCount(longCount) }}</span>
+              <span class="open-summary__count text-long">{{ sideSummary('long') }}</span>
               <span class="open-summary__sep"> · </span>
-              <span class="open-summary__count text-short">空 {{ compactCount(shortCount) }}</span>
-              <span class="open-summary__sep"> · 总价值 </span>
-              <span class="open-summary__count">{{ totalValueText }}</span>
+              <span class="open-summary__count text-short">{{ sideSummary('short') }}</span>
             </span>
             <span class="open-summary__sep"> · </span>
             <!-- 保存状态：变化时播报（读屏用户看不到黄点）。
@@ -236,9 +234,24 @@ const totalValue = computed<number | null>(() => {
   return values.reduce((sum, value) => sum + value, 0)
 })
 
-const totalValueText = computed(() =>
-  totalValue.value === null ? '—' : formatUsdCompact(totalValue.value),
-)
+/**
+ * 单个方向的摘要：币数 + 该方向的总价值。
+ * 以前这里只显示「总价值 = 多头 + 空头」，用户填了多头 3000、空头 2000 时看到的是 5000，
+ * 很容易误以为「我明明只填了 3000」；分开显示就不再有歧义。
+ */
+const sideSummary = (side: 'long' | 'short'): string => {
+  const current = draft.value
+  const label = side === 'long' ? '多' : '空'
+  if (!current) return `${label} —`
+  const enabled = side === 'long' ? current.enable_long_trades : current.enable_short_trades
+  if (!enabled) return `${label} 关`
+  const count = side === 'long' ? longCount.value : shortCount.value
+  const value = Number(
+    side === 'long' ? current.total_long_position_value : current.total_short_position_value,
+  )
+  const valueText = Number.isFinite(value) ? formatUsdCompact(value) : '—'
+  return `${label} ${compactCount(count)} 币 ${valueText}`
+}
 
 /**
  * 动作不可用的原因，按「用户能不能自己解决」排序：

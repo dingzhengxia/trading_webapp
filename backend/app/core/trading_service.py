@@ -262,6 +262,17 @@ class TradingService:
         ) + ([{'coin': c, 'value': v, 'side': 'sell'} for c, v in short_plan.items()] if config.get(
             'enable_short_trades') else [])]
 
+        # 开仓前先把「服务端最终拿到的金额」写进界面日志。
+        # 用户口径与实际下单金额不一致时（2026-11-15 反馈：填 3000 却开出 5000 多），
+        # 这一行是唯一能在下单当场就发现问题的凭据——不用事后翻订单历史反推。
+        planned_total = sum(float(item.get('value') or 0) for item in order_plan)
+        planned_detail = ' / '.join(
+            f"{item.get('coin')} {float(item.get('value') or 0):.0f}" for item in order_plan)
+        await log_message(
+            f"📋 开仓计划：{len(order_plan)} 个币，合计 {planned_total:.0f} USD"
+            + (f"（{planned_detail}）" if planned_detail else ""),
+            "info")
+
         # 开仓记录：先固化「当时选的币种/权重/总价值」快照，任务结束后逐笔落库
         snapshot = {
             'enable_long_trades': config.get('enable_long_trades'),

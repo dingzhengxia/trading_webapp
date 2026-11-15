@@ -250,6 +250,42 @@ def _maybe_replan(state: Dict[str, Any], plan: Dict[str, Any], structure,
     return (new_plan, reason) if new_plan else None
 
 
+# 每个 (symbol|side) 上次核对交易所 STOP 的时间
+LAST_STOP_VERIFY: Dict[str, float] = {}
+
+
+async def _exchange_stop_price(exchange, conf: Dict[str, Any], symbol: str, side: str,
+                               pos: Dict[str, Any], price: float,
+                               now: float) -> Optional[float]:
+    """交易所上真实存在的保护 STOP 触发价：0 = 查过了、没有；None = 本轮没查。
+
+    为什么必须查交易所而不是只信账本 state['stop']：账本记的是「我们上次挂了什么」，
+    用户可以在币安 App 里把那张单撤掉或改价。只看账本会出两种错：
+    · 手动撤单后永远不补挂 —— 决策算出的 desired 和账本里的旧价差不多，判定「无需推进」；
+    · 止损上移永远和旧价比，交易所那边其实早就没有兜底单了。
+    节流到 stop_verify_interval_sec（默认 15s），并复用 _find_stop_orders 的
+    orders_cache（TTL 10s），所以每个 symbol 最多 15s 一次 openOrders。
+    """
+    if not bool(conf.get('exchange_hard_stop_enabled', True)):
+        return None
+    key = f'{symbol}|{side}'
+    interval = max(0.0, _f(conf.get('stop_verify_interval_sec'), 15.0))
+    last = LAST_STOP_VERIFY.get(key)
+    if interval > 0 and last is not None and now - last < interval:
+        return None
+    LAST_STOP_VERIFY[key] = now
+    try:
+        stops = await engine._find_stop_orders(
+            exchange, symbol, side, pos, price, conf, force=False)
+    except Exception as exc:  # noqa: BLE001 - 查询失败退回账本口径，不影响本轮守护
+        logger.warning(f'[{symbol}/{side}] 核对交易所保护STOP失败: {exc}')
+        return None
+    if not stops:
+        return 0.0
+    trigger = engine._algo_trigger(stops[0])
+    return float(trigger) if trigger else 0.0
+
+
 async def _prepare(exchange, conf: Dict[str, Any], symbol: str, side: str,
                    pos: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     now = time.time()
@@ -349,11 +385,16 @@ async def _prepare(exchange, conf: Dict[str, Any], symbol: str, side: str,
         except Exception as exc:  # noqa: BLE001 - 接管失败不影响守护
             logger.warning(f'[{symbol}/{side}] 接管外部SL/TP/TS失败，下轮重试: {exc}')
 
+    # 交易所 STOP 事实核对（节流）：以交易所为准，才能发现「用户手动撤了/改了」
+    exchange_stop = await _exchange_stop_price(exchange, conf, symbol, side, pos, price, now)
+
     snap = risk_model.Snapshot(
         symbol=symbol, side=side, entry=_f(plan.get('entry'), entry),
         price=price, last_close=last_close, contracts=contracts,
         base_contracts=_f(state.get('base_contracts'), contracts),
         atr=atr, structure=structure, closed_ts=closed_ts, now=now,
+        exchange_stop=float(exchange_stop or 0.0),
+        exchange_checked=exchange_stop is not None,
     )
 
     decision = risk_model.decide(state, snap, conf)
@@ -579,8 +620,11 @@ async def _apply_stop(exchange, conf: Dict[str, Any], bundle: Dict[str, Any],
     if _dry_run(conf, state, str(act.get('tag') or 'stop')):
         return
 
+    # 补挂前强制刷新一次：条件单列表可能有秒级延迟，若刚补上的那张还没出现在缓存里，
+    # 直接用缓存会重复创建，很快变成「一仓多张 STOP」。
+    tag = str(act.get('tag') or '')
     stops = await engine._find_stop_orders(
-        exchange, symbol, side, pos, snap.price, conf, force=False)
+        exchange, symbol, side, pos, snap.price, conf, force=(tag == 'stop:restore'))
     if stops:
         current = engine._algo_trigger(stops[0])
         if current is not None:
@@ -603,6 +647,12 @@ async def _apply_stop(exchange, conf: Dict[str, Any], bundle: Dict[str, Any],
     ledger.log_event(symbol, side, 'stop',
                      f'{label} {desired:.8g}' + (f'（原 {previous:.8g}）' if previous > 0 else ''),
                      level='info', price=desired, trigger=str(act.get('tag') or ''))
+    # 补挂是「仓位曾经裸奔过」的信号，必须推送：用户手动撤单后通常不会再回来看页面
+    if str(act.get('tag') or '') == 'stop:restore':
+        send_alert(conf, '⚠️ 交易所止损单已不在，已重新挂出',
+                   f'[{symbol}] 兜底 STOP {desired:.8g}'
+                   + (f'（账本原记 {previous:.8g}）' if previous > 0 else ''),
+                   symbol=symbol)
 
 
 async def _execute(exchange, conf: Dict[str, Any], bundle: Dict[str, Any]) -> None:

@@ -135,6 +135,25 @@
   }
 }
 
+/* 横向溢出兜底（P0）：宽表必须在自己容器里横滚，绝不能把页面撑宽。
+   页面一旦横向溢出，手机浏览器会把「布局视口」拉到内容宽度，
+   position:fixed 的底部 Tab 栏 / 操作条随之铺满整条宽度 ——
+   表现就是「底部菜单被撑开、只看得到两个」。
+   overflow-x: clip 不创建滚动容器（不像 hidden 会连带影响 position: sticky），
+   老浏览器不支持时只是退回默认行为，不会更糟。 */
+html {
+  overflow-x: clip;
+}
+
+/* 宽表的统一横滚容器：配合 min-width: 0，先在内部消化溢出 */
+.table-scroll {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
 /* 底部 Tab 栏（手机专用，<md 渲染）：图标 + 10px 文字，触控区 ≥56px */
 .app-tabbar {
   position: fixed;

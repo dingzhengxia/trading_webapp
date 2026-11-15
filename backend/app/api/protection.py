@@ -47,6 +47,7 @@ NUMERIC_RANGES: Dict[str, tuple] = {
     'hard_stop_min_distance_pct': (0, 1, False),
     'dynamic_stop_max_distance_pct': (0, 1, False),
     'stop_maintenance_interval_sec': (1, 300, False),
+    'stop_verify_interval_sec': (0, 300, False),
     'status_log_interval_sec': (0, 86400, False),
     'stop_min_update_pct': (0, 1, False),
     # ---- v2 引擎参数 ----

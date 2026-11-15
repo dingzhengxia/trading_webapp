@@ -72,6 +72,8 @@ V2_DEFAULTS: Dict[str, Any] = {
     'trailing_atr_mult': 2.5,
     'stop_min_update_pct': 0.0015,
     'stop_min_update_atr_ratio': 0.15,
+    # 交易所保护 STOP 的事实核对间隔（秒）：0 = 不核对，纯账本口径（旧行为）
+    'stop_verify_interval_sec': 15.0,
     'action_retry_cooldown_sec': 90.0,
     'tier_maker_retries': 3,
     'tier_maker_only_until': 2,
@@ -132,6 +134,13 @@ class Snapshot:
     structure: Tuple[float, float, float] = (0.0, 0.0, 0.0)  # 7/26/83 根结构位
     closed_ts: int = 0
     now: float = 0.0
+    # 交易所上真实存在的兜底 STOP 触发价（0 = 查过但没找到）。
+    # 账本里的 state['stop'] 只是「我们上次挂了什么」，用户可以在交易所 App 里
+    # 手动撤单/改价，所以判断「要不要补挂/能不能上移」必须以交易所为准。
+    exchange_stop: float = 0.0
+    # 本轮是否真的查过交易所（节流：stop_verify_interval_sec）。
+    # False 时退回旧的账本口径，避免每 3 秒都打一次 openOrders。
+    exchange_checked: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -498,6 +507,12 @@ def decide(state: Dict[str, Any], snap: Snapshot, conf: Dict[str, Any]) -> Dict[
     stop_action = _stop_action(state, snap, plan, conf, tiers_done)
     if stop_action:
         actions.append(stop_action)
+    elif snap.exchange_checked and snap.exchange_stop > 0:
+        # 交易所 STOP 与账本不一致（例如用户在 App 里手动改过价）：以交易所为准回写账本。
+        # 不回写的话，下一轮还会拿账本旧值去比较，反复提议同一张单或长期卡在「无需推进」。
+        actual = _f(snap.exchange_stop)
+        if abs(_f(state.get('stop')) - actual) > max(actual * 1e-6, 1e-12):
+            patch['stop'] = actual
 
     return {'actions': actions, 'patch': patch, 'reason': 'ok'}
 
@@ -569,9 +584,22 @@ def _stop_action(state: Dict[str, Any], snap: Snapshot, plan: Dict[str, Any],
     if desired <= 0:
         return None
 
-    current = _f(state.get('stop'))
+    # 交易所没单：用户手动撤了 / 被触发 / 当初挂单失败。
+    # 这时不能拿账本里的旧价做「有没有推进」的比较——账本以为还在，就永远不会补挂。
+    ledger_stop = _f(state.get('stop'))
+    actual = _f(snap.exchange_stop) if snap.exchange_checked else 0.0
+    if snap.exchange_checked and actual <= 0:
+        if ledger_stop > 0:
+            return {'type': 'stop', 'price': desired, 'tag': 'stop:restore',
+                    'reason': '交易所STOP已不在（被撤销或已触发），重新挂出',
+                    'level': 'warning', 'previous_stop': ledger_stop}
+        # 账本里也没有：就是首次挂单，直接放兜底线，让内部四档先动作
+        return {'type': 'stop', 'price': desired, 'tag': 'stop:init',
+                'reason': '建立交易所兜底STOP', 'level': 'info', 'previous_stop': 0.0}
+
+    # 有交易所真相就用它当基准（可能被手动改过价），否则退回账本
+    current = actual if actual > 0 else ledger_stop
     if current <= 0:
-        # 首次挂单：直接放兜底线，让内部四档先动作
         return {'type': 'stop', 'price': desired, 'tag': 'stop:init',
                 'reason': '建立交易所兜底STOP', 'level': 'info', 'previous_stop': 0.0}
 

@@ -106,7 +106,7 @@
       </div>
 
       <!-- ============ sm+：表格（横滚 + 首列 sticky） ============ -->
-      <div class="d-none d-md-block signal-table-wrap">
+      <div class="d-none d-md-block table-scroll">
         <v-table density="compact" class="signal-table">
           <thead>
             <tr>
@@ -325,10 +325,7 @@ const plainMessage = (value: string): string =>
   overflow: hidden;
 }
 
-/* ---- sm+ 表格 ---- */
-.signal-table-wrap {
-  overflow-x: auto;
-}
+/* ---- sm+ 表格（横滚容器用全局 .table-scroll，见 base.css） ---- */
 .signal-table :deep(th) {
   white-space: nowrap;
   font-size: 11px;
