@@ -73,6 +73,10 @@
                 >配置权重</v-btn
               >
               <HelpTip :text="HELP.trading.weightBtn" />
+              <div v-if="longWeightWarning" class="text-caption text-warning mt-1">
+                {{ longWeightWarning }}
+              </div>
+
               <v-divider class="my-4"></v-divider>
               <v-switch
                 v-model="draft.enable_long_sl_tp"
@@ -626,6 +630,35 @@ const shortOutsidePool = computed(() =>
     (coin) => !(settingsStore.availableShortCoins ?? []).includes(coin),
   ),
 )
+
+/**
+ * 权重里存着「当前做多清单之外的币」。
+ * 这些键会被后端 _normalize_custom_weights 直接过滤；若一个都不剩，整个自定义权重
+ * 就等于没设 → 回退默认分配（BTC 40% / ETH 30% / 其余均分）。
+ * 2026-11-15 的「我设的是均分，BTC 怎么拿了 40%」就是这么来的：权重还停在美股那 7 个币上。
+ */
+const longStaleWeightCoins = computed(() => {
+  const saved = Object.keys(draft.value?.long_custom_weights ?? {})
+  if (saved.length === 0) return []
+  const list = draft.value?.long_coin_list ?? []
+  return saved.filter((coin) => !list.includes(coin))
+})
+const longWeightsIgnored = computed(
+  () =>
+    longStaleWeightCoins.value.length > 0 &&
+    longStaleWeightCoins.value.length === Object.keys(draft.value?.long_custom_weights ?? {}).length,
+)
+
+/** 权重与清单不匹配时的提示文案（空串 = 不显示） */
+const longWeightWarning = computed(() => {
+  const stale = longStaleWeightCoins.value
+  if (stale.length === 0) return ''
+  const names = stale.join('/')
+  if (longWeightsIgnored.value) {
+    return `权重里存的是 ${names}，都不在当前做多清单 → 这批按默认分配（BTC 40% / ETH 30% / 其余均分）执行。点「配置权重」重新保存一次即可。`
+  }
+  return `权重里有 ${names} 已不在清单，它们占的比例会重新分配给清单内的币。`
+})
 
 // SmartSelect 回写：草稿可能尚未灌入（hydrated 闸门），这里统一兜底
 const toList = (value: string | number | (string | number)[] | null | undefined): string[] =>

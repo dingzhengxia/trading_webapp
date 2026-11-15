@@ -67,8 +67,14 @@ def _allocate_by_weights(total_value: float, coins: List[str], weights: Dict[str
     final_weights: Dict[str, float] = dict(weights)
     assigned_total = sum(weights.values())
     unassigned = [coin for coin in coins if coin not in weights]
-    if unassigned and assigned_total < TOTAL_WEIGHT_BASE:
-        per_coin = (TOTAL_WEIGHT_BASE - assigned_total) / len(unassigned)
+    if unassigned:
+        if assigned_total < TOTAL_WEIGHT_BASE:
+            per_coin = (TOTAL_WEIGHT_BASE - assigned_total) / len(unassigned)
+        else:
+            # 已分配权重总和 ≥100（例如只给 BTC/ETH 设了 50/50）时，后来加进清单的币种
+            # 权重会算成 0 → 该币直接不出现在计划里，用户只看到「这个币怎么没开」。
+            # 按已分配权重的均值让它们参与分配（50/50 + 新币 → 33/33/33）。
+            per_coin = assigned_total / len(weights)
         for coin in unassigned:
             final_weights[coin] = per_coin
 
@@ -109,6 +115,26 @@ def _default_allocation(total_value: float, coins: List[str]) -> Dict[str, float
 
     value_per_coin = total_value / len(coins)
     return {coin: value_per_coin for coin in coins}
+
+
+def stale_weight_note(config: Dict[str, Any]) -> str:
+    """自查：存了自定义权重，但没有一个能对上当前做多清单时返回警告文案。
+
+    这是「我明明设了均分，BTC 却拿了 40%」的真实原因（2026-11-15）：权重里存的是
+    另一套币（美股 7 个各 14.29%），换回 BTC/ETH/BNB 后全部被过滤 → 回退默认分配，
+    而界面看不出任何异常。把这件事写进开仓日志，下次一眼就能看见。
+    """
+    if not isinstance(config, dict):
+        return ''
+    long_coins = _normalize_coin_list(config.get('long_coin_list'))
+    raw = config.get('long_custom_weights')
+    if not long_coins or not isinstance(raw, dict) or not raw:
+        return ''
+    if _normalize_custom_weights(raw, set(long_coins)):
+        return ''
+    saved = ' / '.join(sorted(str(key).strip().upper() for key in raw))
+    return (f"⚠️ 自定义权重里没有一个币在当前做多清单（存的是 {saved}），"
+            f"已回退默认分配；请在「配置权重」里重新保存一次")
 
 
 def calculate_trade_plan(config: Dict[str, Any]) -> Tuple[Dict[str, float], Dict[str, float]]:

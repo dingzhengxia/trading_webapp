@@ -23,7 +23,7 @@ from ..logic.manual_trade_logic import (
     normalize_action,
     validate_manual_items,
 )
-from ..logic.plan_calculator import calculate_trade_plan
+from ..logic.plan_calculator import calculate_trade_plan, stale_weight_note
 from ..logic.sl_tp_logic_async import cleanup_orphan_sltp_orders_async, set_tp_sl_for_position_async
 from ..models.schemas import ExecutionPlanRequest, ManualTradeRequest, SyncSltpRequest, TradePlanRequest
 
@@ -265,13 +265,23 @@ class TradingService:
         # 开仓前先把「服务端最终拿到的金额」写进界面日志。
         # 用户口径与实际下单金额不一致时（2026-11-15 反馈：填 3000 却开出 5000 多），
         # 这一行是唯一能在下单当场就发现问题的凭据——不用事后翻订单历史反推。
-        planned_total = sum(float(item.get('value') or 0) for item in order_plan)
-        planned_detail = ' / '.join(
-            f"{item.get('coin')} {float(item.get('value') or 0):.0f}" for item in order_plan)
+        # 多空必须分开写：合计一行写「5000」会被读成「我只填了 3000，怎么变成 5000」，
+        # 而真相往往是「多 3000 + 空 2000」，两个方向的钱被加在了一起。
+        def _side_text(label: str, plan: Dict[str, float]) -> str:
+            if not plan:
+                return ''
+            total = sum(float(v or 0) for v in plan.values())
+            detail = ' / '.join(f"{coin} {float(value or 0):.0f}" for coin, value in plan.items())
+            return f"{label} {len(plan)} 个币合计 {total:.0f} USD（{detail}）"
+
+        side_texts = [t for t in (_side_text('多', long_plan), _side_text('空', short_plan)) if t]
         await log_message(
-            f"📋 开仓计划：{len(order_plan)} 个币，合计 {planned_total:.0f} USD"
-            + (f"（{planned_detail}）" if planned_detail else ""),
+            "📋 开仓计划：" + ('｜'.join(side_texts) if side_texts
+                              else '无可开仓币种（请检查币种清单与总价值）'),
             "info")
+        stale = stale_weight_note(config)
+        if stale:
+            await log_message(stale, "warning")
 
         # 开仓记录：先固化「当时选的币种/权重/总价值」快照，任务结束后逐笔落库
         snapshot = {
