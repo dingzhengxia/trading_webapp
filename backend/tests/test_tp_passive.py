@@ -15,8 +15,8 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
-import dataclasses
 import inspect
+import math
 
 import pytest
 
@@ -313,3 +313,133 @@ def test_no_market_order_in_tp_path():
         assert "_market_reduce" not in src
         assert "marketable" not in src
     assert "create_market_order" not in inspect.getsource(tp_orders)
+
+
+# ---------------------------------------------------------------------------
+# 回归：不要每 3 秒撤单重挂（2026-11-15 BTC 订单历史被「已取消」刷屏）
+# ---------------------------------------------------------------------------
+class GridExchange(FakeExchange):
+    """数量按交易所网格向下取整的假交易所（Binance 就是这种行为）。"""
+
+    def __init__(self, step: float):
+        self.step = step
+
+    def amount_to_precision(self, symbol, qty):
+        return f"{math.floor(float(qty) / self.step) * self.step:.8f}"
+
+
+def _advance(bundle, seconds: float):
+    bundle["snap"] = dataclasses.replace(bundle["snap"], now=bundle["snap"].now + seconds)
+
+
+def _open_orders(monkeypatch):
+    async def fake_fetch(exchange, symbol, order_id, conf):
+        return {"id": order_id, "status": "open", "filled": 0.0,
+                "amount": 0.001, "price": 120.0}
+
+    monkeypatch.setattr(tp_orders, "fetch_tp_order", fake_fetch)
+
+
+def test_off_grid_qty_does_not_churn(tmp_db, monkeypatch):
+    """理论量 0.0015、交易所网格 0.001：取整后挂在 0.001，下一轮不能判「数量不符」。
+
+    这就是线上一屏「已取消」的根因：校对拿未取整的 0.0015 去比对已取整的 0.001，
+    相对误差 33% > 5% 阈值 → 每轮撤单重挂，永不停。
+    """
+    _patch_ticker(monkeypatch, [(99.0, 100.0)])
+    record = _patch_rest(monkeypatch)
+    _open_orders(monkeypatch)
+    exchange = GridExchange(0.001)
+    bundle = _bundle(price=100.0, contracts=0.0075)
+
+    _run(runner._ensure_tp_orders(exchange, CONF, bundle))
+    assert len(record["orders"]) == 1
+    assert record["orders"][0]["qty"] == pytest.approx(0.001)
+    assert bundle["state"]["tp_order"]["qty"] == pytest.approx(0.001)
+
+    # 之后连续几轮价格、仓位都不变：一次撤单都不该发生
+    for _ in range(5):
+        _advance(bundle, 9.0)
+        _run(runner._ensure_tp_orders(exchange, CONF, bundle))
+
+    assert record["canceled"] == [], "仓位与价格都没变，不应该撤单"
+    assert len(record["orders"]) == 1, "也不应该重复挂新单"
+
+
+def test_partial_fill_keeps_order_working(tmp_db, monkeypatch):
+    """部分成交：单子继续挂着吃剩余量，不能因为 qty 变了就撤掉重排。"""
+    _patch_ticker(monkeypatch, [(99.0, 100.0)])
+    record = _patch_rest(monkeypatch)
+    bundle = _bundle(price=100.0, contracts=10.0)
+    bundle["state"]["tp_order"] = {
+        "id": "tp1", "level": 0, "price": 120.0, "qty": 2.0,
+        "ts": 0.0, "checked_at": 0.0,
+    }
+
+    async def fake_fetch(exchange, symbol, order_id, conf):
+        return {"id": order_id, "status": "open", "filled": 0.5,
+                "amount": 2.0, "average": 120.0}
+
+    monkeypatch.setattr(tp_orders, "fetch_tp_order", fake_fetch)
+
+    _run(runner._ensure_tp_orders(FakeExchange(), CONF, bundle))
+
+    assert record["canceled"] == []
+    assert record["orders"] == []
+    # qty 保持「这张单总共卖多少」，已成交单独记；否则下一轮比对必然不等
+    assert bundle["state"]["tp_order"]["qty"] == pytest.approx(2.0)
+    assert bundle["state"]["tp_order"]["filled"] == pytest.approx(0.5)
+
+
+def test_rearm_is_throttled_when_just_replaced(tmp_db, monkeypatch):
+    """刚重挂过的单子即使数量对不上，也要等 tp_rearm_min_interval_sec 再动。"""
+    _patch_ticker(monkeypatch, [(99.0, 100.0)])
+    record = _patch_rest(monkeypatch)
+    _open_orders(monkeypatch)
+    bundle = _bundle(price=100.0, contracts=4.0)
+    # 单子 2.0 > 当前仓位 4.0 的一半，但没超仓；1 秒前刚挂出
+    bundle["state"]["tp_order"] = {
+        "id": "tp1", "level": 0, "price": 120.0, "qty": 2.0,
+        "ts": 999.0, "checked_at": 0.0,
+    }
+
+    _run(runner._ensure_tp_orders(FakeExchange(), CONF, bundle))
+
+    assert record["canceled"] == [], "刚重挂过就不要再撤单"
+    assert record["orders"] == []
+
+
+def test_dust_position_cancels_order_and_skips_level(tmp_db, monkeypatch):
+    """仓位已小于最小下单量：撤掉旧单并把该档标记完成，不要挂着超仓的单反复试。"""
+    _patch_ticker(monkeypatch, [(99.0, 100.0)])
+    record = _patch_rest(monkeypatch)
+    _open_orders(monkeypatch)
+    bundle = _bundle(price=100.0, contracts=0.0004)
+    bundle["state"]["tp_order"] = {
+        "id": "tp1", "level": 0, "price": 120.0, "qty": 0.001,
+        "ts": 0.0, "checked_at": 0.0,
+    }
+
+    _run(runner._ensure_tp_orders(GridExchange(0.001), CONF, bundle))
+
+    assert record["canceled"] == ["tp1"]
+    assert record["orders"] == []
+    assert bundle["state"]["tp_done"] == [0]
+
+
+def test_oversized_order_is_cancelled_immediately(tmp_db, monkeypatch):
+    """单子比仓位还大（结构减仓砍小）必须立刻撤，reduceOnly 超仓会变成超卖。"""
+    _patch_ticker(monkeypatch, [(99.0, 100.0)])
+    record = _patch_rest(monkeypatch)
+    _open_orders(monkeypatch)
+    bundle = _bundle(price=100.0, contracts=1.0)
+    bundle["state"]["tp_order"] = {
+        "id": "tp1", "level": 0, "price": 120.0, "qty": 2.0,
+        "ts": 999.0, "checked_at": 0.0,
+    }
+
+    _run(runner._ensure_tp_orders(FakeExchange(), CONF, bundle))
+
+    assert record["canceled"] == ["tp1"]
+    assert len(record["orders"]) == 1
+

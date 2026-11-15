@@ -771,12 +771,39 @@ async def _verify_tp_order(exchange, conf: Dict[str, Any], bundle: Dict[str, Any
         state.pop('tp_order', None)
         return True
     if filled > 0:
-        # 部分成交：剩余量按最新成交调整，下一轮核对用新的 qty
-        order['qty'] = max(0.0, qty - filled)
+        # 部分成交：保留原始下单量（qty 是「这张单总共要卖多少」，不是「还剩多少」）。
+        # 以前这里把 qty 改成剩余量，下一轮校对又拿它去比「本档应卖量」，必然不等 →
+        # 撤掉重挂，刚成交的那部分等于白排一次队，还多两次 REST。剩余量由交易所在
+        # 挂单里自己维护，我们只记录已成交。
         order['filled'] = filled
         logger.info(f'[{symbol}] 止盈单 TP{level + 1} 部分成交 {filled:.6g}，'
-                    f'剩余 {_f(order.get("qty")):.6g}')
+                    f'剩余 {max(0.0, qty - filled):.6g} 继续挂')
     return False
+
+
+def _desired_tp_qty(exchange, symbol: str, state: Dict[str, Any], plan: Dict[str, Any],
+                    contracts: float, level: int, conf: Dict[str, Any]) -> float:
+    """本档「交易所上应该挂多少」——挂单与校对共用同一口径（含精度取整）。
+
+    必须和真正下单走同一个取整函数。否则校对时拿「未取整的理论值」去比
+    「已按交易所网格取整的挂单量」，只要理论值不在网格上（几乎必然），
+    两者就永远差一档，于是每轮都判「数量不符」→ 撤单 → 重挂 → 仍不符……
+    2026-11-15 BTC 就是这个死循环：TP1 理论 0.0015、网格 0.001，
+    订单历史里每 3 秒一张「已取消」，一屏能被刷满。
+    """
+    raw = risk_model.tp_order_qty(state, plan, contracts, level, conf)
+    raw = min(raw, contracts)
+    if raw <= 0:
+        return 0.0
+    try:
+        qty = _f(exchange.amount_to_precision(symbol, raw))
+        if qty > contracts:
+            # 取整后反超持仓：reduceOnly 单超过持仓会被交易所拒（或部分成交），
+            # 按持仓本身再取一次整，仍超就当作挂不出去。
+            qty = _f(exchange.amount_to_precision(symbol, contracts))
+    except Exception:  # noqa: BLE001 - 精度换算失败按数量无效处理
+        return 0.0
+    return qty if 0 < qty <= contracts + 1e-12 else 0.0
 
 
 async def _place_next_tp_order(exchange, conf: Dict[str, Any],
@@ -793,13 +820,7 @@ async def _place_next_tp_order(exchange, conf: Dict[str, Any],
     if tp_price <= 0:
         return False
 
-    qty = risk_model.tp_order_qty(state, plan, snap.contracts, level, conf)
-    try:
-        qty = _f(exchange.amount_to_precision(symbol, qty))
-    except Exception:  # noqa: BLE001 - 精度换算失败按数量无效处理
-        qty = 0.0
-    # 精度换算可能四舍五入到比当前仓位还大，reduceOnly 单不能超过持仓
-    qty = min(qty, snap.contracts)
+    qty = _desired_tp_qty(exchange, symbol, state, plan, snap.contracts, level, conf)
     if qty <= 0:
         # 剩余仓位已经小于交易所最小下单量：这一档永远挂不出去，标记完成避免每轮重试
         logger.info(f'[{symbol}] TP{level + 1} 数量低于交易所精度'
@@ -844,20 +865,21 @@ async def _place_next_tp_order(exchange, conf: Dict[str, Any],
     return True
 
 
-def _tp_order_stale(order: Dict[str, Any], state: Dict[str, Any],
-                    snap: 'risk_model.Snapshot', plan: Dict[str, Any],
-                    conf: Dict[str, Any]) -> bool:
-    """在挂的止盈单数量与「现在应该挂多少」差超过 5% → 该撤了重挂。
+def _tp_order_stale(order: Dict[str, Any], want: float) -> bool:
+    """在挂止盈单的数量与「现在应该挂多少」是否真的不一致。
 
-    什么情况会不一致：结构破位先减了一档、部分成交、手工平掉一部分。
-    不校正的话，这张单会按旧数量挂着，成交时才发现没那么多仓位。
+    `want` 必须是由 `_desired_tp_qty` 算出的「已按交易所精度取整」的数量，
+    两边同口径才可能相等。以前这里拿未取整的理论值比已取整的挂单量、再用 5%
+    相对误差做阈值：数量本身只有 1~2 个网格步长，一档取整误差轻松超过 5%，
+    于是「什么都没变」也会被判成「变了」——每 3 秒撤一次重挂一次，永不停。
     """
-    level = int(_f(order.get('level')))
     have = _f(order.get('qty'))
-    want = risk_model.tp_order_qty(state, plan, snap.contracts, level, conf)
-    if have <= 0 or want <= 0:
+    if have <= 0:
         return False
-    return abs(have - want) > max(want * 0.05, 1e-12)
+    if want <= 0:
+        # 当前仓位已经挂不出这一档（低于交易所最小下单量）：撤掉，别再挂着超仓的单
+        return True
+    return abs(have - want) > max(want * 1e-6, 1e-12)
 
 
 async def _ensure_tp_orders(exchange, conf: Dict[str, Any],
@@ -887,16 +909,30 @@ async def _ensure_tp_orders(exchange, conf: Dict[str, Any],
     if order.get('id'):
         gone = await _verify_tp_order(exchange, conf, bundle, order)
         if not gone:
-            if not _tp_order_stale(order, state, snap, plan, conf):
+            level = int(_f(order.get('level')))
+            want = _desired_tp_qty(exchange, symbol, state, plan,
+                                   snap.contracts, level, conf)
+            if not _tp_order_stale(order, want):
                 return
-            # 仓位变了但单子还挂着：撤掉重挂，否则成交时会按旧数量下
+            # 仓位变了但单子还挂着：撤掉重挂，否则成交时会按旧数量下。
+            # 但先加一道防抖：只有「单子比仓位还大」（reduceOnly 会超卖，必须马上处理）
+            # 才允许无视间隔；其余情况同一档最短间隔 tp_rearm_min_interval_sec 才重挂一次，
+            # 免得任何判定抖动都变成刷屏式的撤单/重挂。
+            have = _f(order.get('qty'))
+            gap = max(0.0, _f(conf.get('tp_rearm_min_interval_sec'), 8.0))
+            too_soon = snap.now - _f(order.get('ts')) < gap
+            oversized = have > snap.contracts * 1.001
+            if too_soon and not oversized:
+                logger.debug(f'[{symbol}] 止盈挂单数量待校正 '
+                             f'（{have:.6g} → {want:.6g}），{gap:.0f}s 内已重挂过，稍后处理')
+                return
             try:
                 await tp_orders.cancel_tp_order(exchange, symbol, str(order['id']), conf)
             except Exception as exc:  # noqa: BLE001 - 撤不掉就下轮再试
                 logger.warning(f'[{symbol}] 撤销止盈挂单失败: {exc}')
                 return
-            logger.info(f'[{symbol}] 止盈挂单数量 {_f(order.get("qty")):.6g} 与当前仓位 '
-                        f'{snap.contracts:.6g} 不符，撤单重挂')
+            logger.info(f'[{symbol}] 止盈挂单数量 {have:.6g} 与当前应挂 {want:.6g} 不符，'
+                        f'撤单重挂（仓位 {snap.contracts:.6g}）')
             state.pop('tp_order', None)
         # 成交/终结/撤单后同一轮就补下一档，减少「价格冲过去了但下一档还没挂」的空窗
     await _place_next_tp_order(exchange, conf, bundle)

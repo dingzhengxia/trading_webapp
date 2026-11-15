@@ -69,6 +69,9 @@ V2_DEFAULTS: Dict[str, Any] = {
     # 全系统唯一允许吃单的路径只剩黑天鹅/灾难线的紧急全平。
     'tp_slice_cap': 0.5,             # 单档最多卖「当前剩余」的比例（防一刀清零）
     'tp_verify_interval_sec': 8.0,   # 挂单核对间隔（秒）；价格贴近 TP 时每轮都核对
+    # 同一档撤单重挂的最短间隔：数量对不上时不要每 3s 撤一次重挂一次（订单历史会刷满）。
+    # 唯一的例外是「挂单量 > 当前持仓」——reduceOnly 超仓会变成超卖，必须立刻撤。
+    'tp_rearm_min_interval_sec': 8.0,
     # 执行层（B/C）：
     'tier_marketable_retries': 3,     # maker 失败后吃单价重试次数
     'reduce_market_fallback': True,   # 吃单价也失败后允许市价兜底（三级降级最后一级）
