@@ -270,7 +270,9 @@ export interface SignalTracking {
     forward_bars: number[]
   }
   open_positions: PaperPosition[]
-  trades: Array<PaperPosition & { exit_price: number; pnl_pct: number; reason: string; bars_held: number }>
+  trades: Array<
+    PaperPosition & { exit_price: number; pnl_pct: number; reason: string; bars_held: number }
+  >
   paper_stats: PaperStats
   forward_stats: ForwardStatRow[]
 }
@@ -406,6 +408,10 @@ export interface ProtectionConfig {
   emergency_cooldown_sec?: number
   /** 开仓前黑天鹅预检：命中当前崩盘状态则不下单 */
   emergency_block_new_entries?: boolean
+  /** 止盈到价即走（吃单），不挂 maker 死等 */
+  tp_taker_first?: boolean
+  /** 止盈减仓量按「当前剩余」而不是「初始仓位」的比例 */
+  tp_reduce_by_remaining?: boolean
   exchange_hard_stop_enabled: boolean
   // 双轨治理 + 连续移动止损（v1/v2 引擎共用）
   take_over_external_stops?: boolean

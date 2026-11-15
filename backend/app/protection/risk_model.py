@@ -61,6 +61,13 @@ V2_DEFAULTS: Dict[str, Any] = {
     # 标定：首次触 TP 的 1m 里 ~50% 是插针（收盘回线下），且插针后 4h 内 93~96% 会再次触及——
     # 单轮单档让插针只卖掉第一档、保留阶梯，真突破也只多等 3s/档。
     'tp_one_level_per_round': True,
+    # 止盈执行口径（2026-11-15 BTC 反馈「才回调一点就减仓」）：
+    # · tp_taker_first：止盈直接吃单，不像结构减仓那样先挂 maker 死等 30s——
+    #   价格已越过目标位，maker 挂在卖一价，行情一回落就不成交，最后卖在回撤之后；
+    # · tp_reduce_by_remaining：止盈量按「当前剩余」的比例算。tp_ratios 是按初始仓位
+    #   设计的，结构破位先减掉大半后，再按初始比例卖会一刀清零（标称 25% 实际 -79%）。
+    'tp_taker_first': True,
+    'tp_reduce_by_remaining': True,
     # 执行层（B/C）：
     'tier_marketable_retries': 3,     # maker 失败后吃单价重试次数
     'reduce_market_fallback': True,   # 吃单价也失败后允许市价兜底（三级降级最后一级）

@@ -522,6 +522,18 @@ def _dry_run(conf: Dict[str, Any], state: Dict[str, Any], tag: str) -> bool:
     return True
 
 
+def _tp_target_note(state: Dict[str, Any], act: Dict[str, Any]) -> str:
+    """止盈动作在台账里补一句「目标价」，让「到过目标位却卖晚了」一眼可查。"""
+    tps = act.get('tps') or []
+    if not tps:
+        return ''
+    prices = [_f(x) for x in ((state.get('plan') or {}).get('tp_prices') or [])]
+    idx = int(tps[0])
+    if 0 <= idx < len(prices) and prices[idx] > 0:
+        return f"，目标 TP{idx + 1} {prices[idx]:.6g}"
+    return ''
+
+
 async def _apply_reduce(exchange, conf: Dict[str, Any], bundle: Dict[str, Any],
                         act: Dict[str, Any]) -> None:
     symbol, side = bundle['symbol'], bundle['side']
@@ -543,6 +555,18 @@ async def _apply_reduce(exchange, conf: Dict[str, Any], bundle: Dict[str, Any],
     ok, _ = await engine._two_source_price_ok(exchange, symbol, snap.price, side, conf)
     if not ok:
         logger.warning(f'[{symbol}] 双源价格不一致，本轮不执行 {tag}')
+        # 止盈被「双源价差过大」挡下来时以前完全静默，事后无法解释「为什么没卖」。
+        # 60s 节流，避免插针行情里刷屏。
+        if act.get('tps') and now - _f(state.get('skip_note_ts')) > 60:
+            state['skip_note_ts'] = now
+            ledger.log_event(symbol, side, 'skip',
+                             f"{act.get('reason') or tag} 暂缓：双源价差过大（现价 {snap.price:.6g}）",
+                             level='warning', trigger=tag)
+            ledger.save(symbol, side, state)
+        # 双源价差是插针行情下的常态，不是交易所故障：用短冷却快速重试。
+        # 原来入口处已写入 attempts[tag]=now，等于 90s 才允许再试——止盈会被这一段
+        # 卡到价格回落后才成交，用户看到的就是「回调了才减仓」。
+        attempts[tag] = now - cooldown + max(1.0, _f(conf.get('reduce_retry_fast_sec'), 10.0))
         return
 
     fresh = await engine._position_fresh(exchange, symbol, side, conf, priority='HIGH')
@@ -579,14 +603,30 @@ async def _apply_reduce(exchange, conf: Dict[str, Any], bundle: Dict[str, Any],
                        symbol=symbol)
         return
 
-    qty = min(current, base * _f(act.get('ratio')))
+    tiers = act.get('tiers') or []
+    is_tp = bool(act.get('tps'))
+    ratio = _f(act.get('ratio'))
+
+    # 减仓量的分母：
+    # · 结构破位按「初始仓位」——tier_ratios 合计 100%，每档是一块固定份额；
+    # · 止盈按「当前剩余」——tp_ratios 是给初始仓位设计的，但结构破位往往已经先减掉
+    #   大半，再按初始比例算就会变成一刀清零。2026-11-15 BTC：TP1 标称减 25%，
+    #   实际把剩余 0.014 砍到 0.003（-79%），用户体感就是「回调一点就把仓位清了」。
+    if is_tp and bool(conf.get('tp_reduce_by_remaining', True)):
+        qty = current * ratio
+    else:
+        qty = base * ratio
+    qty = min(current, qty)
     if qty <= 0:
         return
 
-    tiers = act.get('tiers') or []
     maker_only = True
     if tiers:
         maker_only = (max(tiers) + 1) <= int(_f(conf.get('tier_maker_only_until'), 2))
+    # 止盈要「到价即走」，不做 maker 死等：价格已经越过目标位，maker 挂在卖一价上，
+    # 只要行情回落就永远不成交，10s 撤单重挂更低的 ask，最后一笔卖在回撤之后。
+    # 2026-11-15 BTC：TP1 目标 65,504，价格早站上去过，实际到 65,5xx 回落时才成交。
+    skip_maker = is_tp and bool(conf.get('tp_taker_first', True))
 
     await engine._cancel_bot_reduce_orders(exchange, symbol, side, conf, reason=f'{tag}前')
     _, after = await engine._limit_reduce_with_maker_retry(
@@ -598,11 +638,17 @@ async def _apply_reduce(exchange, conf: Dict[str, Any], bundle: Dict[str, Any],
         # B 三级降级：maker(GTX) → 吃单价 → 市价兜底。市价只在最后一级，
         # 不再因 T1/T2 永久禁市价（reduce_market_fallback 开关可关回旧行为）。
         allow_market_fallback=bool(conf.get('reduce_market_fallback', True)),
-        maker_only=maker_only,
+        maker_only=maker_only, skip_maker=skip_maker,
     )
 
     if after >= current - max(1e-12, current * 1e-8):
         logger.warning(f'[{symbol}] {tag} 未成交（{current} -> {after}），保留档位下轮重试')
+        # 止盈未成交必须留痕：这是「价格到过目标位却没卖掉」的唯一证据，
+        # 以前只写 logger，用户侧完全看不到，只能事后觉得自己「被延后减仓」。
+        if is_tp:
+            ledger.log_event(symbol, side, 'skip',
+                             f"{act.get('reason') or tag} 未成交（{current:.6g} → {after:.6g}），下轮重试",
+                             level='warning', trigger=tag)
         # C 冷却分级：未成交 ≠ 交易所异常。行情在跑，未成交用短冷却快速重试；
         # 交易所报错走异常路径，仍按 action_retry_cooldown_sec(90s) 冷却。
         attempts[tag] = now - cooldown + max(1.0, _f(conf.get('reduce_retry_fast_sec'), 10.0))
@@ -618,7 +664,7 @@ async def _apply_reduce(exchange, conf: Dict[str, Any], bundle: Dict[str, Any],
     state['last_action_ts'] = now
     ledger.save(symbol, side, state)
 
-    text = f"{act.get('reason')}：{current:.6g} → {after:.6g}（减 {_f(act.get('ratio')):.0%}）"
+    text = f"{act.get('reason')}：{current:.6g} → {after:.6g}（减 {ratio:.0%}）{_tp_target_note(state, act)}"
     ledger.log_event(symbol, side, 'reduce', text, level=str(act.get('level') or 'warning'),
                      ratio=act.get('ratio'), after=after,
                      tiers=tiers, tps=act.get('tps') or [])

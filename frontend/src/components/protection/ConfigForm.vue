@@ -192,8 +192,8 @@
             </v-col>
           </v-row>
           <v-alert type="info" variant="tonal" density="compact" class="mt-3 text-caption">
-            四档合计应等于 100%：越破越重，T4 为全平档。交易所 STOP 只做兜底（灾难线再往外 1.5 ATR），
-            正常情况由这四档先动作；减一档，止损就推进到下一档。
+            四档合计应等于 100%：越破越重，T4 为全平档。交易所 STOP 只做兜底（灾难线再往外 1.5
+            ATR）， 正常情况由这四档先动作；减一档，止损就推进到下一档。
           </v-alert>
         </v-expansion-panel-text>
       </v-expansion-panel>
@@ -218,9 +218,7 @@
                 hide-details
                 @update:model-value="onBooleanSwitch(sw.key, $event)"
               >
-                <template #label>
-                  {{ sw.label }}<HelpTip :text="sw.help" />
-                </template>
+                <template #label> {{ sw.label }}<HelpTip :text="sw.help" /> </template>
               </v-switch>
             </v-col>
           </v-row>
@@ -293,8 +291,8 @@
           </v-row>
           <v-alert type="info" variant="tonal" density="compact" class="mt-3 text-caption">
             开关改动立即生效；数值参数改动后需点右上角「保存参数」。
-            接管开仓端止盈止损：开启后守护引擎会撤销开仓时挂的固定 SL/TP/TS 单（先确认自己的保护 STOP
-            已就位才撤，绝不裸仓），止盈止损由守护引擎独家管理。连续移动止损：浮盈达到触发 R
+            接管开仓端止盈止损：开启后守护引擎会撤销开仓时挂的固定 SL/TP/TS 单（先确认自己的保护
+            STOP 已就位才撤，绝不裸仓），止盈止损由守护引擎独家管理。连续移动止损：浮盈达到触发 R
             倍数后，止损线按 价格 ± ATR×倍数 平滑追踪（只在盈利方向推进）。
           </v-alert>
         </v-expansion-panel-text>
@@ -311,15 +309,8 @@ import PageCard from '@/components/PageCard.vue'
 import HelpTip from '@/components/HelpTip.vue'
 import { HELP } from '@/config/help'
 
-const {
-  form,
-  saving,
-  isDirty,
-  dirtyKeys,
-  saveConfig,
-  applySwitch,
-  revertChanges,
-} = useProtectionConfig()
+const { form, saving, isDirty, dirtyKeys, saveConfig, applySwitch, revertChanges } =
+  useProtectionConfig()
 
 const timeframes = ['15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d']
 
@@ -349,6 +340,16 @@ const booleanSwitches = [
     key: 'emergency_block_new_entries',
     label: '黑天鹅期间禁止开仓',
     help: HELP.protection.switchBlockEntries,
+  },
+  {
+    key: 'tp_taker_first',
+    label: '止盈立即吃单',
+    help: HELP.protection.switchTpTakerFirst,
+  },
+  {
+    key: 'tp_reduce_by_remaining',
+    label: '止盈按剩余仓位减',
+    help: HELP.protection.switchTpByRemaining,
   },
 ] as const
 

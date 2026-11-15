@@ -81,6 +81,10 @@ const form = reactive({
   // 连续移动止损：'step'=阶梯跳（现状）| 'continuous'=浮盈达标后按 ATR 平滑追踪
   trailing_stop_mode: 'step' as 'step' | 'continuous',
   trailing_trigger_r: 1,
+  // 止盈执行口径：到价即走（吃单）+ 按当前剩余仓位减，避免「maker 死等被拖到回落后成交」
+  // 和「结构破位已减大半再按初始比例卖 → 一刀清零」
+  tp_taker_first: true,
+  tp_reduce_by_remaining: true,
 })
 
 type FormState = typeof form
@@ -185,12 +189,12 @@ function applyConfig(config: Partial<ProtectionConfig>): void {
     'exchange_hard_stop_enabled',
     'take_over_external_stops',
     'emergency_block_new_entries',
+    'tp_taker_first',
+    'tp_reduce_by_remaining',
   ] as const) {
     if (typeof config[key] === 'boolean') form[key] = config[key] as boolean
   }
-  if (
-    config.trailing_stop_mode === 'step' || config.trailing_stop_mode === 'continuous'
-  ) {
+  if (config.trailing_stop_mode === 'step' || config.trailing_stop_mode === 'continuous') {
     form.trailing_stop_mode = config.trailing_stop_mode
   }
   const triggerR = Number(config.trailing_trigger_r)
@@ -200,10 +204,9 @@ function applyConfig(config: Partial<ProtectionConfig>): void {
 
 async function fetchEvents(limit = 80): Promise<void> {
   try {
-    const response = await api.get<{ events: ProtectionEventRow[] }>(
-      ENDPOINTS.protectionEvents,
-      { params: { limit } },
-    )
+    const response = await api.get<{ events: ProtectionEventRow[] }>(ENDPOINTS.protectionEvents, {
+      params: { limit },
+    })
     events.value = response.data.events ?? []
   } catch (error: unknown) {
     console.warn('获取仓位保护事件失败:', getErrorMessage(error))
@@ -265,10 +268,7 @@ async function patchConfig(
  * 开关类参数：改动即写回（失败的则回滚到改动前的值）。
  * 这类开关是二值状态，用户预期是「拨了就算数」，不该等「保存参数」。
  */
-async function applySwitch<K extends keyof FormState>(
-  key: K,
-  value: FormState[K],
-): Promise<void> {
+async function applySwitch<K extends keyof FormState>(key: K, value: FormState[K]): Promise<void> {
   const previous = rawForm[key as string]
   rawForm[key as string] = value
   const result = await patchConfig({ [key as string]: value })

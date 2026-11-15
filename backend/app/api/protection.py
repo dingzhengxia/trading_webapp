@@ -125,7 +125,8 @@ def _validate(conf: Dict[str, Any]) -> None:
         raise HTTPException(status_code=400, detail="take_over_external_stops 必须是布尔值。")
     if 'replan_enabled' in conf and not isinstance(conf['replan_enabled'], bool):
         raise HTTPException(status_code=400, detail="replan_enabled 必须是布尔值。")
-    for _bool_key in ('tp_one_level_per_round', 'reduce_market_fallback'):
+    for _bool_key in ('tp_one_level_per_round', 'reduce_market_fallback',
+                      'tp_taker_first', 'tp_reduce_by_remaining'):
         if _bool_key in conf and not isinstance(conf[_bool_key], bool):
             raise HTTPException(status_code=400, detail=f"{_bool_key} 必须是布尔值。")
 

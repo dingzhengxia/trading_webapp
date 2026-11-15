@@ -32,3 +32,18 @@ def test_emergency_timeframe_defaults_to_1h():
     """15m 的 3×ATR 只有 ~1%，一根普通阴线就构成「黑天鹅」——默认必须是 1h。"""
     assert DEFAULT_CONFIG['position_protection']['emergency_timeframe'] == '1h'
     assert V2_DEFAULTS['emergency_timeframe'] == '1h'
+
+
+# ---------------------------------------------- 止盈执行口径
+@pytest.mark.parametrize('key', ['tp_taker_first', 'tp_reduce_by_remaining'])
+def test_tp_execution_flags_accept_bool(key):
+    _validate({key: True})
+    _validate({key: False})
+
+
+@pytest.mark.parametrize('key', ['tp_taker_first', 'tp_reduce_by_remaining'])
+def test_tp_execution_flags_reject_non_bool(key):
+    with pytest.raises(HTTPException) as exc:
+        _validate({key: 'yes'})
+    assert exc.value.status_code == 400
+    assert key in exc.value.detail
