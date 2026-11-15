@@ -73,8 +73,8 @@
                 >配置权重</v-btn
               >
               <HelpTip :text="HELP.trading.weightBtn" />
-              <div v-if="longWeightWarning" class="text-caption text-warning mt-1">
-                {{ longWeightWarning }}
+              <div v-if="longWeightSummary" class="text-caption text-medium-emphasis mt-1">
+                实际分配：{{ longWeightSummary }}
               </div>
 
               <v-divider class="my-4"></v-divider>
@@ -572,7 +572,8 @@ import { computed, onBeforeUnmount, ref } from 'vue'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { useUiStore } from '@/stores/uiStore'
 import { useDraftSettings } from '@/composables/useDraftSettings'
-import { formatClockTime } from '@/utils/format'
+import { formatClockTime, formatFixed } from '@/utils/format'
+import { reconcileWeights } from '@/utils/weights'
 import SmartSelect from '@/components/SmartSelect.vue'
 import HelpTip from '@/components/HelpTip.vue'
 import { HELP } from '@/config/help'
@@ -632,32 +633,17 @@ const shortOutsidePool = computed(() =>
 )
 
 /**
- * 权重里存着「当前做多清单之外的币」。
- * 这些键会被后端 _normalize_custom_weights 直接过滤；若一个都不剩，整个自定义权重
- * 就等于没设 → 回退默认分配（BTC 40% / ETH 30% / 其余均分）。
- * 2026-11-15 的「我设的是均分，BTC 怎么拿了 40%」就是这么来的：权重还停在美股那 7 个币上。
+ * 实际生效的多头分配（权重与清单对齐后的结果）。
+ * 权重与清单在同一份草稿里、同一次保存中提交，所以这里显示的就是后端会用的那份；
+ * 旧实现只有一个「权重键对不上清单」的警告，说不清到底会怎么分 —— 现在直接把数字摊开。
  */
-const longStaleWeightCoins = computed(() => {
-  const saved = Object.keys(draft.value?.long_custom_weights ?? {})
-  if (saved.length === 0) return []
-  const list = draft.value?.long_coin_list ?? []
-  return saved.filter((coin) => !list.includes(coin))
-})
-const longWeightsIgnored = computed(
-  () =>
-    longStaleWeightCoins.value.length > 0 &&
-    longStaleWeightCoins.value.length === Object.keys(draft.value?.long_custom_weights ?? {}).length,
-)
-
-/** 权重与清单不匹配时的提示文案（空串 = 不显示） */
-const longWeightWarning = computed(() => {
-  const stale = longStaleWeightCoins.value
-  if (stale.length === 0) return ''
-  const names = stale.join('/')
-  if (longWeightsIgnored.value) {
-    return `权重里存的是 ${names}，都不在当前做多清单 → 这批按默认分配（BTC 40% / ETH 30% / 其余均分）执行。点「配置权重」重新保存一次即可。`
-  }
-  return `权重里有 ${names} 已不在清单，它们占的比例会重新分配给清单内的币。`
+const longWeightSummary = computed(() => {
+  const coins = draft.value?.long_coin_list ?? []
+  if (coins.length === 0) return ''
+  const weights = reconcileWeights(coins, draft.value?.long_custom_weights)
+  return coins
+    .map((coin) => `${coin} ${formatFixed(weights[coin] ?? 0, 2)}%`)
+    .join(' · ')
 })
 
 // SmartSelect 回写：草稿可能尚未灌入（hydrated 闸门），这里统一兜底
@@ -677,10 +663,13 @@ const persistNow = async (force = false) => {
 
 // 选币等列表项立即提交（沿用原 patchSettings 即时保存行为）；
 // 其余字段由 useDraftSettings 内部的防抖 diff 提交兜底。
+// 关键：权重必须跟着清单一起改 —— 换清单后旧的权重键对不上，若不在这里同步，
+// 后端就会拿「上一套清单的权重」去凑，或退回一套隐藏默认值（历史 bug）。
 const setLongCoinList = (value: string | number | (string | number)[] | null | undefined) => {
   if (!draft.value) return
   const list = toList(value)
   draft.value.long_coin_list = list
+  draft.value.long_custom_weights = reconcileWeights(list, draft.value.long_custom_weights)
   if (list.length <= MAX_VISIBLE_CHIPS) isLongListExpanded.value = false
   void persistNow()
 }

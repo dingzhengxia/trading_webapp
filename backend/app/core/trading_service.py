@@ -23,7 +23,7 @@ from ..logic.manual_trade_logic import (
     normalize_action,
     validate_manual_items,
 )
-from ..logic.plan_calculator import calculate_trade_plan, stale_weight_note
+from ..logic.plan_calculator import calculate_trade_plan
 from ..logic.sl_tp_logic_async import cleanup_orphan_sltp_orders_async, set_tp_sl_for_position_async
 from ..models.schemas import ExecutionPlanRequest, ManualTradeRequest, SyncSltpRequest, TradePlanRequest
 
@@ -279,9 +279,6 @@ class TradingService:
             "📋 开仓计划：" + ('｜'.join(side_texts) if side_texts
                               else '无可开仓币种（请检查币种清单与总价值）'),
             "info")
-        stale = stale_weight_note(config)
-        if stale:
-            await log_message(stale, "warning")
 
         # 开仓记录：先固化「当时选的币种/权重/总价值」快照，任务结束后逐笔落库
         snapshot = {

@@ -79,9 +79,12 @@ function diffKeys(): Record<string, unknown> {
 /**
  * 把草稿差异提交到后端（经 settingsStore.patchSettings 的 {ok, detail} 语义）。
  * @param force true=不做 dirty 检查直接提交（手动「保存」按钮）
+ * @param alwaysInclude 即使与基线相同也一并提交的键。用于「权重必须和币种清单
+ *   在同一次请求里落定」：只改权重时也把 long_coin_list 带上，服务端才知道
+ *   这份权重是给哪个清单配的，不会拿上一次的清单去套。
  * @returns 是否提交成功（无差异视为成功）
  */
-export async function commitDraft(force = false): Promise<boolean> {
+export async function commitDraft(force = false, alwaysInclude: string[] = []): Promise<boolean> {
   if (!draft.value || commitInFlight) return false
   if (!force && !isDirty.value) {
     // 无差异也是一次“保存成功”（服务端状态已与草稿一致），同样要刷新时间戳，
@@ -93,6 +96,10 @@ export async function commitDraft(force = false): Promise<boolean> {
   commitInFlight = true
   const store = useSettingsStore()
   const payload = diffKeys()
+  const snapshot = draft.value as unknown as Record<string, unknown>
+  for (const key of alwaysInclude) {
+    if (snapshot[key] !== undefined) payload[key] = snapshot[key]
+  }
   let ok = true
   try {
     if (Object.keys(payload).length > 0) {

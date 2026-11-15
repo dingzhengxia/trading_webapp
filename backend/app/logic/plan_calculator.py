@@ -1,18 +1,19 @@
 # backend/app/logic/plan_calculator.py
 """自动开仓计划计算（纯函数，无 IO / 无打印）。
 
-规则：
+分配口径（只有一套，不存在隐藏默认值）：
 - 币种列表去空白、统一大写、去重、过滤非法值；
-- 自定义权重只保留合法币种 + 正权重；权重总和不等于 100 时按比例归一；
-- 自定义权重全部非法/为 0 时回退默认分配；
-- 默认分配保留 BTC 40% / ETH 30%（同时存在卫星币时）语义，其余均分。
+- 权重与币种清单**一同保存**（POST /api/settings 一次请求内对齐），默认均分；
+- 权重只对「当前清单里的币」生效：清单外的键直接丢弃，清单内的新币按剩余比例均分；
+- 权重总和不等于 100 时按比例归一，并归整到两位小数、尾差并入最后一项；
+- 因此「没设过权重」和「权重全部失效」都等于均分。
+
+历史教训（2026-11-15）：旧实现没设权重时按 BTC 40% / ETH 30% 分配，权重又按币名
+单独存、换清单不同步，于是「我设的是均分，BTC 却拿了 40%」。默认值必须只有一个：均分。
 """
 from typing import Any, Dict, List, Tuple
 
 TOTAL_WEIGHT_BASE = 100.0
-BTC_DEFAULT_WEIGHT = 0.40
-ETH_DEFAULT_WEIGHT = 0.30
-BTC_ETH_ONLY_WEIGHT = {'BTC': 0.60, 'ETH': 0.40}
 
 
 def _normalize_coin_list(coins: Any) -> List[str]:
@@ -59,82 +60,66 @@ def _normalize_custom_weights(weights: Any, coin_set: set) -> Dict[str, float]:
     return result
 
 
-def _allocate_by_weights(total_value: float, coins: List[str], weights: Dict[str, float]) -> Dict[str, float]:
-    """按权重分配总价值；未分配币种在剩余权重中均分。"""
-    if not weights or total_value <= 0:
+def _spread_evenly(coins: List[str]) -> Dict[str, float]:
+    """把 100% 均分到各币，两位小数，尾差并入最后一项（合计正好 100）。"""
+    if not coins:
         return {}
-
-    final_weights: Dict[str, float] = dict(weights)
-    assigned_total = sum(weights.values())
-    unassigned = [coin for coin in coins if coin not in weights]
-    if unassigned:
-        if assigned_total < TOTAL_WEIGHT_BASE:
-            per_coin = (TOTAL_WEIGHT_BASE - assigned_total) / len(unassigned)
-        else:
-            # 已分配权重总和 ≥100（例如只给 BTC/ETH 设了 50/50）时，后来加进清单的币种
-            # 权重会算成 0 → 该币直接不出现在计划里，用户只看到「这个币怎么没开」。
-            # 按已分配权重的均值让它们参与分配（50/50 + 新币 → 33/33/33）。
-            per_coin = assigned_total / len(weights)
-        for coin in unassigned:
-            final_weights[coin] = per_coin
-
-    total_weight = sum(final_weights.values())
-    if total_weight <= 0:
-        return {}
-    return {coin: total_value * weight / total_weight for coin, weight in final_weights.items()}
+    per_coin = round(TOTAL_WEIGHT_BASE / len(coins), 2)
+    result: Dict[str, float] = {}
+    accumulated = 0.0
+    for index, coin in enumerate(coins):
+        value = round(TOTAL_WEIGHT_BASE - accumulated, 2) if index == len(coins) - 1 else per_coin
+        result[coin] = value
+        accumulated = round(accumulated + value, 2)
+    return result
 
 
-def _default_allocation(total_value: float, coins: List[str]) -> Dict[str, float]:
-    """默认分配：BTC 40% + ETH 30%（有卫星币时），仅 BTC+ETH 时 60/40，其余均分。"""
-    if total_value <= 0 or not coins:
-        return {}
+def reconcile_weights(coins: Any, weights: Any) -> Dict[str, float]:
+    """把权重对齐到币种清单：键集合 = 清单，合计 = 100。
 
-    has_btc = 'BTC' in coins
-    has_eth = 'ETH' in coins
-    satellite_coins = [coin for coin in coins if coin not in ('BTC', 'ETH')]
-
-    if (has_btc or has_eth) and satellite_coins:
-        plan: Dict[str, float] = {}
-        remaining_value = total_value
-        if has_btc:
-            plan['BTC'] = total_value * BTC_DEFAULT_WEIGHT
-            remaining_value -= plan['BTC']
-        if has_eth:
-            plan['ETH'] = total_value * ETH_DEFAULT_WEIGHT
-            remaining_value -= plan['ETH']
-        value_per_satellite = max(remaining_value, 0.0) / len(satellite_coins)
-        for coin in satellite_coins:
-            plan[coin] = value_per_satellite
-        return plan
-
-    if has_btc and has_eth and not satellite_coins:
-        return {
-            'BTC': total_value * BTC_ETH_ONLY_WEIGHT['BTC'],
-            'ETH': total_value * BTC_ETH_ONLY_WEIGHT['ETH'],
-        }
-
-    value_per_coin = total_value / len(coins)
-    return {coin: value_per_coin for coin in coins}
-
-
-def stale_weight_note(config: Dict[str, Any]) -> str:
-    """自查：存了自定义权重，但没有一个能对上当前做多清单时返回警告文案。
-
-    这是「我明明设了均分，BTC 却拿了 40%」的真实原因（2026-11-15）：权重里存的是
-    另一套币（美股 7 个各 14.29%），换回 BTC/ETH/BNB 后全部被过滤 → 回退默认分配，
-    而界面看不出任何异常。把这件事写进开仓日志，下次一眼就能看见。
+    保存设置与计算计划共用这一个函数，保证「界面看到的」=「存进去的」=「下单用的」。
+    - 没有可用权重（没设过 / 全部对不上清单）→ 均分；
+    - 只覆盖部分币种 → 剩余比例由未覆盖的币均分（已分配已达 100 时按均值参与）；
+    - 清单外的键一律丢弃，不会留给下一套清单造成串味。
     """
-    if not isinstance(config, dict):
-        return ''
-    long_coins = _normalize_coin_list(config.get('long_coin_list'))
-    raw = config.get('long_custom_weights')
-    if not long_coins or not isinstance(raw, dict) or not raw:
-        return ''
-    if _normalize_custom_weights(raw, set(long_coins)):
-        return ''
-    saved = ' / '.join(sorted(str(key).strip().upper() for key in raw))
-    return (f"⚠️ 自定义权重里没有一个币在当前做多清单（存的是 {saved}），"
-            f"已回退默认分配；请在「配置权重」里重新保存一次")
+    ordered = _normalize_coin_list(coins)
+    if not ordered:
+        return {}
+
+    saved = _normalize_custom_weights(weights, set(ordered))
+    if not saved:
+        return _spread_evenly(ordered)
+
+    missing = [coin for coin in ordered if coin not in saved]
+    if missing:
+        assigned = sum(saved.values())
+        if assigned < TOTAL_WEIGHT_BASE:
+            share = (TOTAL_WEIGHT_BASE - assigned) / len(missing)
+        else:
+            # 只给 BTC/ETH 设了 50/50、之后又把 BNB 加进清单：按已分配权重的均值
+            # 参与分配，否则新币权重为 0 会直接从计划里消失。
+            share = assigned / len(saved)
+        for coin in missing:
+            saved[coin] = share
+
+    total = sum(saved.values())
+    if total <= 0:
+        return _spread_evenly(ordered)
+
+    result: Dict[str, float] = {}
+    accumulated = 0.0
+    last_index = len(ordered) - 1
+    for index, coin in enumerate(ordered):
+        if index == last_index:
+            value = round(TOTAL_WEIGHT_BASE - accumulated, 2)
+        else:
+            value = round(saved[coin] * TOTAL_WEIGHT_BASE / total, 2)
+        if value <= 0:
+            # 币种极多时两位小数的累计误差可能吃光最后一项，整体退回均分
+            return _spread_evenly(ordered)
+        result[coin] = value
+        accumulated = round(accumulated + value, 2)
+    return result
 
 
 def calculate_trade_plan(config: Dict[str, Any]) -> Tuple[Dict[str, float], Dict[str, float]]:
@@ -148,11 +133,20 @@ def calculate_trade_plan(config: Dict[str, Any]) -> Tuple[Dict[str, float], Dict
     long_coins = _normalize_coin_list(config.get('long_coin_list'))
     total_long_value = _positive_float(config.get('total_long_position_value'))
     if config.get('enable_long_trades', True) and long_coins and total_long_value > 0:
-        custom_weights = _normalize_custom_weights(config.get('long_custom_weights'), set(long_coins))
-        long_plan = _allocate_by_weights(total_long_value, long_coins, custom_weights)
-        if not long_plan:
-            # 自定义权重非法/总为 0：回退默认分配，不再静默返回空计划
-            long_plan = _default_allocation(total_long_value, long_coins)
+        weights = reconcile_weights(long_coins, config.get('long_custom_weights'))
+        total_weight = sum(weights.values())
+        if total_weight > 0:
+            # 按权重拆分，并把两位小数带来的尾差并入最后一个币：
+            # 合计始终等于用户填的总价值（否则日志里会出现「合计 2999.9」这种数）。
+            items = [(coin, weight) for coin, weight in weights.items() if weight > 0]
+            accumulated = 0.0
+            for index, (coin, weight) in enumerate(items):
+                if index == len(items) - 1:
+                    value = max(total_long_value - accumulated, 0.0)
+                else:
+                    value = total_long_value * weight / total_weight
+                    accumulated += value
+                long_plan[coin] = value
 
     short_coins = _normalize_coin_list(config.get('short_coin_list'))
     total_short_value = _positive_float(config.get('total_short_position_value'))

@@ -8,6 +8,7 @@ from ..config import config as app_config
 from ..core.dependencies import get_settings_dependency
 from ..core.exchange_manager import get_exchange_dependency
 from ..core.security import verify_api_key
+from ..logic.plan_calculator import reconcile_weights
 from ..logic.utils import resolve_full_symbol
 from ..models.schemas import AddCoinRequest, CoinPoolsUpdate, SettingsResponse
 from .validators import validate_numbers
@@ -116,6 +117,16 @@ def update_settings(
 
     # 非法值直接 400：避免 "" / 0 杠杆等直接进入下单与风控计算
     _validate_numeric_settings(updated_settings)
+
+    # 权重与币种清单在同一个接口内一起落定（2026-11-15 用户要求）：
+    # 权重按币名单独存，换清单时不会自动变，旧行为会把上一套清单的权重带到新清单上，
+    # 全对不上时还退回 BTC 40% / ETH 30%。这里在写入前把它们对齐——键集合 = 当前清单，
+    # 合计 = 100，没设过的币按均分补齐，清单外的键丢弃。
+    if 'long_coin_list' in updated_settings or 'long_custom_weights' in updated_settings:
+        merged = dict(current_settings)
+        merged.update(updated_settings)
+        updated_settings['long_custom_weights'] = reconcile_weights(
+            merged.get('long_coin_list'), merged.get('long_custom_weights'))
 
     current_settings.update(updated_settings)
     if app_config.save_settings(current_settings):
