@@ -56,13 +56,29 @@ class _Runtime:
 V2 = _Runtime()
 
 
+# 旧版本会把「默认值」原样存进 position_protection，于是升级默认值对老配置完全无效。
+# 值恰好等于旧默认时视为「用户没改过」，让它跟随新默认（2026-11-15 跟踪宽度 2.5→1.5）。
+LEGACY_DEFAULTS = {'trailing_atr_mult': 2.5, 'trailing_start_r': 1.0}
+
+
+def _is_legacy_default(key: str, value: Any) -> bool:
+    legacy = LEGACY_DEFAULTS.get(key)
+    if legacy is None:
+        return False
+    try:
+        return abs(float(value) - legacy) < 1e-9
+    except (TypeError, ValueError):
+        return False
+
+
 def load_config() -> Dict[str, Any]:
     """v2 参数 = V2_DEFAULTS ∪ 用户覆盖（用户没写的字段一律用默认值）。"""
     raw = load_protection_config().get('position_protection', {}) or {}
     conf = dict(risk_model.V2_DEFAULTS)
     for key, value in raw.items():
-        if value is not None:
-            conf[key] = value
+        if value is None or _is_legacy_default(key, value):
+            continue
+        conf[key] = value
     return conf
 
 

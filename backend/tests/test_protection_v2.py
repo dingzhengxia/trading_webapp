@@ -211,6 +211,67 @@ def test_breakeven_stop_after_half_r():
     assert stops[0]["price"] > 100.0
 
 
+def test_breakeven_stop_uses_atr_buffer():
+    """保本位 = 开仓价 + max(0.2%, 0.3×ATR)。ATR=2（占价 2%）时应落在 100.6，不是 100.2。
+
+    旧口径的 +0.2% 死数让保本单离现价只有半个 ATR 以内，1h 的普通回撤就能扫到
+    （2026-11-15：0.5R 保本 → 立刻被扫 → 行情继续走，吃不到大增幅）。
+    """
+    state = _state()
+    risk = state["plan"]["risk"]
+    actions = _apply(state, risk_model.decide(
+        state, _snap(price=100.0 + risk * 0.6, now=1000.0), CONF))
+    stops = [a for a in actions if a["type"] == "stop"]
+    assert stops and stops[0]["price"] == pytest.approx(100.6)
+
+
+def test_breakeven_keeps_price_pct_floor_when_atr_is_small():
+    """ATR 很小时退回价格比例下限 0.2%，不会把保本单贴到开仓价上。"""
+    state = _state()
+    risk = state["plan"]["risk"]
+    actions = _apply(state, risk_model.decide(
+        state, _snap(price=100.0 + risk * 0.6, atr=0.05, now=1000.0), CONF))
+    stops = [a for a in actions if a["type"] == "stop"]
+    assert stops and stops[0]["price"] == pytest.approx(100.2)
+
+
+def test_trailing_line_sits_1_5_atr_below_peak():
+    """浮盈 4R、峰值 106、ATR 2：止损 = 106 − 1.5×2 = 103。
+
+    旧口径 2.5 ATR 只会给到 101；这也是「0.5R~1.8R 完全没跟随」的同一处参数。
+    """
+    state = _state()
+    state["peak"] = 106.0
+    actions = _apply(state, risk_model.decide(state, _snap(price=106.0, now=1000.0), CONF))
+    stops = [a for a in actions if a["type"] == "stop"]
+    assert stops and stops[0]["price"] == pytest.approx(103.0)
+
+
+def test_trailing_line_below_breakeven_does_not_loosen_stop():
+    """浮盈刚过 0.5R（102.4）：peak−1.5ATR 还在保本下方 → 仍取保本位，绝不倒退。"""
+    state = _state()
+    risk = state["plan"]["risk"]
+    price = 100.0 + risk * 0.6
+    state["peak"] = price
+    actions = _apply(state, risk_model.decide(state, _snap(price=price, now=1000.0), CONF))
+    stops = [a for a in actions if a["type"] == "stop"]
+    assert stops and stops[0]["price"] == pytest.approx(100.6)
+
+
+def test_legacy_trailing_defaults_are_upgraded(monkeypatch):
+    """老配置把旧默认值（2.5 ATR / 1R 起点）原样存了下来，升级后必须跟随新默认；
+    用户真改过的值（0.8R 保本）不能被覆盖。"""
+    monkeypatch.setattr(runner, 'load_protection_config', lambda: {
+        'position_protection': {
+            'trailing_atr_mult': 2.5, 'trailing_start_r': 1.0, 'breakeven_trigger_r': 0.8,
+        },
+    })
+    conf = runner.load_config()
+    assert conf['trailing_atr_mult'] == pytest.approx(1.5)
+    assert conf['trailing_start_r'] == pytest.approx(0.5)
+    assert conf['breakeven_trigger_r'] == pytest.approx(0.8)
+
+
 def test_stop_never_widens():
     state = _state()
     state["stop"] = 95.0

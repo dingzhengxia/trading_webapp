@@ -381,6 +381,8 @@ export interface ProtectionConfig {
   risk_min_pct?: number
   risk_max_pct?: number
   breakeven_trigger_r?: number
+  /** 保本位至少距离开仓价多少个 ATR（与 breakeven_buffer_pct 取大） */
+  breakeven_atr_ratio?: number
   trailing_atr_mult?: number
   timeframe: string
   tp1_r_multiple: number

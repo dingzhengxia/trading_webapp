@@ -141,6 +141,23 @@
             </v-col>
             <v-col cols="12" sm="6" md="3">
               <v-text-field
+                v-model.number="form.breakeven_atr_ratio"
+                type="number"
+                step="0.1"
+                min="0"
+                max="5"
+                label="保本位缓冲（ATR 倍数）"
+                density="compact"
+                variant="outlined"
+                hide-details
+              >
+                <template #append-inner>
+                  <HelpTip :text="HELP.protection.breakevenAtrRatio" />
+                </template>
+              </v-text-field>
+            </v-col>
+            <v-col cols="12" sm="6" md="3">
+              <v-text-field
                 v-model.number="form.trailing_atr_mult"
                 type="number"
                 step="0.5"

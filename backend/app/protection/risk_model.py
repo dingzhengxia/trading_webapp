@@ -67,9 +67,16 @@ V2_DEFAULTS: Dict[str, Any] = {
     'reduce_retry_fast_sec': 10.0,    # 减仓未成交的快速重试冷却（交易所异常仍用 90s）
     'breakeven_trigger_r': 0.5,
     'breakeven_buffer_pct': 0.002,
+    # 保本位至少离开仓价 0.3×ATR（与价格比例取大）。
+    # 旧实现只有死数 +0.2%：1h ATR≈1% 时保本单离现价仅 0.55%，一次普通回撤就被扫掉，
+    # 结果是「0.5R 保本 → 立刻被扫 → 行情继续涨」（2026-11-15 用户反馈）。
+    'breakeven_atr_ratio': 0.3,
     'profit_lock_buffer_pct': 0.001,
-    'trailing_start_r': 1.0,
-    'trailing_atr_mult': 2.5,
+    # 追踪起点 0.5R（与保本同步；数学上无害——追踪线低于保本时 max() 仍取保本），
+    # 宽度 1.5 ATR：旧值 1.0R / 2.5 ATR 意味着浮盈 1R 时 peak−2.5ATR 还在开仓价下方，
+    # 实际要到 φ1.8R 才第一次上移，0.5R~1.8R 这段完全没有跟随。
+    'trailing_start_r': 0.5,
+    'trailing_atr_mult': 1.5,
     'stop_min_update_pct': 0.0015,
     'stop_min_update_atr_ratio': 0.15,
     # 交易所保护 STOP 的事实核对间隔（秒）：0 = 不核对，纯账本口径（旧行为）
@@ -543,15 +550,22 @@ def _stop_action(state: Dict[str, Any], snap: Snapshot, plan: Dict[str, Any],
         return None
 
     be_buf = max(0.0, _f(conf.get('breakeven_buffer_pct'), 0.002))
+    be_atr = max(0.0, _f(conf.get('breakeven_atr_ratio'), 0.3))
     lock_buf = max(0.0, _f(conf.get('profit_lock_buffer_pct'), 0.001))
     fr = floating_r(entry, risk, side, price)
     tp_done = set(_ints(state.get('tp_done')))
 
+    # 保本位：距开仓价 max(价格比例, ATR 比例)。
+    # 只用固定 +0.2% 时，止损会贴在现价下方半个 ATR 以内，1h 上的普通回撤就能扫到，
+    # 于是「保本出局 + 行情继续走」反复发生。ATR 缓冲随波动自适应。
+    be_offset = max(entry * be_buf, atr * be_atr)
+    be_price = entry + be_offset if side == 'long' else entry - be_offset
+
     candidates = [_f(plan.get('disaster_stop')) or levels[3]]
     if fr is not None and fr >= _f(conf.get('breakeven_trigger_r'), 0.5):
-        candidates.append(entry * (1 + be_buf) if side == 'long' else entry * (1 - be_buf))
+        candidates.append(be_price)
     if 0 in tp_done:
-        candidates.append(entry * (1 + be_buf) if side == 'long' else entry * (1 - be_buf))
+        candidates.append(be_price)
     if 1 in tp_done and plan.get('tp_prices'):
         tp1 = _f(plan['tp_prices'][0])
         if tp1 > 0:
@@ -563,8 +577,8 @@ def _stop_action(state: Dict[str, Any], snap: Snapshot, plan: Dict[str, Any],
         nxt = min(deepest + 1, 3)
         candidates.append(levels[nxt])
 
-    start_r = _f(conf.get('trailing_start_r'), 1.0)
-    mult = _f(conf.get('trailing_atr_mult'), 2.5)
+    start_r = _f(conf.get('trailing_start_r'), 0.5)
+    mult = _f(conf.get('trailing_atr_mult'), 1.5)
     if atr > 0 and fr is not None and fr >= start_r:
         peak = _f(state.get('peak'), price)
         trough = _f(state.get('trough'), price)

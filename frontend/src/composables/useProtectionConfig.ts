@@ -55,7 +55,10 @@ const form = reactive({
   risk_min_pct: 0.015,
   risk_max_pct: 0.08,
   breakeven_trigger_r: 0.5,
-  trailing_atr_mult: 2.5,
+  // 保本位至少离开仓价 0.3×ATR（与 0.2% 价格比例取大）；只给死数时保本单贴在现价半个
+  // ATR 以内，一次普通回撤就被扫掉
+  breakeven_atr_ratio: 0.3,
+  trailing_atr_mult: 1.5,
   timeframe: '2h',
   tp1_r_multiple: 1,
   tp2_r_multiple: 2,
@@ -156,6 +159,7 @@ function applyConfig(config: Partial<ProtectionConfig>): void {
     'risk_min_pct',
     'risk_max_pct',
     'breakeven_trigger_r',
+    'breakeven_atr_ratio',
     'trailing_atr_mult',
     'emergency_cooldown_sec',
   ] as const) {

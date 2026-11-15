@@ -60,6 +60,7 @@ NUMERIC_RANGES: Dict[str, tuple] = {
     'disaster_atr_buffer': (0, 20, False),
     'breakeven_trigger_r': (0.1, 100, False),
     'breakeven_buffer_pct': (0, 0.1, False),
+    'breakeven_atr_ratio': (0, 5, False),
     'profit_lock_buffer_pct': (0, 0.1, False),
     'trailing_start_r': (0, 100, False),
     'trailing_atr_mult': (0.5, 20, False),
