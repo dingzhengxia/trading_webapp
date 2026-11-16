@@ -14,7 +14,7 @@
   ``raw_rest_method`` 供已有自建 guardian 的子系统（protection / 行情层测试路径）
   解包原始方法，避免双重限流——它是唯一允许访问 ``.underlying`` 的辅助入口。
 """
-from typing import Any, Callable
+from typing import Any
 
 REST_PRIORITY: dict[str, str] = {
     # HIGH：交易关键，绕过熔断（仍受并发/最小间隔约束）

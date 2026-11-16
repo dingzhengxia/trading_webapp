@@ -9,7 +9,7 @@
 """
 import asyncio
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 from loguru import logger
 
@@ -25,19 +25,13 @@ _started_at: Optional[float] = None
 
 
 async def _run_engine() -> None:
-    """获取共享交易所实例并运行仓位保护主循环（按配置选择 v1 / v2 引擎）。"""
+    """获取共享交易所实例并运行 v2 仓位保护主循环。"""
     global _started_at
-    exchange = await get_shared_exchange()
-    _started_at = time.time()
-    conf = load_protection_config().get("position_protection", {})
-    version = str(conf.get("engine_version") or "v2").lower()
-    if version == "v1":
-        logger.info("🛡️ 使用 v1 仓位保护引擎（engine_version=v1）")
-        await engine.protect_positions_main(exchange)
-        return
     # 延迟导入：v2 依赖 engine 的下单原语，放模块顶部会形成循环导入
     from . import runner
-    logger.info("🛡️ 使用 v2 仓位保护引擎（engine_version=v2）")
+    exchange = await get_shared_exchange()
+    _started_at = time.time()
+    logger.info("🛡️ 使用 v2 仓位保护引擎")
     await runner.protect_positions_main_v2(exchange)
 
 
@@ -111,13 +105,10 @@ def protection_active_for(full_symbol: str, side: str) -> bool:
         conf = load_protection_config().get("position_protection", {})
         if not bool(conf.get("enabled", False)):
             return False
-        version = str(conf.get("engine_version") or "v2").lower()
-        if version == "v1":
-            return engine._state_key(full_symbol, side) in engine._load_state()
     except Exception as exc:  # noqa: BLE001 - 查询失败按"未接管"处理（主链路兜底）
         logger.warning(f"查询仓位保护接管状态失败（按未接管处理）: {exc}")
         return False
-    # v2：运行时活跃集合 或 一仓一行账本中已有该仓位
+    # 运行时活跃集合 或 一仓一行账本中已有该仓位
     from . import runner
     if (full_symbol, side) in getattr(runner.V2, 'active', set()):
         return True
@@ -126,32 +117,6 @@ def protection_active_for(full_symbol: str, side: str) -> bool:
         return ledger.load(full_symbol, side) is not None
     except Exception:  # noqa: BLE001
         return False
-
-
-def _position_row(symbol: str, side: str, position: Dict[str, Any]) -> Dict[str, Any]:
-    """把交易所仓位 + 引擎运行时状态整理成给前端的行。"""
-    key = engine._state_key(symbol, side)
-    state = engine.RUNTIME.runtime_position_states.get(key) or {}
-    return {
-        "symbol": symbol,
-        "side": side,
-        "contracts": engine._position_size(position),
-        "entry_price": engine._f(position.get("entryPrice"), 0.0),
-        "mark_price": engine._f(position.get("markPrice"), 0.0),
-        "stop_price": engine._f(state.get("last_stop_price"), None),
-        "protected_stop": engine._f(state.get("tp_protected_stop"), None),
-        "tp1_price": engine._f(state.get("tp1_price"), None),
-        "tp2_price": engine._f(state.get("tp2_price"), None),
-        "tp3_price": engine._f(state.get("tp3_price"), None),
-        "t1_done": bool(state.get("t1_done")),
-        "t2_done": bool(state.get("t2_done")),
-        "t3_done": bool(state.get("t3_triggered")),
-        "tp1_done": bool(state.get("tp1_triggered")),
-        "tp2_done": bool(state.get("tp2_triggered")),
-        "tp3_done": bool(state.get("tp3_triggered")),
-        "risk_cycle_started_at": state.get("risk_cycle_started_at"),
-        "position_version": state.get("position_version"),
-    }
 
 
 def _cooldown_snapshot(conf: Dict[str, Any]) -> Dict[str, Any]:
@@ -167,29 +132,9 @@ def _cooldown_snapshot(conf: Dict[str, Any]) -> Dict[str, Any]:
 def get_protection_status() -> Dict[str, Any]:
     """返回仓位保护运行状态（供 /api/protection 使用），不发起任何交易所请求。"""
     conf = load_protection_config().get("position_protection", {})
-    version = str(conf.get("engine_version") or "v2").lower()
     running = _engine_task is not None and not _engine_task.done()
 
-    if version == "v1":
-        rows: List[Dict[str, Any]] = []
-        for (symbol, side), position in list(engine.RUNTIME.global_positions_map.items()):
-            try:
-                rows.append(_position_row(symbol, side, position or {}))
-            except Exception as exc:  # noqa: BLE001 - 单行异常不应影响整体状态查询
-                logger.warning(f"整理仓位状态失败 {symbol}/{side}: {exc}")
-        return {
-            "engine_version": "v1",
-            "enabled": bool(conf.get("enabled", False)),
-            "running": running,
-            "started_at": _started_at,
-            "last_error": _last_error,
-            "timeframe": conf.get("timeframe"),
-            "positions": rows,
-            "api": engine.RUNTIME.rest.stats(),
-            "config": conf,
-        }
-
-    # v2：状态直接读账本（一仓一行），不发任何请求
+    # 状态直接读账本（一仓一行），不发任何请求
     from . import runner
     snapshot = runner.status()
     return {

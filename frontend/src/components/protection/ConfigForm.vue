@@ -48,182 +48,138 @@
                 :help="HELP.protection.emergencyTimeframe"
               ></SmartSelect>
             </v-col>
-            <v-col cols="12" sm="6" md="3">
-              <v-text-field
-                v-model.number="form.risk_min_pct"
-                type="number"
-                step="0.005"
-                min="0.001"
-                max="0.5"
-                label="最小单笔风险（占价格比例）"
-                density="compact"
-                variant="outlined"
-                hide-details
-              >
-                <template #append-inner>
-                  <HelpTip :text="HELP.protection.riskMinPct" />
-                </template>
-              </v-text-field>
-            </v-col>
-            <v-col cols="12" sm="6" md="3">
-              <v-text-field
-                v-model.number="form.risk_max_pct"
-                type="number"
-                step="0.01"
-                min="0.001"
-                max="0.5"
-                label="单笔最大亏损（灾难线）"
-                density="compact"
-                variant="outlined"
-                hide-details
-              >
-                <template #append-inner>
-                  <HelpTip :text="HELP.protection.riskMaxPct" />
-                </template>
-              </v-text-field>
-            </v-col>
-            <v-col cols="12" sm="6" md="3">
-              <v-text-field
-                v-model.number="form.t1_max_pct"
-                type="number"
-                step="0.005"
-                min="0.005"
-                max="0.5"
-                label="T1 最远距离（结构位封顶）"
-                density="compact"
-                variant="outlined"
-                hide-details
-              >
-                <template #append-inner>
-                  <HelpTip :text="HELP.protection.t1MaxPct" />
-                </template>
-              </v-text-field>
-            </v-col>
+            <NumberField
+              v-model="form.risk_min_pct"
+              label="最小单笔风险（占价格比例）"
+              step="0.005"
+              min="0.001"
+              max="0.5"
+              :help="HELP.protection.riskMinPct"
+              density="compact"
+              variant="outlined"
+              sm="6"
+              md="3"
+            />
+            <NumberField
+              v-model="form.risk_max_pct"
+              label="单笔最大亏损（灾难线）"
+              step="0.01"
+              min="0.001"
+              max="0.5"
+              :help="HELP.protection.riskMaxPct"
+              density="compact"
+              variant="outlined"
+              sm="6"
+              md="3"
+            />
+            <NumberField
+              v-model="form.t1_max_pct"
+              label="T1 最远距离（结构位封顶）"
+              step="0.005"
+              min="0.005"
+              max="0.5"
+              :help="HELP.protection.t1MaxPct"
+              density="compact"
+              variant="outlined"
+              sm="6"
+              md="3"
+            />
           </v-row>
           <v-row dense class="mt-1">
-            <v-col v-for="(_, i) in 4" :key="`tier-${i}`" cols="6" sm="3" md="3">
-              <v-text-field
-                v-model.number="form.tier_ratios[i]"
-                type="number"
-                step="0.05"
-                min="0"
-                max="1"
-                :label="`T${i + 1} 减仓比例${i === 3 ? '（全平档）' : ''}`"
-                density="compact"
-                variant="outlined"
-                hide-details
-              >
-                <template #append-inner>
-                  <HelpTip :text="HELP.protection.tierRatios" />
-                </template>
-              </v-text-field>
-            </v-col>
+            <NumberField
+              v-for="(_, i) in 4"
+              :key="`tier-${i}`"
+              v-model="form.tier_ratios[i]"
+              :label="`T${i + 1} 减仓比例${i === 3 ? '（全平档）' : ''}`"
+              step="0.05"
+              min="0"
+              max="1"
+              :help="HELP.protection.tierRatios"
+              density="compact"
+              variant="outlined"
+              cols="6"
+              sm="3"
+              md="3"
+            />
           </v-row>
           <v-row dense class="mt-1">
-            <v-col v-for="(_, i) in 4" :key="`confirm-${i}`" cols="6" sm="3" md="3">
-              <v-text-field
-                v-model.number="form.tier_confirm_sec[i]"
-                type="number"
-                step="5"
-                min="0"
-                max="600"
-                :label="`T${i + 1} 持续确认（秒）`"
-                density="compact"
-                variant="outlined"
-                hide-details
-              >
-                <template #append-inner>
-                  <HelpTip :text="HELP.protection.tierConfirmSec" />
-                </template>
-              </v-text-field>
-            </v-col>
+            <NumberField
+              v-for="(_, i) in 4"
+              :key="`confirm-${i}`"
+              v-model="form.tier_confirm_sec[i]"
+              :label="`T${i + 1} 持续确认（秒）`"
+              step="5"
+              min="0"
+              max="600"
+              :help="HELP.protection.tierConfirmSec"
+              density="compact"
+              variant="outlined"
+              cols="6"
+              sm="3"
+              md="3"
+            />
           </v-row>
           <v-row dense class="mt-1">
-            <v-col cols="12" sm="6" md="3">
-              <v-text-field
-                v-model.number="form.breakeven_trigger_atr"
-                type="number"
-                step="0.5"
-                min="0.2"
-                max="20"
-                label="保本触发（ATR 倍数）"
-                density="compact"
-                variant="outlined"
-                hide-details
-              >
-                <template #append-inner>
-                  <HelpTip :text="HELP.protection.breakevenTriggerAtr" />
-                </template>
-              </v-text-field>
-            </v-col>
-            <v-col cols="12" sm="6" md="3">
-              <v-text-field
-                v-model.number="form.breakeven_atr_ratio"
-                type="number"
-                step="0.1"
-                min="0"
-                max="5"
-                label="保本位缓冲（ATR 倍数）"
-                density="compact"
-                variant="outlined"
-                hide-details
-              >
-                <template #append-inner>
-                  <HelpTip :text="HELP.protection.breakevenAtrRatio" />
-                </template>
-              </v-text-field>
-            </v-col>
-            <v-col cols="12" sm="6" md="3">
-              <v-text-field
-                v-model.number="form.trailing_start_atr"
-                type="number"
-                step="0.5"
-                min="0.2"
-                max="20"
-                label="追踪起点（ATR 倍数）"
-                density="compact"
-                variant="outlined"
-                hide-details
-              >
-                <template #append-inner>
-                  <HelpTip :text="HELP.protection.trailingStartAtr" />
-                </template>
-              </v-text-field>
-            </v-col>
-            <v-col cols="12" sm="6" md="3">
-              <v-text-field
-                v-model.number="form.trailing_atr_mult"
-                type="number"
-                step="0.5"
-                min="0.5"
-                max="20"
-                label="追踪宽度（ATR 倍数）"
-                density="compact"
-                variant="outlined"
-                hide-details
-              >
-                <template #append-inner>
-                  <HelpTip :text="HELP.protection.trailingAtrMult" />
-                </template>
-              </v-text-field>
-            </v-col>
-            <v-col cols="12" sm="6" md="3">
-              <v-text-field
-                v-model.number="form.v2_poll_interval_sec"
-                type="number"
-                step="1"
-                min="1"
-                max="60"
-                label="巡检间隔（秒）"
-                density="compact"
-                variant="outlined"
-                hide-details
-              >
-                <template #append-inner>
-                  <HelpTip :text="HELP.protection.pollInterval" />
-                </template>
-              </v-text-field>
-            </v-col>
+            <NumberField
+              v-model="form.breakeven_trigger_atr"
+              label="保本触发（ATR 倍数）"
+              step="0.5"
+              min="0.2"
+              max="20"
+              :help="HELP.protection.breakevenTriggerAtr"
+              density="compact"
+              variant="outlined"
+              sm="6"
+              md="3"
+            />
+            <NumberField
+              v-model="form.breakeven_atr_ratio"
+              label="保本位缓冲（ATR 倍数）"
+              step="0.1"
+              min="0"
+              max="5"
+              :help="HELP.protection.breakevenAtrRatio"
+              density="compact"
+              variant="outlined"
+              sm="6"
+              md="3"
+            />
+            <NumberField
+              v-model="form.trailing_start_atr"
+              label="追踪起点（ATR 倍数）"
+              step="0.5"
+              min="0.2"
+              max="20"
+              :help="HELP.protection.trailingStartAtr"
+              density="compact"
+              variant="outlined"
+              sm="6"
+              md="3"
+            />
+            <NumberField
+              v-model="form.trailing_atr_mult"
+              label="追踪宽度（ATR 倍数）"
+              step="0.5"
+              min="0.5"
+              max="20"
+              :help="HELP.protection.trailingAtrMult"
+              density="compact"
+              variant="outlined"
+              sm="6"
+              md="3"
+            />
+            <NumberField
+              v-model="form.v2_poll_interval_sec"
+              label="巡检间隔（秒）"
+              step="1"
+              min="1"
+              max="60"
+              :help="HELP.protection.pollInterval"
+              density="compact"
+              variant="outlined"
+              sm="6"
+              md="3"
+            />
           </v-row>
           <v-alert type="info" variant="tonal" density="compact" class="mt-3 text-caption">
             <strong>四档怎么算：</strong>T1 = 最近的结构低点再往外 0.5×ATR（夹在「最小风险」与「T1
@@ -246,76 +202,64 @@
         </v-expansion-panel-title>
         <v-expansion-panel-text>
           <v-row dense>
-            <v-col v-for="(_, i) in 3" :key="`tp-r-${i}`" cols="6" sm="3" md="3">
-              <v-text-field
-                v-model.number="form.tp_r_multiples[i]"
-                type="number"
-                step="0.1"
-                min="0.1"
-                max="50"
-                :label="`TP${i + 1} 触发（R）`"
-                density="compact"
-                variant="outlined"
-                hide-details
-              >
-                <template #append-inner>
-                  <HelpTip :text="HELP.protection.tpRMultiple" />
-                </template>
-              </v-text-field>
-            </v-col>
+            <NumberField
+              v-for="(_, i) in 3"
+              :key="`tp-r-${i}`"
+              v-model="form.tp_r_multiples[i]"
+              :label="`TP${i + 1} 触发（R）`"
+              step="0.1"
+              min="0.1"
+              max="50"
+              :help="HELP.protection.tpRMultiple"
+              density="compact"
+              variant="outlined"
+              cols="6"
+              sm="3"
+              md="3"
+            />
           </v-row>
           <v-row dense class="mt-1">
-            <v-col v-for="(_, i) in 3" :key="`tp-ratio-${i}`" cols="6" sm="3" md="3">
-              <v-text-field
-                v-model.number="form.tp_ratios[i]"
-                type="number"
-                step="0.05"
-                min="0"
-                max="1"
-                :label="`TP${i + 1} 减仓比例`"
-                density="compact"
-                variant="outlined"
-                hide-details
-              >
-                <template #append-inner>
-                  <HelpTip :text="HELP.protection.tpRatio" />
-                </template>
-              </v-text-field>
-            </v-col>
-            <v-col cols="6" sm="3" md="3">
-              <v-text-field
-                v-model.number="form.tp_keep_ratio"
-                type="number"
-                step="0.05"
-                min="0"
-                max="0.9"
-                label="保留仓位（追踪）"
-                density="compact"
-                variant="outlined"
-                hide-details
-              >
-                <template #append-inner>
-                  <HelpTip :text="HELP.protection.tpKeepRatio" />
-                </template>
-              </v-text-field>
-            </v-col>
-            <v-col cols="6" sm="3" md="3">
-              <v-text-field
-                v-model.number="form.tp_breakout_confirm_pct"
-                type="number"
-                step="0.001"
-                min="0"
-                max="0.02"
-                label="突破确认（0.001=0.1%）"
-                density="compact"
-                variant="outlined"
-                hide-details
-              >
-                <template #append-inner>
-                  <HelpTip :text="HELP.protection.tpBreakoutConfirm" />
-                </template>
-              </v-text-field>
-            </v-col>
+            <NumberField
+              v-for="(_, i) in 3"
+              :key="`tp-ratio-${i}`"
+              v-model="form.tp_ratios[i]"
+              :label="`TP${i + 1} 减仓比例`"
+              step="0.05"
+              min="0"
+              max="1"
+              :help="HELP.protection.tpRatio"
+              density="compact"
+              variant="outlined"
+              cols="6"
+              sm="3"
+              md="3"
+            />
+            <NumberField
+              v-model="form.tp_keep_ratio"
+              label="保留仓位（追踪）"
+              step="0.05"
+              min="0"
+              max="0.9"
+              :help="HELP.protection.tpKeepRatio"
+              density="compact"
+              variant="outlined"
+              cols="6"
+              sm="3"
+              md="3"
+            />
+            <NumberField
+              v-model="form.tp_breakout_confirm_pct"
+              label="突破确认（0.001=0.1%）"
+              step="0.001"
+              min="0"
+              max="0.02"
+              :help="HELP.protection.tpBreakoutConfirm"
+              density="compact"
+              variant="outlined"
+              cols="6"
+              sm="3"
+              md="3"
+            />
           </v-row>
           <v-alert type="info" variant="tonal" density="compact" class="mt-3 text-caption">
             <strong>止盈由引擎判断：先突破，再回落才卖。</strong>
@@ -351,40 +295,30 @@
             </v-col>
           </v-row>
           <v-row dense class="mt-1">
-            <v-col cols="12" sm="6" md="3">
-              <v-text-field
-                v-model.number="form.emergency_cooldown_sec"
-                type="number"
-                step="60"
-                min="0"
-                max="86400"
-                label="黑天鹅后冷却（秒）"
-                density="compact"
-                variant="outlined"
-                hide-details
-              >
-                <template #append-inner>
-                  <HelpTip :text="HELP.protection.emergencyCooldown" />
-                </template>
-              </v-text-field>
-            </v-col>
-            <v-col cols="12" sm="6" md="3">
-              <v-text-field
-                v-model.number="form.hard_stop_min_distance_pct"
-                type="number"
-                step="0.01"
-                min="0"
-                max="1"
-                label="灾难止损最小距离 (比例)"
-                density="compact"
-                variant="outlined"
-                hide-details
-              >
-                <template #append-inner>
-                  <HelpTip :text="HELP.protection.hardStopMinDistance" />
-                </template>
-              </v-text-field>
-            </v-col>
+            <NumberField
+              v-model="form.emergency_cooldown_sec"
+              label="黑天鹅后冷却（秒）"
+              step="60"
+              min="0"
+              max="86400"
+              :help="HELP.protection.emergencyCooldown"
+              density="compact"
+              variant="outlined"
+              sm="6"
+              md="3"
+            />
+            <NumberField
+              v-model="form.hard_stop_min_distance_pct"
+              label="灾难止损最小距离 (比例)"
+              step="0.01"
+              min="0"
+              max="1"
+              :help="HELP.protection.hardStopMinDistance"
+              density="compact"
+              variant="outlined"
+              sm="6"
+              md="3"
+            />
           </v-row>
           <v-alert type="info" variant="tonal" density="compact" class="mt-3 text-caption">
             开关改动立即生效；数值参数改动后需点右上角「保存参数」。
@@ -404,6 +338,7 @@ import { useProtectionConfig } from '@/composables/useProtectionConfig'
 import SmartSelect from '@/components/SmartSelect.vue'
 import PageCard from '@/components/PageCard.vue'
 import HelpTip from '@/components/HelpTip.vue'
+import NumberField from '@/components/NumberField.vue'
 import { HELP } from '@/config/help'
 
 const { form, saving, isDirty, dirtyKeys, saveConfig, applySwitch, revertChanges } =

@@ -60,10 +60,6 @@ export interface ResolvedSymbol {
   available: boolean
 }
 
-export interface ResolveSymbolsResponse {
-  symbols: ResolvedSymbol[]
-}
-
 // 手动交易页持久化预设（保存在后端 settings 中）
 export interface ManualTradePreset {
   selected_coins: string[]

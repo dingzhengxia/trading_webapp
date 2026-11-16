@@ -75,15 +75,6 @@ export const pnlTone = (
 export const pnlClass = (value: number | string | null | undefined): string =>
   pnlTone(value).textClass
 
-/** 只要 class 的百分比场景 */
-export const pnlPercentClass = (value: number | string | null | undefined): string => {
-  const num = Number(value)
-  if (!Number.isFinite(num)) return 'text-medium-emphasis'
-  if (num > 0) return 'text-up'
-  if (num < 0) return 'text-down'
-  return 'text-medium-emphasis'
-}
-
 /** 开仓记录的 buy / sell / close 三态 */
 export const positionSideTone = (side: unknown): DirectionTone & { isClose: boolean } => {
   const raw = String(side ?? '').toLowerCase()

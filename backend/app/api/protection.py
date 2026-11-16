@@ -9,6 +9,7 @@ from ..config import config as app_config
 from ..core.security import verify_api_key
 from ..protection import ledger as protection_ledger
 from ..protection.service import get_protection_status, restart_protection
+from ..signals.config_store import deep_merge
 from .validators import validate_numbers
 
 router = APIRouter(prefix="/api/protection", tags=["Protection"],
@@ -86,7 +87,7 @@ NUMERIC_RANGES: Dict[str, tuple] = {
     'flat_confirm_sec': (0, 600, False),
 }
 
-ENGINE_VERSIONS = ('v1', 'v2')
+ENGINE_VERSIONS = ('v2',)
 
 
 def _validate_ratio_list(conf: Dict[str, Any], key: str, length: int,
@@ -111,16 +112,6 @@ def _validate_ratio_list(conf: Dict[str, Any], key: str, length: int,
     if sum(values) <= 0:
         raise HTTPException(status_code=400, detail=f"配置项 {key} 合计必须大于 0。")
     conf[key] = values
-
-
-def _deep_merge(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
-    result = dict(base or {})
-    for key, value in (override or {}).items():
-        if isinstance(value, dict) and isinstance(result.get(key), dict):
-            result[key] = _deep_merge(result[key], value)
-        else:
-            result[key] = value
-    return result
 
 
 def _validate_float_array(conf: Dict[str, Any], key: str, length: int,
@@ -243,7 +234,7 @@ async def update_protection_config(payload: Dict[str, Any] = Body(...)) -> Dict[
     if not isinstance(current, dict):
         current = {}
 
-    merged = _deep_merge(current, payload)
+    merged = deep_merge(current, payload)
     _validate(merged)
 
     settings['position_protection'] = merged

@@ -20,27 +20,13 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, onUnmounted } from 'vue'
 import { useProtectionConfig } from '@/composables/useProtectionConfig'
+import { usePolling } from '@/composables/usePolling'
 import ProtectionStatusCard from '@/components/protection/StatusCard.vue'
 import RiskSettingsPanel from '@/components/protection/RiskSettingsPanel.vue'
 import ConfigForm from '@/components/protection/ConfigForm.vue'
 
 const { fetchStatus } = useProtectionConfig()
 
-let pollTimer: number | undefined
-
-onMounted(async () => {
-  await fetchStatus()
-  pollTimer = window.setInterval(() => {
-    void fetchStatus()
-  }, 10000)
-})
-
-onUnmounted(() => {
-  if (pollTimer) {
-    clearInterval(pollTimer)
-    pollTimer = undefined
-  }
-})
+usePolling(fetchStatus, 10000, { immediate: true })
 </script>

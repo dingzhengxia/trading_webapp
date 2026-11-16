@@ -27,9 +27,7 @@ from .analysis.strategies import (
     check_ma_breakout, _get_params_for_timeframe,
 )
 from .market_data import STABLE_BASES
-from .config_store import (  # noqa: F401  (load_signal_config 保持旧导入路径可用)
-    FALLBACK_SIGNAL_CONFIG, SIGNAL_CONFIG_FILE, load_signal_config,
-)
+from .config_store import load_signal_config
 
 # 策略注册表：name -> (函数, K线数量 limit)（与 monitor signal_scanner.py 一致）
 STRATEGY_MAP: Dict[str, Dict[str, Any]] = {

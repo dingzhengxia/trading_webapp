@@ -141,7 +141,8 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, ref } from 'vue'
+import { usePolling } from '@/composables/usePolling'
 import api from '@/services/api'
 import { ENDPOINTS } from '@/services/endpoints'
 import MetricCard from '@/components/MetricCard.vue'
@@ -215,26 +216,14 @@ const fetchOverview = async (): Promise<void> => {
   }
 }
 
-let pollTimer: number | undefined
-
-onMounted(() => {
-  // 复用 positionStore 既有 action，不新增接口
-  void positionStore.fetchPositions()
-  void fetchOverview()
-  pollTimer = window.setInterval(() => {
-    if (document.visibilityState === 'visible') {
-      void positionStore.fetchPositions()
-      void fetchOverview()
-    }
-  }, POLL_INTERVAL_MS)
-})
-
-onUnmounted(() => {
-  if (pollTimer) {
-    window.clearInterval(pollTimer)
-    pollTimer = undefined
-  }
-})
+usePolling(
+  () => {
+    void positionStore.fetchPositions()
+    void fetchOverview()
+  },
+  POLL_INTERVAL_MS,
+  { immediate: true, visibility: true },
+)
 </script>
 
 <style scoped>

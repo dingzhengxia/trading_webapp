@@ -130,14 +130,6 @@ export async function commitDraft(force = false, alwaysInclude: string[] = []): 
   return ok
 }
 
-/** 立即丢弃草稿，重新从服务端 settings 灌入（外部数据刷新时使用） */
-export function hydrateDraft(): void {
-  const store = useSettingsStore()
-  if (store.settings) {
-    hydrateFromSnapshot(JSON.stringify(store.settings))
-  }
-}
-
 function ensureWatchers(): void {
   if (watchersReady) return
   watchersReady = true

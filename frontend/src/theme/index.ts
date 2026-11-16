@@ -15,7 +15,6 @@
  * 取值依据（浅色主题白底对比度）：
  *   #0E7A57 ≈ 5.3:1   #C22B3A ≈ 5.7:1   #5F6975 ≈ 5.6:1   —— 均通过 WCAG AA 4.5:1
  */
-export type AppThemeName = 'dark' | 'light'
 
 /** 深色主题：终端底色，避免纯黑，表面分层靠 2 级 surface */
 const darkColors = {

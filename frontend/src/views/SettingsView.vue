@@ -94,140 +94,95 @@
                       </template>
                     </v-select>
                   </v-col>
-                  <v-col cols="12" sm="6">
-                    <v-text-field
-                      label="平仓让价 tick 数（0=关闭）"
-                      v-model.number="settingsStore.settings.close_price_chase_ticks"
-                      type="number"
-                      min="0"
-                      max="10"
-                      hint="reduceOnly 平仓单连续 2 轮 0 成交后按 tick 让价重挂"
-                      persistent-hint
-                    >
-                      <template #append-inner>
-                        <HelpTip :text="HELP.settings.closeChaseTicks" />
-                      </template>
-                    </v-text-field>
-                  </v-col>
+                  <NumberField
+                    v-model="settingsStore.settings.close_price_chase_ticks"
+                    label="平仓让价 tick 数（0=关闭）"
+                    min="0"
+                    max="10"
+                    hint="reduceOnly 平仓单连续 2 轮 0 成交后按 tick 让价重挂"
+                    persistent-hint
+                    :help="HELP.settings.closeChaseTicks"
+                    sm="6"
+                  />
                 </v-row>
 
                 <SectionHeader icon="mdi-speedometer" title="API 限流（热更新）" spaced />
                 <v-row dense>
-                  <v-col cols="6" sm="3">
-                    <v-text-field
-                      label="最大并发"
-                      v-model.number="settingsStore.settings.api_max_concurrency"
-                      type="number"
-                      min="1"
-                      max="20"
-                      hide-details
-                    >
-                      <template #append-inner>
-                        <HelpTip :text="HELP.settings.apiMaxConcurrency" />
-                      </template>
-                    </v-text-field>
-                  </v-col>
-                  <v-col cols="6" sm="3">
-                    <v-text-field
-                      label="最小间隔(秒)"
-                      v-model.number="settingsStore.settings.api_min_interval_sec"
-                      type="number"
-                      min="0"
-                      max="5"
-                      step="0.01"
-                      hide-details
-                    >
-                      <template #append-inner>
-                        <HelpTip :text="HELP.settings.apiMinInterval" />
-                      </template>
-                    </v-text-field>
-                  </v-col>
-                  <v-col cols="6" sm="3">
-                    <v-text-field
-                      label="最大重试"
-                      v-model.number="settingsStore.settings.api_max_retries"
-                      type="number"
-                      min="1"
-                      max="10"
-                      hide-details
-                    >
-                      <template #append-inner>
-                        <HelpTip :text="HELP.settings.apiMaxRetries" />
-                      </template>
-                    </v-text-field>
-                  </v-col>
-                  <v-col cols="6" sm="3">
-                    <v-text-field
-                      label="熔断失败阈值"
-                      v-model.number="settingsStore.settings.api_failure_threshold"
-                      type="number"
-                      min="1"
-                      max="50"
-                      hide-details
-                    >
-                      <template #append-inner>
-                        <HelpTip :text="HELP.settings.apiFailureThreshold" />
-                      </template>
-                    </v-text-field>
-                  </v-col>
-                  <v-col cols="6" sm="3">
-                    <v-text-field
-                      label="熔断冷却(秒)"
-                      v-model.number="settingsStore.settings.api_circuit_breaker_cooldown_sec"
-                      type="number"
-                      min="1"
-                      max="3600"
-                      hide-details
-                    >
-                      <template #append-inner>
-                        <HelpTip :text="HELP.settings.apiCooldown" />
-                      </template>
-                    </v-text-field>
-                  </v-col>
-                  <v-col cols="6" sm="3">
-                    <v-text-field
-                      label="418 冷却(秒)"
-                      v-model.number="settingsStore.settings.api_418_cooldown_sec"
-                      type="number"
-                      min="1"
-                      max="3600"
-                      hide-details
-                    >
-                      <template #append-inner>
-                        <HelpTip :text="HELP.settings.api418Cooldown" />
-                      </template>
-                    </v-text-field>
-                  </v-col>
-                  <v-col cols="6" sm="3">
-                    <v-text-field
-                      label="429 退避基数(秒)"
-                      v-model.number="settingsStore.settings.api_429_base_backoff_sec"
-                      type="number"
-                      min="0.2"
-                      max="60"
-                      step="0.1"
-                      hide-details
-                    >
-                      <template #append-inner>
-                        <HelpTip :text="HELP.settings.api429Base" />
-                      </template>
-                    </v-text-field>
-                  </v-col>
-                  <v-col cols="6" sm="3">
-                    <v-text-field
-                      label="429 退避上限(秒)"
-                      v-model.number="settingsStore.settings.api_429_max_backoff_sec"
-                      type="number"
-                      min="0.2"
-                      max="600"
-                      step="0.1"
-                      hide-details
-                    >
-                      <template #append-inner>
-                        <HelpTip :text="HELP.settings.api429Max" />
-                      </template>
-                    </v-text-field>
-                  </v-col>
+                  <NumberField
+                    v-model="settingsStore.settings.api_max_concurrency"
+                    label="最大并发"
+                    min="1"
+                    max="20"
+                    :help="HELP.settings.apiMaxConcurrency"
+                    cols="6"
+                    sm="3"
+                  />
+                  <NumberField
+                    v-model="settingsStore.settings.api_min_interval_sec"
+                    label="最小间隔(秒)"
+                    min="0"
+                    max="5"
+                    step="0.01"
+                    :help="HELP.settings.apiMinInterval"
+                    cols="6"
+                    sm="3"
+                  />
+                  <NumberField
+                    v-model="settingsStore.settings.api_max_retries"
+                    label="最大重试"
+                    min="1"
+                    max="10"
+                    :help="HELP.settings.apiMaxRetries"
+                    cols="6"
+                    sm="3"
+                  />
+                  <NumberField
+                    v-model="settingsStore.settings.api_failure_threshold"
+                    label="熔断失败阈值"
+                    min="1"
+                    max="50"
+                    :help="HELP.settings.apiFailureThreshold"
+                    cols="6"
+                    sm="3"
+                  />
+                  <NumberField
+                    v-model="settingsStore.settings.api_circuit_breaker_cooldown_sec"
+                    label="熔断冷却(秒)"
+                    min="1"
+                    max="3600"
+                    :help="HELP.settings.apiCooldown"
+                    cols="6"
+                    sm="3"
+                  />
+                  <NumberField
+                    v-model="settingsStore.settings.api_418_cooldown_sec"
+                    label="418 冷却(秒)"
+                    min="1"
+                    max="3600"
+                    :help="HELP.settings.api418Cooldown"
+                    cols="6"
+                    sm="3"
+                  />
+                  <NumberField
+                    v-model="settingsStore.settings.api_429_base_backoff_sec"
+                    label="429 退避基数(秒)"
+                    min="0.2"
+                    max="60"
+                    step="0.1"
+                    :help="HELP.settings.api429Base"
+                    cols="6"
+                    sm="3"
+                  />
+                  <NumberField
+                    v-model="settingsStore.settings.api_429_max_backoff_sec"
+                    label="429 退避上限(秒)"
+                    min="0.2"
+                    max="600"
+                    step="0.1"
+                    :help="HELP.settings.api429Max"
+                    cols="6"
+                    sm="3"
+                  />
                 </v-row>
               </v-card-text>
             </v-window-item>
@@ -261,6 +216,7 @@ import CoinPoolsManager from '@/components/CoinPoolsManager.vue'
 import AppDockFooter from '@/components/AppDockFooter.vue'
 import PageSkeleton from '@/components/PageSkeleton.vue'
 import SectionHeader from '@/components/SectionHeader.vue'
+import NumberField from '@/components/NumberField.vue'
 import HelpTip from '@/components/HelpTip.vue'
 import { HELP } from '@/config/help'
 

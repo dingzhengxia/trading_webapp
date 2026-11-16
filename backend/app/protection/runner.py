@@ -5,12 +5,12 @@
 1. 不再「一仓一协程」：v1 里 44 个协程各自拉 K 线、各自 force 查挂单，请求量随
    仓位数量线性增长，只能靠熔断兜底。v2 一个循环批量拉仓位与 ticker，K 线/挂单
    全部走缓存，请求量基本恒定。
-2. 判断交给 risk_model（纯函数），执行复用 engine 里已验证的下单原语
+2. 判断交给 risk_model（纯函数），执行复用 exits/state 里已验证的下单原语
    （maker 循环、市价兜底、算法单兼容），所以「怎么下单」没有变。
 3. 状态一仓一行（ledger），不会出现跨币种整表覆盖。
 4. 每个动作写审计事件，能回看「什么时候、因为哪条线、减了多少」。
 
-可回滚：配置 `position_protection.engine_version` 设成 `v1` 即回到旧引擎。
+v1 轮询主循环已下线：engine_version 固定 v2，service 只调度本模块。
 """
 from __future__ import annotations
 

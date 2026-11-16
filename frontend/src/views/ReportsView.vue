@@ -233,7 +233,8 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
+import { usePolling } from '@/composables/usePolling'
 import api from '@/services/api'
 import { ENDPOINTS } from '@/services/endpoints'
 import { useSnackbarStore } from '@/stores/snackbar'
@@ -266,7 +267,6 @@ const reports = ref<ReportRow[]>([])
 const dingtalkEnabled = ref(false)
 const saving = ref(false)
 const selectedReport = ref<string>('')
-let pollTimer: number | undefined
 let initialised = false
 
 const enabledCount = computed(() => reports.value.filter((item) => item.enabled).length)
@@ -350,19 +350,10 @@ const runNow = async (reportName: string): Promise<void> => {
   }
 }
 
-onMounted(async () => {
-  await fetchStatus(true)
-  pollTimer = window.setInterval(() => {
-    void fetchStatus()
-  }, 15000)
+onMounted(() => {
+  void fetchStatus(true)
 })
-
-onUnmounted(() => {
-  if (pollTimer) {
-    clearInterval(pollTimer)
-    pollTimer = undefined
-  }
-})
+usePolling(fetchStatus, 15000)
 </script>
 
 <style scoped>
