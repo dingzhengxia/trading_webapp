@@ -90,11 +90,6 @@ class LiveExitExecutor:
         }
         self._save_state()
 
-    def unregister(self, symbol: str) -> None:
-        if str(symbol or '').upper() in self._positions:
-            self._positions.pop(str(symbol).upper(), None)
-            self._save_state()
-
     def snapshot(self) -> Dict[str, Any]:
         settings = self._settings_loader() or {}
         max_bars = int(settings.get('signal_paper_max_bars', 6) or 6)

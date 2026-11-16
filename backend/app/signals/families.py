@@ -29,22 +29,8 @@ STRATEGY_FAMILY: Dict[str, str] = {
     'consecutive_candles': 'candle_streak',
 }
 
-FAMILY_LABELS: Dict[str, str] = {
-    'trend': '趋势突破',
-    'level': '关键位',
-    'order_block': '订单块',
-    'volatility': '波动率',
-    'reversal': '反转',
-    'candle_streak': 'K线动能',
-}
-
 
 def family_of(strategy: str) -> str:
     """返回策略所属信号族；未登记的策略退化为「自身的族」（按策略名独立计）。"""
     key = str(strategy or '')
     return STRATEGY_FAMILY.get(key, key)
-
-
-def family_label(strategy: str) -> str:
-    fam = family_of(strategy)
-    return FAMILY_LABELS.get(fam, fam)

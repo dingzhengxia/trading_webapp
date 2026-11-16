@@ -1,6 +1,6 @@
 # backend/app/api/protection.py
 """仓位保护（Phase 3）API：状态查询与参数热更新。"""
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
 from fastapi import APIRouter, Body, Depends, HTTPException
 from loguru import logger
@@ -123,19 +123,37 @@ def _deep_merge(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any
     return result
 
 
+def _validate_float_array(conf: Dict[str, Any], key: str, length: int,
+                          parse: Callable[[Any], float] = float,
+                          check: Optional[Callable[[list], Optional[str]]] = None) -> None:
+    """通用数组参数校验（Extract Method：合并 4 段近似复制粘贴的校验块）。
+
+    长度固定 + 逐元素 float 转换（parse 可顺带清洗，如钳到 0）+ 整组约束
+    （check 返回错误文案或 None）；任一失败直接 400，合法值写回 conf[key]。
+    """
+    raw = conf.get(key)
+    if raw is None:
+        return
+    if not isinstance(raw, (list, tuple)) or len(raw) != length:
+        raise HTTPException(status_code=400, detail=f"{key} 必须是长度 {length} 的数组。")
+    try:
+        values = [parse(item) for item in raw]
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail=f"{key} 存在非数值元素。")
+    if check is not None:
+        problem = check(values)
+        if problem:
+            raise HTTPException(status_code=400, detail=problem)
+    conf[key] = values
+
+
 def _validate(conf: Dict[str, Any]) -> None:
     """校验仓位保护参数，非法值直接 400，避免写入会导致风控失灵的配置。"""
-    if 'enabled' in conf and not isinstance(conf['enabled'], bool):
-        raise HTTPException(status_code=400, detail="enabled 必须是布尔值。")
-    if 'dry_run' in conf and not isinstance(conf['dry_run'], bool):
-        raise HTTPException(status_code=400, detail="dry_run 必须是布尔值。")
-    if 'take_over_external_stops' in conf and not isinstance(conf['take_over_external_stops'], bool):
-        raise HTTPException(status_code=400, detail="take_over_external_stops 必须是布尔值。")
-    if 'replan_enabled' in conf and not isinstance(conf['replan_enabled'], bool):
-        raise HTTPException(status_code=400, detail="replan_enabled 必须是布尔值。")
-    for _bool_key in ('reduce_market_fallback',):
-        if _bool_key in conf and not isinstance(conf[_bool_key], bool):
-            raise HTTPException(status_code=400, detail=f"{_bool_key} 必须是布尔值。")
+    # 布尔开关统一循环校验（替代五段复制粘贴的 isinstance 检查）
+    for bool_key in ('enabled', 'dry_run', 'take_over_external_stops',
+                     'replan_enabled', 'reduce_market_fallback'):
+        if bool_key in conf and not isinstance(conf[bool_key], bool):
+            raise HTTPException(status_code=400, detail=f"{bool_key} 必须是布尔值。")
 
     mode = conf.get('trailing_stop_mode')
     if mode is not None and str(mode).lower() not in ('step', 'continuous'):
@@ -167,51 +185,21 @@ def _validate(conf: Dict[str, Any]) -> None:
     _validate_ratio_list(conf, 'tier_ratios', 4)
     _validate_ratio_list(conf, 'tp_ratios', 3)
 
-    confirm = conf.get('tier_confirm_sec')
-    if confirm is not None:
-        if not isinstance(confirm, (list, tuple)) or len(confirm) != 4:
-            raise HTTPException(status_code=400, detail="tier_confirm_sec 必须是长度 4 的数组。")
-        try:
-            conf['tier_confirm_sec'] = [max(0.0, float(x)) for x in confirm]
-        except (TypeError, ValueError):
-            raise HTTPException(status_code=400, detail="tier_confirm_sec 存在非数值元素。")
-
+    _validate_float_array(conf, 'tier_confirm_sec', 4,
+                          parse=lambda x: max(0.0, float(x)))
     # A 破位深度分级：深度阈值数组（严格递增）与确认乘数数组（0~1 之间）
-    depths = conf.get('tier_fast_depth_atr')
-    if depths is not None:
-        if not isinstance(depths, (list, tuple)) or len(depths) != 3:
-            raise HTTPException(status_code=400, detail="tier_fast_depth_atr 必须是长度 3 的数组。")
-        try:
-            dvals = [float(x) for x in depths]
-        except (TypeError, ValueError):
-            raise HTTPException(status_code=400, detail="tier_fast_depth_atr 存在非数值元素。")
-        if not (0 < dvals[0] < dvals[1] < dvals[2]):
-            raise HTTPException(status_code=400, detail="tier_fast_depth_atr 必须严格递增且大于 0。")
-        conf['tier_fast_depth_atr'] = dvals
-
-    fmults = conf.get('tier_fast_confirm_mult')
-    if fmults is not None:
-        if not isinstance(fmults, (list, tuple)) or len(fmults) != 4:
-            raise HTTPException(status_code=400, detail="tier_fast_confirm_mult 必须是长度 4 的数组。")
-        try:
-            mvals = [float(x) for x in fmults]
-        except (TypeError, ValueError):
-            raise HTTPException(status_code=400, detail="tier_fast_confirm_mult 存在非数值元素。")
-        if any(not (0.0 <= v <= 1.0) for v in mvals):
-            raise HTTPException(status_code=400, detail="tier_fast_confirm_mult 每个乘数必须在 0~1 之间。")
-        conf['tier_fast_confirm_mult'] = mvals
-
-    mults = conf.get('tp_r_multiples')
-    if mults is not None:
-        if not isinstance(mults, (list, tuple)) or len(mults) != 3:
-            raise HTTPException(status_code=400, detail="tp_r_multiples 必须是长度 3 的数组。")
-        try:
-            values = [float(x) for x in mults]
-        except (TypeError, ValueError):
-            raise HTTPException(status_code=400, detail="tp_r_multiples 存在非数值元素。")
-        if not (0 < values[0] < values[1] < values[2]):
-            raise HTTPException(status_code=400, detail="tp_r_multiples 必须严格递增且大于 0。")
-        conf['tp_r_multiples'] = values
+    _validate_float_array(
+        conf, 'tier_fast_depth_atr', 3,
+        check=lambda v: None if 0 < v[0] < v[1] < v[2]
+        else "tier_fast_depth_atr 必须严格递增且大于 0。")
+    _validate_float_array(
+        conf, 'tier_fast_confirm_mult', 4,
+        check=lambda v: None if all(0.0 <= x <= 1.0 for x in v)
+        else "tier_fast_confirm_mult 每个乘数必须在 0~1 之间。")
+    _validate_float_array(
+        conf, 'tp_r_multiples', 3,
+        check=lambda v: None if 0 < v[0] < v[1] < v[2]
+        else "tp_r_multiples 必须严格递增且大于 0。")
 
     if 'risk_min_pct' in conf and 'risk_max_pct' in conf:
         if float(conf['risk_min_pct']) >= float(conf['risk_max_pct']):

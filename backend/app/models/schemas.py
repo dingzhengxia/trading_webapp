@@ -197,6 +197,10 @@ class SignalConfigUpdate(BaseModel):
     signal_auto_trade_cooldown_seconds: Optional[int] = Field(None, ge=0, le=86400 * 7)
     signal_auto_trade_max_positions: Optional[int] = Field(None, ge=1, le=50)
     signal_auto_trade_value_usd: Optional[float] = Field(None, gt=0, le=1_000_000)
+    # 币股交易时段过滤（市场自动识别；时段为日内分钟区间 [start,end)）
+    signal_tradfi_session_filter_enabled: Optional[bool] = None
+    signal_tradfi_session_warmup_minutes: Optional[int] = Field(None, ge=0, le=720)
+    signal_tradfi_session_windows: Optional[Dict[str, List[List[int]]]] = None
     signal_dingtalk_enabled: Optional[bool] = None
     signal_push_volume_multiplier: Optional[float] = Field(None, ge=0, le=100)
     signal_paper_enabled: Optional[bool] = None

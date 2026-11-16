@@ -74,6 +74,27 @@ def _normalize_static_symbols(update: Dict[str, Any]) -> None:
     update['signal_scan_static_symbols'] = normalized
 
 
+def _validate_session_windows(update: Dict[str, Any]) -> None:
+    """币股时段覆盖校验：市场键必须存在，窗口为 [start,end) 分钟且 start<end。"""
+    windows = update.get('signal_tradfi_session_windows')
+    if windows is None:
+        return
+    from ..signals.trading_hours import DEFAULT_SESSIONS
+    if not isinstance(windows, dict):
+        raise HTTPException(status_code=400, detail="signal_tradfi_session_windows 必须是对象。")
+    for market, pairs in windows.items():
+        if str(market).upper() not in DEFAULT_SESSIONS:
+            raise HTTPException(status_code=400, detail=(
+                f"signal_tradfi_session_windows 含未知市场: {market}，"
+                f"可选: {', '.join(sorted(DEFAULT_SESSIONS))}"))
+        for pair in (pairs or []):
+            if not (isinstance(pair, (list, tuple)) and len(pair) == 2
+                    and all(isinstance(x, int) and not isinstance(x, bool) for x in pair)
+                    and 0 <= pair[0] < pair[1] <= 1440):
+                raise HTTPException(status_code=400, detail=(
+                    f"市场 {market} 的时段窗口非法: {pair}，应为 [start, end] 分钟且 start<end<=1440"))
+
+
 @router.get("")
 async def get_signals() -> Dict[str, Any]:
     """扫描状态 + 最近信号 + signal_* 配置 + 钉钉推送状态。"""
@@ -127,6 +148,7 @@ async def update_signal_config(payload: Dict[str, Any]) -> Dict[str, Any]:
     update = _parse_signal_config(payload)
     _validate_enum_fields(update)
     _normalize_static_symbols(update)
+    _validate_session_windows(update)
 
     settings = load_settings()
     settings.update(update)

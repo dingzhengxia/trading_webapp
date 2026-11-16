@@ -19,6 +19,8 @@ if str(BACKEND_DIR) not in sys.path:
 
 from app.core import database  # noqa: E402
 from app.core.rest_guardian import RestGuardian  # noqa: E402
+from app.signals import runtime  # noqa: E402
+from app.signals import trading_hours  # noqa: E402
 from app.signals.market_data import MarketDataService  # noqa: E402
 from app.signals.scanner import SignalScanner, build_scan_config  # noqa: E402
 from app.signals.signal_store import SignalStore  # noqa: E402
@@ -264,3 +266,66 @@ def test_scan_once_thread_dispatch_multiple_timeframes(monkeypatch):
     result = asyncio.run(scanner.scan_once())
     assert result['scanned_symbols'] == 2
     assert calls["count"] <= 4
+
+
+# ------------------------------------------------ 币股交易时段闸门（trading_hours）
+def test_scan_once_skips_tradfi_out_of_session(monkeypatch):
+    """币股非交易时段：不拉K线、不计算、不进本轮扫描，但保留排名缓存。"""
+    exchange = FakeScanExchange()
+    exchange.markets['ETH/USDC:USDC']['info'] = {
+        'underlyingType': 'EQUITY', 'underlyingSubType': ['TradFi']}
+    monkeypatch.setattr(trading_hours, 'scan_allowed', lambda *a, **k: (False, '非交易时段'))
+
+    scanner = _make_scanner(exchange, _settings())
+    result = asyncio.run(scanner.scan_once())
+
+    assert result['scanned_symbols'] == 1
+    assert {s for s, _ in exchange.fetch_ohlcv_calls} == {'BTC/USDC:USDC'}
+    records = _drain_queue()
+    assert all(r['full_symbol'] != 'ETH/USDC:USDC' for r in records)  # ETH 无信号入队
+    assert 'ETH/USDC:USDC' in runtime.cached_top_symbols  # 排名缓存不受时段影响
+
+
+def test_scan_once_filters_tradfi_candles(monkeypatch):
+    """币股交易时段内：拉K线后会话过滤，加密币不受影响。"""
+    exchange = FakeScanExchange()
+    exchange.markets['ETH/USDC:USDC']['info'] = {'underlyingType': 'KR_EQUITY'}
+    monkeypatch.setattr(trading_hours, 'scan_allowed', lambda *a, **k: (True, ''))
+    seen = []
+
+    def spy_filter(rows, market_key, overrides=None):
+        seen.append(market_key)
+        return rows  # 原样返回，保证形态信号仍正常产生
+
+    monkeypatch.setattr(trading_hours, 'filter_session_candles', spy_filter)
+
+    scanner = _make_scanner(exchange, _settings())
+    result = asyncio.run(scanner.scan_once())
+
+    assert result['scanned_symbols'] == 2
+    assert seen == ['KR']  # 只对币股做会话过滤（传入市场键），加密币不过滤
+    records = _drain_queue()
+    assert any(r['full_symbol'] == 'ETH/USDC:USDC' and r['strategy'] == 'ma_breakout'
+               for r in records)
+
+
+def test_tradfi_session_filter_disabled(monkeypatch):
+    """signal_tradfi_session_filter_enabled=False：币股与加密币一视同仁。"""
+    exchange = FakeScanExchange()
+    exchange.markets['ETH/USDC:USDC']['info'] = {
+        'underlyingType': 'EQUITY', 'underlyingSubType': ['TradFi']}
+    monkeypatch.setattr(trading_hours, 'scan_allowed', lambda *a, **k: (False, '非交易时段'))
+    seen = []
+
+    def spy_filter(rows, market_key, overrides=None):
+        seen.append(market_key)
+        return rows
+
+    monkeypatch.setattr(trading_hours, 'filter_session_candles', spy_filter)
+
+    scanner = _make_scanner(exchange, _settings(signal_tradfi_session_filter_enabled=False))
+    result = asyncio.run(scanner.scan_once())
+
+    assert result['scanned_symbols'] == 2
+    assert {s for s, _ in exchange.fetch_ohlcv_calls} == {'BTC/USDC:USDC', 'ETH/USDC:USDC'}
+    assert seen == []  # 会话过滤也未执行

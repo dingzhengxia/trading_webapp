@@ -12,6 +12,7 @@
 - 开关：全局 dingtalk_enabled（与报告共用）且 signal_dingtalk_enabled（信号子开关，默认开）。
 """
 import asyncio
+import re
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -97,7 +98,7 @@ def _format_price(price: Any) -> str:
     return f'{value:.6g}'
 
 
-def _format_item(index: int, record: Dict[str, Any]) -> str:
+def _format_item(index: int, record: Dict[str, Any], body: Optional[str] = None) -> str:
     direction = str(record.get('direction') or 'neutral').lower()
     label = _DIRECTION_LABEL.get(direction, '⚪ 中性')
     strategy = str(record.get('strategy') or 'unknown')
@@ -112,7 +113,8 @@ def _format_item(index: int, record: Dict[str, Any]) -> str:
     if isinstance(ratio, (int, float)) and ratio > 0 and ratio != float('inf'):
         meta += f" · 放量 `{ratio:.1f}x`"
 
-    body = str(record.get('message') or '').strip()
+    if body is None:
+        body = str(record.get('message') or '').strip()
     if len(body) > MAX_ITEM_CHARS:
         body = body[:MAX_ITEM_CHARS].rstrip() + '…'
 
@@ -122,8 +124,26 @@ def _format_item(index: int, record: Dict[str, Any]) -> str:
     return '\n'.join(lines)
 
 
+# 消息尾部的「成交量分析」块：vol_text 以 "\n---\n**成交量分析**…" 拼在模板最后
+_VOLUME_SPLIT_RE = re.compile(r'\n*-{3,}\s*\n\*{2}成交量分析\*\*[\s\S]*$')
+
+
+def split_volume_block(message: str) -> Tuple[str, str]:
+    """把消息尾部的「成交量分析」块剥离，返回 (正文, 成交量块)。无块时第二项为空。"""
+    match = _VOLUME_SPLIT_RE.search(message or '')
+    if not match:
+        return (message or '').strip(), ''
+    volume_block = match.group(0).strip().lstrip('-').strip()
+    return message[:match.start()].rstrip(), volume_block
+
+
 def format_signal_batch(records: List[Dict[str, Any]]) -> Tuple[str, str]:
-    """把一批信号格式化为 (通知标题, markdown 正文)。"""
+    """把一批信号格式化为 (通知标题, markdown 正文)。
+
+    同一币种同一周期的多条信号（指标入场 + 破位/离场类）合并为一组连续展示，
+    组内「成交量分析」只保留一份——同一根 K 线的量能数据完全相同，重复
+    展示只会刷屏。
+    """
     records = [r for r in records if isinstance(r, dict)]
     count = len(records)
     if count == 1:
@@ -131,11 +151,30 @@ def format_signal_batch(records: List[Dict[str, Any]]) -> Tuple[str, str]:
     else:
         title = f'🔔 币种信号 × {count}'
 
-    parts = [f"### 🔔 币种信号 · {count} 条", '']
+    # groups: {(symbol, timeframe): [(序号, 信号, 剥离成交量块后的正文)]}
+    # volume_blocks: 每组保留第一份非空成交量分析（同根K线数据完全相同）
+    groups: dict = {}
+    volume_blocks: dict = {}
     for index, record in enumerate(records, start=1):
-        if index > 1:
+        body, volume_block = split_volume_block(str(record.get('message') or ''))
+        key = (str(record.get('symbol') or '').upper(), str(record.get('timeframe') or '-'))
+        groups.setdefault(key, []).append((index, record, body))
+        if volume_block and key not in volume_blocks:
+            volume_blocks[key] = volume_block
+
+    parts = [f"### 🔔 币种信号 · {count} 条", '']
+    first_group = True
+    for key, items in groups.items():
+        if not first_group:
             parts.extend(['', '---', ''])
-        parts.append(_format_item(index, record))
+        first_group = False
+        for position, (index, record, body) in enumerate(items):
+            if position:
+                parts.append('')
+            parts.append(_format_item(index, record, body))
+        volume_block = volume_blocks.get(key)
+        if volume_block:
+            parts.extend(['', volume_block])
     return title, '\n'.join(parts)
 
 

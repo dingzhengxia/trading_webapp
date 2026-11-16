@@ -12,13 +12,14 @@
 import asyncio
 import time
 from datetime import datetime, timedelta, timezone
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import pandas as pd
 from loguru import logger
 
 from ..core.tasks import cancel_task
 from . import runtime
+from . import trading_hours
 from .analysis.strategies import (
     check_ema_signals, check_kdj_cross, check_volatility_breakout,
     check_level_breakout, check_rsi_divergence, check_consecutive_candles,
@@ -92,6 +93,35 @@ def _enabled_param_sets(config: Dict[str, Any], timeframe: str) -> List[tuple]:
                 continue
             result.append((name, info['func'], info['limit'], final_params, index))
     return result
+
+
+def _apply_session_gate(symbols: List[str], markets: Dict[str, Any],
+                        settings: Dict[str, Any]) -> Tuple[List[str], Dict[str, str], Dict]:
+    """币股交易时段闸门（Extract Function 自 _scan_cycle）。
+
+    代币化标的（美股/韩股/港股/商品等，市场自动识别自 Binance 元数据）在
+    非交易时段及开盘预热期内不扫描、不拉 K 线、不产生/推送信号。
+
+    返回 (可扫描列表, {full_symbol: 市场键}, 时段覆盖配置)；市场键表供
+    K 线会话过滤复用，开关关闭时为空表（币股与加密币一视同仁）。
+    """
+    windows = settings.get('signal_tradfi_session_windows') or {}
+    if not settings.get('signal_tradfi_session_filter_enabled', True):
+        return list(symbols), {}, windows
+    warmup = int(settings.get('signal_tradfi_session_warmup_minutes', 60) or 0)
+    tradfi_map = {s: key for s in symbols
+                  if (key := trading_hours.tradfi_market(s, markets))}
+    gated, scannable = [], []
+    for full_symbol in symbols:
+        market_key = tradfi_map.get(full_symbol)
+        ok = market_key is None or trading_hours.scan_allowed(
+            market_key, warmup_minutes=warmup, overrides=windows)[0]
+        (scannable if ok else gated).append(full_symbol)
+    if gated:
+        preview = ', '.join(f"{s.split('/')[0]}({tradfi_map[s]})" for s in sorted(gated)[:8])
+        logger.info(f"⏰ [币股] 非交易时段跳过 {len(gated)} 个标的（{preview}"
+                    f"{'…' if len(gated) > 8 else ''}），不拉K线不计算不推送")
+    return scannable, tradfi_map, windows
 
 
 class SignalScanner:
@@ -218,9 +248,13 @@ class SignalScanner:
             seen_bases.add(base)
             symbols.append(full_symbol)
 
-        # 更新热门币种缓存（indicators 动态排名依赖）
+        # 更新热门币种缓存（indicators 动态排名依赖；保持全量列表，
+        # 币股只在交易时段被跳过，排名口径不随时段变化）
         runtime.cached_top_symbols.clear()
         runtime.cached_top_symbols.extend(symbols)
+
+        # 币股交易时段闸门：非交易时段/开盘预热期内的代币化标的不进本轮扫描
+        symbols, tradfi_map, session_windows = _apply_session_gate(symbols, markets, settings)
 
         if not symbols:
             logger.info("本轮无目标币种（TopN 与静态列表均为空），跳过。")
@@ -252,6 +286,13 @@ class SignalScanner:
                 return [f"获取 {full_symbol} {timeframe} K线失败: {e}"]
             if not raw_ohlcv:
                 return errors
+            # 币股：先剔除非交易时段的 K 线再算指标（避免夜间死线稀释 MA/ATR）
+            market_key = tradfi_map.get(full_symbol)
+            if market_key is not None:
+                raw_ohlcv = trading_hours.filter_session_candles(
+                    raw_ohlcv, market_key, overrides=session_windows)
+                if not raw_ohlcv:
+                    return errors
             df = pd.DataFrame(raw_ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
             if df.empty:
                 return errors

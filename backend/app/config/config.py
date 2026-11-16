@@ -121,6 +121,16 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     # 推送量能门槛：静态币(signal_scan_static_symbols)实时全推，
     # 其它币要求成交量达到「当前量/动态基准」≥ 该倍数才推送；0 表示不过滤
     'signal_push_volume_multiplier': 2.0,
+    # 币股（TradFi 代币化标的：美股/韩股/港股/A股/贵金属能源等）交易时段过滤：
+    # 1) 非交易时段不扫描、不拉K线、不产生/推送信号；
+    # 2) 开盘后 warmup 分钟内同样不计算（开盘初期无形态可言）；
+    # 3) 计算指标前先剔除非交易时段的K线（等价 TradingView 的 session 过滤）。
+    # 市场自动识别自 Binance underlyingType（EQUITY/KR_EQUITY/HK_EQUITY/COMMODITY...），
+    # 时段默认 US 09:30-16:00 美东 / KR 09:00-15:30 首尔 / HK、CN 含午休；周末休市
+    'signal_tradfi_session_filter_enabled': True,
+    'signal_tradfi_session_warmup_minutes': 60,
+    # 市场时段覆盖（日内分钟区间 [start,end)，例 {"KR": [[540, 930]]}），空 = 用内置默认
+    'signal_tradfi_session_windows': {},
     # 纸面跟踪：复用自动开仓过滤链，只记录不下单
     'signal_paper_enabled': False,
     # ---- 统一出场层（实盘挂单 + 纸面跟踪共用 core/exit_rules.py 的同一份实现）----

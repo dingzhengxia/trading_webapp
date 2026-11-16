@@ -111,3 +111,37 @@ def test_item_shows_volume_ratio():
     # inf 与缺失不显示
     _, text2 = notifier.format_signal_batch([_rec(volume_ratio=float('inf'))])
     assert '`inf' not in text2 and 'x`' not in text2.replace('43,210.50', '')
+
+
+# ------------------------------------------------ 同币种成交量分析合并（去重刷屏）
+
+_VOL = ('\n---\n**成交量分析** (周期进行63%):\n'
+        '> **当前量**: 1637432 **(为动态基准的 10.1 倍)**\n'
+        '> **动态基准**: 162683 (已按时间调整)')
+
+
+def test_volume_block_deduped_for_same_symbol_and_timeframe():
+    """同币种同周期的多条信号（入场+离场类）合并成组，成交量分析只保留一份。"""
+    rec1 = _rec(symbol='XAG', timeframe='1h', strategy='ma_breakout',
+                message='**信号**: 价格实时 跌破 SMA(25) 均线。' + _VOL)
+    rec2 = _rec(symbol='XAG', timeframe='1h', strategy='trend_channel_breakout',
+                message='**信号**: 确认跌破上升回归通道。' + _VOL)
+    title, text = notifier.format_signal_batch([rec1, rec2])
+    assert title == '🔔 币种信号 × 2'
+    assert text.count('成交量分析') == 1
+    assert '跌破 SMA(25)' in text and '跌破上升回归通道' in text
+    # 同组内不出现分隔线（分隔线只出现在不同币组之间）
+    assert text.count('---') == 0
+
+
+def test_volume_block_kept_per_timeframe():
+    rec1 = _rec(symbol='XAG', timeframe='1h', message='a' + _VOL)
+    rec2 = _rec(symbol='XAG', timeframe='4h', message='b' + _VOL)
+    _, text = notifier.format_signal_batch([rec1, rec2])
+    assert text.count('成交量分析') == 2
+
+
+def test_message_without_volume_block_untouched():
+    _, text = notifier.format_signal_batch([_rec()])
+    assert '成交量分析' not in text
+    assert '**当前趋势**: 📈 上升' in text
