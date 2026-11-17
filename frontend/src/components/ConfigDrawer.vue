@@ -29,7 +29,7 @@
 
       <v-divider />
 
-      <v-tabs v-model="tab" class="tabs-quiet px-2" show-arrows>
+      <v-tabs v-model="tab" class="tabs-quiet px-2 drawer-tabs" show-arrows>
         <v-tab v-for="item in tabs" :key="item.key" :value="item.key">
           <v-icon v-if="item.icon" start size="16">{{ item.icon }}</v-icon>
           {{ item.title }}
@@ -145,6 +145,18 @@ watch(show, async (open) => {
   background: rgb(var(--v-theme-surface));
 }
 
+/* 顶部页签被压成一条线 / 点击后整块收起（flexbox 经典坑）：
+   .config-drawer__frame 是 flex 列，滚动内容区 overflow-y:auto 但默认 min-height:auto，
+   会拒绝收缩到内容高度以下，于是把没有 flex-shrink:0 的 v-tabs 挤扁（48px → 20px），
+   页签文字被裁掉看不见；点页签触发内容重排时整块跟着跳。
+   修复：内容区给 min-height:0 允许收缩，页签 flex-shrink:0 锁定自身高度。 */
+.config-drawer__frame > .drawer-tabs {
+  flex-shrink: 0;
+}
+.config-drawer__body {
+  min-height: 0;
+}
+
 /* 抽屉内一律单列：面板原本是按整页宽度写的 md=6 / md=4 栅格，
    塞进 520px 抽屉后每列只剩 150–240px，标签会被描边压住、hint 会互相挤。
    断点判断基于视口宽度（不是容器宽度），所以只能在这里强制拉平。
@@ -152,6 +164,15 @@ watch(show, async (open) => {
 .config-drawer__body :deep([class*='v-col']) {
   flex: 0 0 100%;
   max-width: 100%;
+}
+
+/* 相邻表单控件之间留一条呼吸缝：Vuetify compact + outlined 的浮动 label 会压在
+   上一个输入框下沿（"多头总价值"和"从备选池选币"挤在一起的根因）。只作用于
+   v-card-text 的直接子级，v-row 内部的密集栅格（止损/止盈并排）不受影响。 */
+.config-drawer__body :deep(.v-card-text > .v-input:not(:last-child)),
+.config-drawer__body :deep(.v-card-text > .smart-select:not(:last-child)),
+.config-drawer__body :deep(.v-card-text > .v-btn:not(:last-child)) {
+  margin-bottom: 12px;
 }
 
 /* 动作区：常驻在滚动区之外的最后一块。

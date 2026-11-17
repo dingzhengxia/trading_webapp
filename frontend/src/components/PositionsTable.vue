@@ -68,7 +68,7 @@
         size="small"
         @click="handleReverseAll"
         :disabled="positions.length === 0"
-        prepend-icon="mdi-swap-horizontal-multiple"
+        prepend-icon="mdi-swap-horizontal-bold"
       >
         批量反手 (全部)
       </v-btn>
@@ -285,7 +285,7 @@
     <v-dialog v-model="batchReverseDialog" max-width="560" persistent>
       <v-card>
         <v-card-title class="text-subtitle-1 font-weight-medium">
-          <v-icon color="warning" class="mr-2">mdi-swap-horizontal-multiple</v-icon>
+          <v-icon color="warning" class="mr-2">mdi-swap-horizontal-bold</v-icon>
           确认批量反手（{{ props.side === 'long' ? '多头' : '空头' }}全部）
         </v-card-title>
         <v-card-text>
