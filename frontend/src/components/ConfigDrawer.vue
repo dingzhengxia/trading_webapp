@@ -2,7 +2,7 @@
 <!-- 共享参数抽屉容器（规格 §3 A7）：交易页与信号页复用，禁止各写一套。
      PC（md+）：右侧 temporary 导航抽屉，宽 520；手机：全屏 dialog + 顶部工具栏。
      Tab 骨架由本组件提供，内容通过具名插槽注入（插槽名 = tab.key）。
-     支持 ?tab= 深链：打开时按 query / defaultTab 定位，切换 Tab 时 router.replace 同步。
+     支持 ?tab= 深链：打开时按 query / defaultTab 定位，切换 Tab 时 history.replaceState 同步。
 
      结构固定为：标题行 → 分隔线 → Tabs → 滚动内容区 →（可选）动作区。
      动作区是滚动区的平级兄弟且排在最后，flex 列布局下天然贴底，
@@ -58,7 +58,6 @@
 
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
 import { useDisplay } from 'vuetify'
 // 按需引入（T12）：外壳组件经 <component :is> 动态渲染且 vite-plugin-vuetify
 // 无法静态分析字符串派发，必须显式 import 并直接传组件对象（传字符串
@@ -92,12 +91,15 @@ const overlayProps = computed(() =>
     : { fullscreen: true },
 )
 
-const route = useRoute()
-const router = useRouter()
 const fallbackTab = (): string => props.defaultTab || props.tabs[0]?.key || ''
 
+/** 从地址栏读 ?tab=。用原生 URLSearchParams 而非 vue-router 的 route.query：
+ *  切换 Tab 时用 history.replaceState 改地址栏（不触发导航），route.query 不会
+ *  同步更新，所以这里必须直接读 location，否则下次打开会读到过期的 tab 值。 */
+const readTabFromUrl = (): string => new URLSearchParams(window.location.search).get('tab') ?? ''
+
 // 初始化即处理深链（组件挂载时 modelValue 就可能为 true，比如带着 ?tab= 直接进页面）
-const initialQueryTab = String(route.query.tab ?? '')
+const initialQueryTab = readTabFromUrl()
 const tab = ref(
   props.tabs.some((t) => t.key === initialQueryTab) ? initialQueryTab : fallbackTab(),
 )
@@ -105,14 +107,20 @@ const tab = ref(
 // 每次打开时按 query / defaultTab 重新定位，深链能力与旧版一致
 watch(show, (open) => {
   if (!open) return
-  const q = String(route.query.tab ?? '')
+  const q = readTabFromUrl()
   tab.value = props.tabs.some((t) => t.key === q) ? q : fallbackTab()
 })
 
-// 切换 Tab 时同步到 ?tab=（保留其余 query），刷新/分享链接仍能落到同一 Tab
+// 切换 Tab 时同步到 ?tab=，保留其余 query。
+// 关键：必须用 history.replaceState 而不是 router.replace —— 后者是一次真正的
+// 路由导航，Vuetify 的 temporary 抽屉会在导航时自动关闭（点个页签整块就收起，
+// 用户根本没法操作）。replaceState 只改地址栏、不触发导航，深链能力仍然保留：
+// 刷新/分享链接依旧落到同一 Tab。
 watch(tab, (key) => {
-  if (!show.value || !key || key === route.query.tab) return
-  void router.replace({ query: { ...route.query, tab: key } })
+  if (!show.value || !key || key === readTabFromUrl()) return
+  const url = new URL(window.location.href)
+  url.searchParams.set('tab', key)
+  window.history.replaceState(window.history.state, '', url.toString())
 })
 
 // ---- 焦点管理（键盘/读屏）：打开把焦点送到标题，关闭把焦点还给触发元素 ----
@@ -166,13 +174,17 @@ watch(show, async (open) => {
   max-width: 100%;
 }
 
-/* 相邻表单控件之间留一条呼吸缝：Vuetify compact + outlined 的浮动 label 会压在
-   上一个输入框下沿（"多头总价值"和"从备选池选币"挤在一起的根因）。只作用于
-   v-card-text 的直接子级，v-row 内部的密集栅格（止损/止盈并排）不受影响。 */
-.config-drawer__body :deep(.v-card-text > .v-input:not(:last-child)),
-.config-drawer__body :deep(.v-card-text > .smart-select:not(:last-child)),
-.config-drawer__body :deep(.v-card-text > .v-btn:not(:last-child)) {
-  margin-bottom: 12px;
+/* 抽屉内堆叠控件之间的垂直呼吸缝：
+   面板控件大量放在 md=6/md=4 的 v-col 里，塞进 520px 抽屉后上面已强制压成
+   单列，控件直接上下堆叠。Vuetify compact + outlined 的浮动 label 会压在
+   上一个输入框下沿，字段挤成一团。旧规则只匹配 .v-card-text 的直接子级，
+   覆盖不到 v-col 里的字段（gap 全是 0），改用相邻兄弟选择器：
+   - v-col 内：v-input / smart-select / 分组 div 一律靠这条撑开；
+   - v-card-text 内：不走栅格的裸控件（段落、卡片、按钮）同样处理。
+   > * + * 只给「非首个子级」加 margin，首子级不动，首尾不留多余空隙。 */
+.config-drawer__body :deep([class*='v-col'] > * + *),
+.config-drawer__body :deep(.v-card-text > * + *) {
+  margin-top: 16px;
 }
 
 /* 动作区：常驻在滚动区之外的最后一块。
