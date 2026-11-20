@@ -164,6 +164,8 @@
           :saving-push-config="savingPushConfig"
           :auto-enabled="autoTradeEnabled"
           :saving-auto-trade="savingAutoTrade"
+          :trend-filter-enabled="config.signal_auto_trade_trend_filter_enabled"
+          :saving-trend="savingTrendFilter"
           :auto-form="autoForm"
           :auto-valid="autoFormValid"
           :saving-auto="savingAuto"
@@ -175,6 +177,7 @@
           @toggle-dingtalk="onToggleDingtalkPush"
           @save-volume="savePushVolume"
           @toggle-auto="onToggleAutoTrade"
+          @toggle-trend="onToggleTrendFilter"
           @save-auto="saveAutoConfig"
           @dirty="markAutoFormDirty"
         />
@@ -237,6 +240,7 @@ import {
   savingAuto,
   savingAutoTrade,
   savingDingtalkPush,
+  savingTrendFilter,
   savingLiveTimeout,
   savingPaperConfig,
   savingPaperToggle,
@@ -297,6 +301,7 @@ const {
   onChangeExitMode,
   savePaperConfig,
   onToggleAutoTrade,
+  onToggleTrendFilter,
   saveAutoConfig,
 } = useSignalsActions()
 

@@ -88,6 +88,7 @@ export const defaultSignalConfig: SignalConfig = {
   signal_auto_trade_cooldown_seconds: 3600,
   signal_auto_trade_max_positions: 5,
   signal_auto_trade_value_usd: 100,
+  signal_auto_trade_trend_filter_enabled: true,
   signal_ticker_cache_seconds: 30,
   signal_ohlcv_cache_seconds: 300,
   signal_dingtalk_enabled: true,
@@ -243,6 +244,7 @@ export const mergeConfig = (raw: Partial<SignalConfig> | undefined): SignalConfi
       source.signal_auto_trade_value_usd,
       fallback.signal_auto_trade_value_usd,
     ),
+    signal_auto_trade_trend_filter_enabled: source.signal_auto_trade_trend_filter_enabled !== false,
     signal_ticker_cache_seconds: toNumber(
       source.signal_ticker_cache_seconds,
       fallback.signal_ticker_cache_seconds,

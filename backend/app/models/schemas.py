@@ -197,6 +197,9 @@ class SignalConfigUpdate(BaseModel):
     signal_auto_trade_cooldown_seconds: Optional[int] = Field(None, ge=0, le=86400 * 7)
     signal_auto_trade_max_positions: Optional[int] = Field(None, ge=1, le=50)
     signal_auto_trade_value_usd: Optional[float] = Field(None, gt=0, le=1_000_000)
+    # 日线趋势过滤（空头趋势只开空、多头趋势只开多；复用钉钉文案的三线 EMA 口径）
+    signal_auto_trade_trend_filter_enabled: Optional[bool] = None
+    signal_auto_trade_trend_cache_seconds: Optional[int] = Field(None, ge=0, le=86400)
     # 币股交易时段过滤（市场自动识别；时段为日内分钟区间 [start,end)）
     signal_tradfi_session_filter_enabled: Optional[bool] = None
     signal_tradfi_session_warmup_minutes: Optional[int] = Field(None, ge=0, le=720)

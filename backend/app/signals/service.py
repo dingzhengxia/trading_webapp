@@ -20,15 +20,17 @@ from .dispatcher import SignalDispatcher
 from .exit_executor import LiveExitExecutor
 from .market_data import MarketDataService, shared_market_data
 from .runtime import emit_signal  # noqa: F401  供外部统一导入
-from .scanner import SignalScanner
+from .scanner import SignalScanner, build_scan_config
 from .signal_store import SignalStore
 from .tracker import OutcomeTracker
+from .trend_filter import TrendFilter, make_trend_provider
 
 store = SignalStore()
 auto_trader: Optional[SignalAutoTrader] = None
 scanner: Optional[SignalScanner] = None
 tracker: Optional[OutcomeTracker] = None
 exit_executor: Optional[LiveExitExecutor] = None
+trend_filter: Optional[TrendFilter] = None
 
 
 def get_market_data() -> MarketDataService:
@@ -39,6 +41,27 @@ def get_market_data() -> MarketDataService:
     return shared_market_data()
 
 
+def _get_trend_filter() -> TrendFilter:
+    """日线趋势过滤器单例：参数与信号生成共用 build_scan_config（同一份 trend_ema）。"""
+    global trend_filter
+    if trend_filter is None:
+        trend_filter = TrendFilter(
+            market_data=get_market_data(),
+            strategy_config=lambda: build_scan_config(load_settings()),
+        )
+    return trend_filter
+
+
+def _signal_trend_provider():
+    """自动开仓过滤链的日线趋势提供者（真实开仓与纸面跟踪共用同一判定）。"""
+    return make_trend_provider(
+        get_filter=_get_trend_filter,
+        settings_loader=load_settings,
+        # 信号 record 的 symbol 是 base（BTC），查日线 K 线必须用完整交易对
+        symbol_of=lambda s: str(s.get('full_symbol') or s.get('symbol') or ''),
+    )
+
+
 def _get_auto_trader() -> SignalAutoTrader:
     global auto_trader
     if auto_trader is None:
@@ -46,6 +69,7 @@ def _get_auto_trader() -> SignalAutoTrader:
             settings_loader=load_settings,
             position_provider=_fetch_positions,
             open_callback=_open_from_signal,
+            trend_provider=_signal_trend_provider(),
         )
         auto_trader._store = store  # 开仓提交时更新 last_auto_open 快照
     return auto_trader
@@ -58,6 +82,7 @@ def _get_tracker() -> OutcomeTracker:
             settings_loader=load_settings,
             market_data=get_market_data(),
             store=store,
+            trend_provider=_signal_trend_provider(),
         )
     return tracker
 

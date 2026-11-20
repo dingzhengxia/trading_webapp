@@ -57,7 +57,7 @@
           </div>
           <div class="guard-card__grid text-caption">
             <span>数量 <span class="num">{{ formatNumber(row.contracts, 4) }}</span></span>
-            <span>标记价 <span class="num">{{ formatNumber(row.mark_price) }}</span></span>
+            <span>标记价 <span class="num">{{ formatPrice(row.mark_price) }}</span></span>
             <span>保护止损 <span class="num">{{ stopText(row) }}</span></span>
           </div>
           <div class="d-flex flex-wrap align-center ga-1 mt-1" @click.stop="toggleGuardRow(row)">
@@ -99,16 +99,16 @@
           </div>
           <div v-if="isGuardRowExpanded(row)" class="text-caption text-medium-emphasis mt-2">
             <div>
-              持仓均价 <span class="num">{{ formatNumber(row.entry_price) }}</span>
-              · TP1 <span class="num">{{ formatNumber(row.tp1_price) }}</span>
-              / TP2 <span class="num">{{ formatNumber(row.tp2_price) }}</span>
-              / 躺平 <span class="num">{{ formatNumber(row.tp3_price) }}</span>
+              持仓均价 <span class="num">{{ formatPrice(row.entry_price) }}</span>
+              · TP1 <span class="num">{{ formatPrice(row.tp1_price) }}</span>
+              / TP2 <span class="num">{{ formatPrice(row.tp2_price) }}</span>
+              / 躺平 <span class="num">{{ formatPrice(row.tp3_price) }}</span>
             </div>
             <div v-if="isV2" class="mt-1">
               四档减仓线 <span class="num">{{ tierText(row) }}</span>
               · 灾难线
               <span class="num">
-                <template v-if="row.disaster_stop">{{ formatNumber(row.disaster_stop) }}</template>
+                <template v-if="row.disaster_stop">{{ formatPrice(row.disaster_stop) }}</template>
                 <template v-else>—</template>
               </span>
               <template v-if="row.disaster_pct">
@@ -150,25 +150,25 @@
                 </span>
               </td>
               <td class="text-right">{{ formatNumber(row.contracts, 4) }}</td>
-              <td v-if="lgAndUp" class="text-right">{{ formatNumber(row.entry_price) }}</td>
-              <td class="text-right">{{ formatNumber(row.mark_price) }}</td>
+              <td v-if="lgAndUp" class="text-right">{{ formatPrice(row.entry_price) }}</td>
+              <td class="text-right">{{ formatPrice(row.mark_price) }}</td>
               <td class="text-right">
-                <span v-if="row.protected_stop">{{ formatNumber(row.protected_stop) }}</span>
-                <span v-else-if="row.stop_price">{{ formatNumber(row.stop_price) }}</span>
+                <span v-if="row.protected_stop">{{ formatPrice(row.protected_stop) }}</span>
+                <span v-else-if="row.stop_price">{{ formatPrice(row.stop_price) }}</span>
                 <span v-else class="text-medium-emphasis">—</span>
               </td>
               <td class="text-right text-caption">
-                {{ formatNumber(row.tp1_price) }} / {{ formatNumber(row.tp2_price) }} /
-                {{ formatNumber(row.tp3_price) }}
+                {{ formatPrice(row.tp1_price) }} / {{ formatPrice(row.tp2_price) }} /
+                {{ formatPrice(row.tp3_price) }}
               </td>
               <td v-if="isV2" class="text-right text-caption">
                 <span v-if="row.tier_levels?.length">
-                  {{ row.tier_levels.map((v) => formatNumber(v)).join(' / ') }}
+                  {{ row.tier_levels.map((v) => formatPrice(v)).join(' / ') }}
                 </span>
                 <span v-else class="text-medium-emphasis">—</span>
               </td>
               <td v-if="isV2" class="text-right text-caption">
-                <span v-if="row.disaster_stop">{{ formatNumber(row.disaster_stop) }}</span>
+                <span v-if="row.disaster_stop">{{ formatPrice(row.disaster_stop) }}</span>
                 <span v-else class="text-medium-emphasis">—</span>
                 <span v-if="row.disaster_pct" class="text-medium-emphasis">
                   ({{ (row.disaster_pct * 100).toFixed(1) }}%)
@@ -250,7 +250,7 @@
 import { computed, ref } from 'vue'
 import { useDisplay } from 'vuetify'
 import { useProtectionConfig } from '@/composables/useProtectionConfig'
-import { formatEventTime, formatNumberOrDash as formatNumber } from '@/utils/format'
+import { formatEventTime, formatNumberOrDash as formatNumber, formatAutoPrecision as formatPrice } from '@/utils/format'
 import { directionTone } from '@/utils/tone'
 import PageCard from '@/components/PageCard.vue'
 import EmptyState from '@/components/EmptyState.vue'
@@ -314,12 +314,12 @@ const toggleGuardRow = (row: ProtectionPositionRow): void => {
 }
 
 const stopText = (row: ProtectionPositionRow): string => {
-  if (row.protected_stop) return formatNumber(row.protected_stop)
-  if (row.stop_price) return formatNumber(row.stop_price)
+  if (row.protected_stop) return formatPrice(row.protected_stop)
+  if (row.stop_price) return formatPrice(row.stop_price)
   return '—'
 }
 const tierText = (row: ProtectionPositionRow): string =>
-  row.tier_levels?.length ? row.tier_levels.map((v) => formatNumber(v)).join(' / ') : '—'
+  row.tier_levels?.length ? row.tier_levels.map((v) => formatPrice(v)).join(' / ') : '—'
 
 const hasTriggered = (row: ProtectionPositionRow): boolean =>
   row.tp1_done || row.tp2_done || row.tp3_done ||

@@ -204,6 +204,7 @@ export interface SignalConfig {
   signal_auto_trade_cooldown_seconds: number
   signal_auto_trade_max_positions: number
   signal_auto_trade_value_usd: number
+  signal_auto_trade_trend_filter_enabled: boolean
   signal_ticker_cache_seconds: number
   signal_ohlcv_cache_seconds: number
   signal_dingtalk_enabled: boolean

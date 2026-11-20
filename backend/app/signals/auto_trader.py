@@ -4,6 +4,9 @@
 过滤顺序（全部满足才开仓）：
 1. signal_auto_trade_enabled 为 True；
 2. direction in signal_auto_trade_directions（neutral 永不开仓）；
+2.5 日线趋势过滤（signal_auto_trade_trend_filter_enabled，默认开）：
+   trend_provider 返回 'long'/'short' 时只放行同向信号——日线空头趋势
+   只开空、多头趋势只开多；'neutral'（无数据/功能未装配/异常降级）放行；
 3. strategy in signal_auto_trade_strategies（方向性入场策略白名单）；
 4. timeframe in signal_auto_trade_timeframes；
 5. 确认数：时间窗口内同 symbol + 同 direction 的不同「信号族」数 >=
@@ -14,7 +17,7 @@
 """
 import time
 from collections import deque
-from typing import Any, Callable, Dict
+from typing import Any, Awaitable, Callable, Dict, Optional
 
 from loguru import logger
 
@@ -30,17 +33,21 @@ class SignalAutoTrader:
     def __init__(self, settings_loader: Callable[[], Dict[str, Any]],
                  position_provider: Callable[[], Any],
                  open_callback: Callable[[Dict[str, Any]], Any],
+                 trend_provider: Optional[Callable[[Dict[str, Any]], Awaitable[str]]] = None,
                  state_key: str = AUTO_TRADE_STATE_KEY, label: str = '自动开仓'):
         """
         :param settings_loader: 返回 user settings（含 signal_* 键）
         :param position_provider: 异步 callable，返回当前持仓列表（Position 模型）
         :param open_callback: 异步 callable(signal) -> bool，由 TradingService.auto_open_from_signal 实现
+        :param trend_provider: 异步 callable(signal) -> 'long'|'short'|'neutral'，
+                               日线趋势过滤（2.5）；None = 功能未装配，恒放行
         :param state_key: 冷却状态在 signal_state 表的键（纸面跟踪用独立 key，互不干扰）
         :param label: 日志前缀（区分真实开仓 / 纸面跟踪）
         """
         self._settings_loader = settings_loader
         self._position_provider = position_provider
         self._open_callback = open_callback
+        self._trend_provider = trend_provider
         self._state_key = state_key
         self._label = label
         # 近期信号窗口：(ts_seconds, symbol, direction, family)
@@ -95,6 +102,18 @@ class SignalAutoTrader:
         allowed_directions = [str(d).lower() for d in (settings.get('signal_auto_trade_directions') or [])]
         if direction == 'neutral' or direction not in allowed_directions:
             return {'action': 'skip', 'reason': f'方向 {direction} 不在允许列表'}
+
+        # 2.5 日线趋势过滤：日线空头趋势只开空、多头趋势只开多。
+        # neutral（无数据/异常/未装配）放行；异常绝不阻塞开仓链路。
+        if self._trend_provider is not None:
+            try:
+                trend = await self._trend_provider(signal)
+            except Exception as e:
+                logger.warning(f"{self._label} 日线趋势查询异常（放行）: {e}")
+                trend = 'neutral'
+            if trend in ('long', 'short') and direction != trend:
+                return {'action': 'skip',
+                        'reason': f'日线趋势{"多头" if trend == "long" else "空头"}，逆向 {direction} 信号不开仓'}
 
         # 3. 策略白名单
         allowed_strategies = [str(s) for s in (settings.get('signal_auto_trade_strategies') or [])]

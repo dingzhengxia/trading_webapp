@@ -116,6 +116,12 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     'signal_auto_trade_cooldown_seconds': 900,
     'signal_auto_trade_max_positions': 5,
     'signal_auto_trade_value_usd': 100.0,
+    # 日线趋势过滤：日线空头趋势只开空、多头趋势只开多。
+    # 判定复用 analysis/trend.get_current_trend（与钉钉文案同一三线 EMA 口径，
+    # 参数走 signal_config.json 的 trend_ema_long 组），固定日线周期。
+    # 震荡/趋势未知/行情异常放行，过滤器故障不阻塞开仓链
+    'signal_auto_trade_trend_filter_enabled': True,
+    'signal_auto_trade_trend_cache_seconds': 1800,
     # 币种信号的钉钉推送子开关（总开关仍是 dingtalk_enabled；默认开启）
     'signal_dingtalk_enabled': True,
     # 推送量能门槛：静态币(signal_scan_static_symbols)实时全推，

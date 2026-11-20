@@ -97,6 +97,20 @@
       </template>
     </v-switch>
 
+    <v-switch
+      :model-value="trendFilterEnabled"
+      :loading="savingTrend"
+      color="primary"
+      hide-details
+      class="mb-2"
+      @update:model-value="emit('toggle-trend', $event)"
+    >
+      <template #label>
+        日线趋势过滤（空头趋势只开空，多头趋势只开多）
+        <HelpTip :text="HELP.signals.trendFilter" />
+      </template>
+    </v-switch>
+
     <v-row dense>
       <v-col cols="12" md="3">
         <SmartSelect
@@ -206,6 +220,8 @@ const props = withDefaults(
     savingPushConfig?: boolean
     autoEnabled: boolean
     savingAutoTrade?: boolean
+    trendFilterEnabled: boolean
+    savingTrend?: boolean
     autoForm: AutoTradeForm
     autoValid: boolean
     savingAuto?: boolean
@@ -214,7 +230,7 @@ const props = withDefaults(
     timeframeOptions: string[]
     strategyOptions: OptionItem[]
   }>(),
-  { pushVolumeDirty: false, savingDingtalkPush: false, savingPushConfig: false, savingAutoTrade: false, savingAuto: false },
+  { pushVolumeDirty: false, savingDingtalkPush: false, savingPushConfig: false, savingAutoTrade: false, savingAuto: false, savingTrend: false },
 )
 
 // 表单对象由父组件持有，这里直接改其字段并通知「已修改」，
@@ -249,6 +265,7 @@ const emit = defineEmits<{
   (e: 'toggle-dingtalk', value: unknown): void
   (e: 'save-volume'): void
   (e: 'toggle-auto', value: unknown): void
+  (e: 'toggle-trend', value: unknown): void
   (e: 'save-auto'): void
   (e: 'dirty'): void
 }>()

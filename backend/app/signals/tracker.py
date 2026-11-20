@@ -62,11 +62,14 @@ class OutcomeTracker:
     """纸面持仓 + 前视收益的后台跟踪器。"""
 
     def __init__(self, settings_loader, market_data, store,
-                 interval_seconds: int = DEFAULT_INTERVAL_SECONDS):
+                 interval_seconds: int = DEFAULT_INTERVAL_SECONDS,
+                 trend_provider=None):
         self._settings_loader = settings_loader
         self._market = market_data
         self._store = store
         self._interval = max(MIN_TICK_SECONDS, int(interval_seconds))
+        # 纸面跟踪与真实开仓共用日线趋势判定，口径一致（过滤链 2.5）
+        self._trend_provider = trend_provider
 
         self._positions: List[Dict[str, Any]] = _load(PAPER_POSITIONS_KEY, [])
         self._trades: List[Dict[str, Any]] = _load(PAPER_TRADES_KEY, [])
@@ -78,6 +81,7 @@ class OutcomeTracker:
             settings_loader=self._paper_settings,
             position_provider=self._open_positions,
             open_callback=self._accept,
+            trend_provider=self._trend_provider,
             state_key='paper_state',
             label='纸面跟踪',
         )

@@ -19,6 +19,7 @@ import {
   pushVolumeInput,
   savingAuto,
   savingAutoTrade,
+  savingTrendFilter,
   savingDingtalkPush,
   savingLiveTimeout,
   savingPaperConfig,
@@ -326,6 +327,32 @@ const onToggleAutoTrade = async (value: unknown): Promise<void> => {
   savingAutoTrade.value = false
 }
 
+// 日线趋势过滤开关：单字段 patch，失败回滚（过滤开关不属于 auto-trade 端点）
+const onToggleTrendFilter = async (value: unknown): Promise<void> => {
+  const enabled = Boolean(value)
+  if (savingTrendFilter.value || enabled === config.value.signal_auto_trade_trend_filter_enabled) return
+  savingTrendFilter.value = true
+  const previous = config.value.signal_auto_trade_trend_filter_enabled
+  config.value.signal_auto_trade_trend_filter_enabled = enabled
+  const result = await patchSignalsConfig({ signal_auto_trade_trend_filter_enabled: enabled })
+  if (result.ok) {
+    useSnackbarStore().show({
+      message: enabled
+        ? '日线趋势过滤已启用：空头趋势只开空、多头趋势只开多。'
+        : '日线趋势过滤已停用。',
+      color: 'success',
+    })
+    pushLog('[前端] 日线趋势过滤已' + (enabled ? '启用' : '停用') + '。', 'info')
+  } else {
+    config.value.signal_auto_trade_trend_filter_enabled = previous
+    useSnackbarStore().show({
+      message: '切换日线趋势过滤失败: ' + result.detail,
+      color: 'error',
+    })
+  }
+  savingTrendFilter.value = false
+}
+
 const saveAutoConfig = async (): Promise<void> => {
   if (!autoFormValid.value || savingAuto.value) return
   savingAuto.value = true
@@ -376,6 +403,7 @@ export function useSignalsActions() {
     savePaperConfig,
     // 自动开仓
     onToggleAutoTrade,
+    onToggleTrendFilter,
     saveAutoConfig,
   }
 }

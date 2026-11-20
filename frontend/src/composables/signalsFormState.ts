@@ -39,6 +39,7 @@ export const paperForm = ref<PaperForm>({ slAtr: 1.5, tpR: 2, maxBars: 6, atrTim
 
 // 自动开仓表单
 export const savingAutoTrade = ref(false)
+export const savingTrendFilter = ref(false)
 export const savingAuto = ref(false)
 export const autoFormDirty = ref(false)
 export const autoForm = ref<AutoTradeForm>({
