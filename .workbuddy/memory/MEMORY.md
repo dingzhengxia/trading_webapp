@@ -6,6 +6,7 @@
 - 信号扫描范围 Top 30（signal_scan_top_n=30），用户说 Top 多少无所谓。
 - **硬性要求：不允许存在 ≥10 行的重复代码段没合并**；重构优先，能复用必须复用（PageCard/PositionsPanel/AppDockFooter 等共享组件已建立，改动页面时优先复用）。
 - 关注性能与 Binance API 限流合规：所有信号扫描 REST 必须经 RestGuardian；扫描已并发化。
+- **止盈止损只保留仓位保护 v2**：固定 SL/TP 条件单链路已停用。每笔开仓是独立 lot（自己的成交价/四档/R/TP/峰值/止损），加仓新建 lot 不 rebase 老笔，外部减仓按比例分摊、价格不变。
 
 ## 项目结构要点
 - 信号链路统一入口：backend/app/signals/dispatcher.py（展示 → 钉钉推送独立task → 自动开仓）。
