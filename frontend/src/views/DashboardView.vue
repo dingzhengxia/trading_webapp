@@ -152,6 +152,7 @@ import { usePositionStore } from '@/stores/positionStore'
 import { useUiStore } from '@/stores/uiStore'
 import { directionTone, pnlTone } from '@/utils/tone'
 import { formatAmount, formatIsoTime } from '@/utils/format'
+import { defaultSignalStatus } from '@/services/signalsData'
 import type {
   ProtectionActionRow,
   ProtectionStatus,
@@ -166,18 +167,7 @@ const positionStore = usePositionStore()
 const uiStore = useUiStore()
 
 // ---- 只读数据源：复用信号页 / 风控页的既有接口，不新增后端调用 ----
-const signalStatus = ref<SignalStatus>({
-  enabled: false,
-  running: false,
-  last_scan_at: null,
-  next_scan_at: null,
-  scanned_symbols: 0,
-  emitted_count: 0,
-  error_count: 0,
-  last_error: null,
-  auto_trade_enabled: false,
-  last_auto_open: null,
-})
+const signalStatus = ref<SignalStatus>({ ...defaultSignalStatus })
 const recentSignals = ref<SignalRecord[]>([])
 const protectionStatus = ref<ProtectionStatus | null>(null)
 
