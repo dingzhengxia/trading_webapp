@@ -6,6 +6,20 @@ import { api } from '@/services/endpoints'
 import { useUiStore } from './uiStore'
 import { getErrorMessage, getErrorStatus } from '@/utils/errors'
 
+/** 保存失败的统一处理：服务端 detail 原样带给用户 + 写运行日志。 */
+function logSaveError(scope: string, error: unknown): string {
+  console.error(`Failed to ${scope} settings:`, error)
+  // 服务端 detail 必须原样带给用户：只说“保存失败”等于让人去翻日志
+  const status = getErrorStatus(error)
+  const detail = `${getErrorMessage(error)}${status ? `（HTTP ${status}）` : ''}`
+  useUiStore().logStore.addLog({
+    message: `配置保存失败：${detail}`,
+    level: 'error',
+    timestamp: new Date().toLocaleTimeString(),
+  })
+  return detail
+}
+
 const defaultSettings: UserSettings = {
   api_key: '',
   api_secret: '',
@@ -136,16 +150,7 @@ export const useSettingsStore = defineStore('settings', () => {
       })
       return { ok: true, detail: '' }
     } catch (error) {
-      console.error('Failed to save settings:', error)
-      // 服务端 detail 必须原样带给用户：只说“保存失败”等于让人去翻日志
-      const status = getErrorStatus(error)
-      const detail = `${getErrorMessage(error)}${status ? `（HTTP ${status}）` : ''}`
-      uiStore.logStore.addLog({
-        message: `配置保存失败：${detail}`,
-        level: 'error',
-        timestamp: new Date().toLocaleTimeString(),
-      })
-      return { ok: false, detail }
+      return { ok: false, detail: logSaveError('save', error) }
     }
   }
 
@@ -165,15 +170,7 @@ export const useSettingsStore = defineStore('settings', () => {
       await api.patchSettings(partial)
       return { ok: true, detail: '' }
     } catch (error) {
-      console.error('Failed to patch settings:', error)
-      const status = getErrorStatus(error)
-      const detail = `${getErrorMessage(error)}${status ? `（HTTP ${status}）` : ''}`
-      uiStore.logStore.addLog({
-        message: `配置保存失败：${detail}`,
-        level: 'error',
-        timestamp: new Date().toLocaleTimeString(),
-      })
-      return { ok: false, detail }
+      return { ok: false, detail: logSaveError('patch', error) }
     }
   }
 
