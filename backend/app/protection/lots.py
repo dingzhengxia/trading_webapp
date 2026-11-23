@@ -58,6 +58,8 @@ def new_lot(side: str, entry: float, contracts: float, plan: Dict[str, Any],
         'tp_armed': [],
         'pending': {},
         'stop': None,
+        # 每次挂/改兜底 STOP 自增，编进 clientAlgoId，避免撤单残留导致 -4116
+        'stop_seq': 0,
         'peak': float(entry),
         'trough': float(entry),
         'opened_at_ms': int(opened_ms),
@@ -256,7 +258,12 @@ def group_stops_by_lot(stops: List[Dict[str, Any]], lots: List[Dict[str, Any]]) 
     known = {str(x.get('id')) for x in lots}
     legacy: List[Dict[str, Any]] = []
     for order in stops or []:
-        lot_id = algo_lot_id(order.get('clientAlgoId') or order.get('clientOrderId'))
+        client_id = order.get('clientAlgoId') or order.get('clientOrderId')
+        lot_id = algo_lot_id(client_id)
+        if lot_id is None:
+            # 迁移前的单/短 id（如 legacy）也按尾部对齐一次，别把老单当无主单
+            tail = str(client_id or '').rsplit('_', 1)[-1]
+            lot_id = tail if tail in known else None
         if lot_id in known:
             grouped.setdefault(lot_id, []).append(order)
         else:

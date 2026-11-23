@@ -331,6 +331,58 @@ def _best_stop_price(stops: List[Dict[str, Any]], side: str) -> float:
     return max(triggers) if side == 'long' else min(triggers)
 
 
+def _stop_price_at_tick(exchange, symbol: str, price: float) -> float:
+    """按交易所 tick 精度归一，避免「差半个 tick」被判成更差而反复撤挂。"""
+    try:
+        return float(exchange.price_to_precision(symbol, price))
+    except Exception:  # noqa: BLE001 - 精度接口不可用时退回原值
+        return float(price)
+
+
+def _is_duplicated_client_id(exc: BaseException) -> bool:
+    """币安 -4116：clientOrderId 已被一张还在的单占用。"""
+    text = str(exc)
+    return '-4116' in text or 'ClientOrderId is duplicated' in text
+
+
+async def _adopt_conflicting_stop(exchange, conf: Dict[str, Any], symbol: str, side: str,
+                                  pos: Dict[str, Any], state: Dict[str, Any],
+                                  lot: Optional[Dict[str, Any]], lot_id: Optional[str],
+                                  desired: float, price: float) -> bool:
+    """-4116 之后按交易所事实收敛：能收编就收编，是旧价就撤掉留给下一轮。
+
+    不能在这里直接重挂：说明撤单还没真正落地，立刻用新号重挂很容易变成
+    「一仓多张 STOP」，撤单没撤干净的单下次巡检还能再收一次。
+    """
+    try:
+        stops = await engine._find_stop_orders(
+            exchange, symbol, side, pos, price, conf, force=True)
+    except Exception as exc:  # noqa: BLE001 - 查不到就等下轮换号重挂
+        logger.warning(f'[{symbol}/{side}] lot {lot_id} 单号冲突后查询挂单失败，下轮换号重挂: {exc}')
+        return False
+
+    own = lots.group_stops_by_lot(stops or [], state.get('lots') or []).get(lot_id, [])
+    current = _best_stop_price(own, side)
+    target = _stop_price_at_tick(exchange, symbol, desired)
+    good = current > 0 and (current >= target if side == 'long' else current <= target)
+    if good:
+        if lot:
+            lot['stop'] = current
+        ledger.save(symbol, side, state)
+        logger.warning(
+            f'[{symbol}/{side}] lot {lot_id} 兜底STOP 已在交易所（{current:.8g}），直接采用')
+        return True
+
+    if own:
+        await engine._cancel_stop_orders(exchange, symbol, own, conf)
+        logger.warning(
+            f'[{symbol}/{side}] lot {lot_id} 交易所残留旧价 STOP，已撤，下次巡检换号重挂')
+    else:
+        logger.warning(
+            f'[{symbol}/{side}] lot {lot_id} 单号仍被占用（交易所未返回该单），下次巡检换号重挂')
+    return False
+
+
 async def _exchange_stop_price(exchange, conf: Dict[str, Any], symbol: str, side: str,
                                pos: Dict[str, Any], price: float,
                                now: float) -> Optional[float]:
@@ -773,15 +825,25 @@ async def _apply_stop(exchange, conf: Dict[str, Any], bundle: Dict[str, Any],
     desired = _f(act.get('price'))
     if desired <= 0:
         return
-    if _dry_run(conf, state, str(act.get('tag') or 'stop')):
+    tag = str(act.get('tag') or 'stop')
+    if _dry_run(conf, state, tag):
         return
 
     lot = act.get('_lot') or lots.find_lot(state, act.get('lot_id'))
     lot_id = str(lot.get('id')) if lot else None
 
+    # 挂单失败退避：止损推进每轮都会算出来，失败若没有冷却就会每 3s 重试一次，
+    # 同一条报错刷满日志（-4116 那次就是这样），还会持续打交易所接口。
+    owner = lot if lot else state
+    attempts = owner.setdefault('attempts', {})
+    now = time.time()
+    last = _f(attempts.get(tag))
+    cooldown = max(0.0, _f(conf.get('stop_retry_cooldown_sec'), 20.0))
+    if last and now - last < cooldown:
+        return
+
     # 补挂前强制刷新一次：条件单列表可能有秒级延迟，若刚补上的那张还没出现在缓存里，
     # 直接用缓存会重复创建，很快变成「一仓多张 STOP」。
-    tag = str(act.get('tag') or '')
     force = bool(act.get('force'))
     stops = await engine._find_stop_orders(
         exchange, symbol, side, pos, snap.price, conf, force=force or tag == 'stop:restore')
@@ -800,13 +862,24 @@ async def _apply_stop(exchange, conf: Dict[str, Any], bundle: Dict[str, Any],
         await engine._cancel_stop_orders(exchange, symbol, own_stops, conf)
 
     previous = _f(lot.get('stop') if lot else state.get('stop'))
+    attempts[tag] = now
     if lot and _f(lot.get('contracts')) > 0:
-        await engine._create_lot_stop(
-            exchange, symbol, pos, side, desired, _f(lot.get('contracts')), lot_id, conf)
+        seq = int(_f(lot.get('stop_seq'))) + 1
+        lot['stop_seq'] = seq
+        try:
+            await engine._create_lot_stop(
+                exchange, symbol, pos, side, desired, _f(lot.get('contracts')), lot_id, conf, seq)
+        except Exception as exc:  # noqa: BLE001 - 单号冲突要按交易所事实收敛，其它异常上抛
+            if not _is_duplicated_client_id(exc):
+                raise
+            await _adopt_conflicting_stop(
+                exchange, conf, symbol, side, pos, state, lot, lot_id, desired, snap.price)
+            return
         lot['stop'] = desired
     else:
         await engine._create_full_close_stop(exchange, symbol, pos, side, desired, conf)
         state['stop'] = desired
+    attempts.pop(tag, None)
     ledger.save(symbol, side, state)
     # 记「建立」还是「上移」，并带上上一档：这条事件就是日后复盘
     # 「止损怎么被推到保本、然后被扫掉」的唯一凭据

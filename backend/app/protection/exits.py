@@ -49,18 +49,27 @@ CLIENT_ALGO_PREFIX = "PM_WS_SL_"
 # Exchange algo orders & Market Functions
 # ---------------------------------------------------------------------------
 
-def _make_client_algo_id(symbol, side, lot_id=None):
-    compact = symbol.replace("/", "").replace(":", "")
+def _make_client_algo_id(symbol, side, lot_id=None, seq=0):
+    """条件单 clientAlgoId：前缀 + 序号 + 币种 + 方向 + lotId（尾部 8 位）。
+
+    序号必须在里面：同一笔 lot 改价是「先撤旧单再挂新单」，撤单只要没真正落地
+    （交易所延迟、撤单异常被吞），用同一个 id 重挂就会被币安回
+    -4116 ClientOrderId is duplicated，而且每轮重试都撞同一个 id、永远挂不上。
+    每次挂单自增序号，最坏情况是多一张待撤的旧单，不会把这一笔的止损彻底卡死。
+    """
+    base = str(symbol).split("/")[0].replace(":", "").upper()[:10]
     suffix = "L" if side == "long" else "S"
-    tag = str(lot_id)[:8] if lot_id else uuid.uuid4().hex[:8]
-    return f"{CLIENT_ALGO_PREFIX}{compact}_{suffix}_{tag}"[:36]
+    if lot_id:
+        return f"{CLIENT_ALGO_PREFIX}{int(seq) % 1000:03d}{base}_{suffix}_{str(lot_id)[:8]}"[:36]
+    return f"{CLIENT_ALGO_PREFIX}{base}_{suffix}_{uuid.uuid4().hex[:8]}"[:36]
 
 
-async def _create_lot_stop(exchange, symbol, position, side, stop_price, quantity, lot_id, conf):
+async def _create_lot_stop(exchange, symbol, position, side, stop_price, quantity, lot_id, conf,
+                           seq=0):
     """按 lot 自己的剩余数量挂 reduceOnly STOP；tag 写进 clientAlgoId 便于反查。"""
     result = await create_quantity_stop(
         exchange, symbol, side, _raw_position_side(position), stop_price, quantity,
-        _make_client_algo_id(symbol, side, lot_id), conf, RUNTIME.rest)
+        _make_client_algo_id(symbol, side, lot_id, seq), conf, RUNTIME.rest)
     RUNTIME.orders_cache.pop(symbol, None)
     logger.success(f"[{symbol}] 🎯 lot {lot_id} 兜底STOP {stop_price:.8g} × {quantity:.6g}")
     return result
