@@ -89,6 +89,45 @@ def _f(value: Any, default: float = 0.0) -> float:
     return engine._f(value, default) or 0.0
 
 
+def _min_amount(exchange, symbol: str) -> float:
+    """该合约的最小下单量；取不到返回 0（表示不做最小量限制）。
+
+    这一步必须在下单前做：仓位小到无法再拆分时（BTC 0.001 / BNB 0.04 这种），
+    交易所一定拒单，而止损/止盈是每轮都会重新算出来的，没有这层判断就会
+    每 3 秒报一次同样的错、档位永远不前进。
+    """
+    try:
+        market = exchange.market(symbol)
+        limits = (market.get('limits') or {}).get('amount') or {}
+        return _f(limits.get('min'))
+    except Exception:  # noqa: BLE001 - 市场元数据缺失时退回「不限最小量」
+        return 0.0
+
+
+def _stepped_qty(exchange, symbol: str, qty: float) -> float:
+    """按交易所步长归一数量；取不到精度信息时退回原值（宁可发单也不静默丢弃）。"""
+    try:
+        return _f(exchange.amount_to_precision(symbol, qty), 0.0)
+    except Exception:  # noqa: BLE001
+        return float(qty)
+
+
+def _stop_fill_price(state: Dict[str, Any], side: str, price: float) -> float:
+    """交易所上少掉的数量，是不是我们自己那张兜底 STOP 打掉的？
+
+    判据只用账本事实：某笔的 STOP 已经落在现价的另一侧，说明这张单具备触发条件。
+    是的话就把这次减少解释成「止损成交」，而不是推一条「人工/外部减仓」——
+    后者会让用户以为有人在动他的仓位。
+    """
+    for lot in state.get('lots') or []:
+        stop = _f(lot.get('stop'))
+        if stop <= 0:
+            continue
+        if (side == 'long' and price <= stop) or (side == 'short' and price >= stop):
+            return stop
+    return 0.0
+
+
 # ---------------------------------------------------------------------------
 # 市场数据
 # ---------------------------------------------------------------------------
@@ -393,8 +432,29 @@ async def _exchange_stop_price(exchange, conf: Dict[str, Any], symbol: str, side
     return _best_stop_price(stops, side)
 
 
+async def _cancel_dead_lot_stops(exchange, conf: Dict[str, Any], symbol: str, side: str,
+                                 pos: Dict[str, Any], price: float,
+                                 dead_ids: List[Any]) -> None:
+    """撤掉已经不存在（被减光 / 被并入）的 lot 留在交易所的 STOP。
+
+    不清的话，那张单还按旧数量挂在场上，触发时会吃掉别的笔的量。
+    """
+    ids = [str(x) for x in dead_ids if x]
+    if not ids:
+        return
+    try:
+        stops = await engine._find_stop_orders(
+            exchange, symbol, side, pos, price, conf, force=True)
+        stale: List[Dict[str, Any]] = []
+        for lot_id in ids:
+            stale += lots.group_stops_by_lot(stops or [], [{'id': lot_id}]).get(lot_id, [])
+        await engine._cancel_stop_orders(exchange, symbol, stale, conf)
+    except Exception as exc:  # noqa: BLE001 - 清理失败下轮继续尝试
+        logger.warning(f'[{symbol}/{side}] 清理失效 lot 的STOP失败: {exc}')
+
+
 async def _prepare(exchange, conf: Dict[str, Any], symbol: str, side: str,
-                   pos: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+                   pos: Dict[str, Any], pos_ts: float = 0.0) -> Optional[Dict[str, Any]]:
     now = time.time()
     timeframe = str(conf.get('v2_timeframe') or conf.get('timeframe') or '2h')
     lookbacks = risk_model._floats(conf.get('tier_lookbacks'), risk_model.V2_DEFAULTS['tier_lookbacks'])
@@ -429,6 +489,19 @@ async def _prepare(exchange, conf: Dict[str, Any], symbol: str, side: str,
     price = await _price(exchange, symbol, conf) or last_close
 
     state_raw = ledger.load(symbol, side)
+    last_own = _f((state_raw or {}).get('self_trade_ts'))
+    # 持仓快照来自 5s 缓存：如果我们自己刚成交过，这份快照可能比成交更早。
+    # 拿「旧数量」对比「已扣减的账本」就会凭空判出一次加仓（多建一笔 lot + 误报推送），
+    # 下一轮缓存刷新又判出一次减仓 —— 用户看到的就是来回横跳的两条消息。
+    if last_own > 0 and (not pos_ts or pos_ts <= last_own + 0.5):
+        fresh = await engine._position_fresh(exchange, symbol, side, conf, priority='HIGH')
+        if fresh is None:
+            return None
+        pos = fresh
+        entry = _f(pos.get('entryPrice'))
+        contracts = engine._position_size(pos)
+        if contracts <= 0 or entry <= 0:
+            return None
     opened_ms = engine._position_open_time_ms(pos)
     new_position = _is_new_position(state_raw, opened_ms)
     changed = False
@@ -464,7 +537,14 @@ async def _prepare(exchange, conf: Dict[str, Any], symbol: str, side: str,
         atr = atr or _f(plan.get('atr_at_plan'))
 
         # ---- 人工干预：加仓单独建笔、减仓按比例分摊；老笔计划与进度一律不重算 ----
-        hit = risk_model.detect_intervention(state, side, contracts, entry, conf)
+        # 自己刚成交完的一小段时间里，数量差可能只是成交回报延迟：
+        # 这时静默按比例校准，不判定成「有人动了仓位」。
+        hit = None
+        grace = max(0.0, _f(conf.get('intervention_grace_sec'), 10.0))
+        if last_own > 0 and now - last_own < grace:
+            logger.debug(f'[{symbol}/{side}] 自己成交后 {now - last_own:.1f}s 内，跳过干预识别')
+        else:
+            hit = risk_model.detect_intervention(state, side, contracts, entry, conf)
         if hit and hit['kind'] == 'add':
             price_new = _f(hit.get('implied_price')) or entry
             qty_new = _f(hit.get('delta_qty'))
@@ -480,34 +560,53 @@ async def _prepare(exchange, conf: Dict[str, Any], symbol: str, side: str,
             send_alert(conf, '仓位变动: 加仓已按本笔成交价单独建计划',
                        f'[{symbol}] {side} {label}', symbol=symbol)
         elif hit and hit['kind'] == 'reduce':
-            removed = lots.allocate_reduce(state, abs(_f(hit.get('delta_qty'))))
+            stop_hit = _stop_fill_price(state, side, price)
+            if stop_hit > 0:
+                # 仓位是被我们自己的兜底 STOP 打掉的：优先扣在那笔自己的头上，
+                # 说清楚「谁减的」，才不会让人以为有别的程序在动这个仓。
+                owner = next((x for x in state.get('lots') or []
+                              if abs(_f(x.get('stop')) - stop_hit) < max(stop_hit * 1e-9, 1e-12)),
+                             None)
+                removed = lots.allocate_to_lot(
+                    state, str(owner.get('id')) if owner else None,
+                    abs(_f(hit.get('delta_qty'))), now)
+                note = (f'兜底止损单已触发成交 {hit["delta_qty"]:.6g}'
+                        f'（触发价约 {stop_hit:.6g}），剩余 {contracts:.6g}')
+                title = '仓位变动: 兜底止损单已触发'
+                kind = 'stop_fill'
+            else:
+                removed = lots.allocate_reduce(state, abs(_f(hit.get('delta_qty'))))
+                note = (f'人工/外部减仓 {hit["delta_qty"]:.6g}'
+                        f'（{hit["qty_pct"]:+.1%}），按比例分摊到各笔，剩余 {contracts:.6g}')
+                title = '仓位变动: 检测到减仓（已按比例分摊）'
+                kind = 'intervention'
             changed = True
-            note = (f'人工/外部减仓 {hit["delta_qty"]:.6g}'
-                    f'（{hit["qty_pct"]:+.1%}），按比例分摊到各笔，剩余 {contracts:.6g}')
             state.setdefault('interventions', []).append(
                 {'ts': now, 'kind': 'reduce', **{k: hit[k] for k in
                  ('delta_qty', 'qty_pct', 'prev_qty', 'prev_entry')}})
             state['interventions'] = state['interventions'][-20:]
-            ledger.log_event(symbol, side, 'intervention', note, level='info',
+            ledger.log_event(symbol, side, kind, note, level='info',
                              delta_qty=hit['delta_qty'], contracts=contracts,
                              cleared_lots=[x.get('id') for x in removed])
             logger.info(f'[{symbol}/{side}] 👤 {note}')
             if abs(hit['qty_pct']) >= _f(conf.get('intervention_alert_pct'), 0.10):
-                send_alert(conf, '仓位变动: 检测到减仓（已按比例分摊）',
-                           f'[{symbol}] {side} {note}', symbol=symbol)
+                send_alert(conf, title, f'[{symbol}] {side} {note}', symbol=symbol)
             if removed:
                 # 已减光的 lot 不能再留着超额 STOP，否则会误伤其它笔
-                try:
-                    all_stops = await engine._find_stop_orders(
-                        exchange, symbol, side, pos, price, conf, force=True)
-                    stale = []
-                    for gone in removed:
-                        stale += lots.group_stops_by_lot(
-                            all_stops or [], [gone]).get(str(gone.get('id')), [])
-                    await engine._cancel_stop_orders(exchange, symbol, stale, conf)
-                except Exception as exc:  # noqa: BLE001 - 清理失败下轮继续尝试
-                    logger.warning(f'[{symbol}/{side}] 清理已平 lot 的STOP失败: {exc}')
+                await _cancel_dead_lot_stops(
+                    exchange, conf, symbol, side, pos, price,
+                    [x.get('id') for x in removed])
 
+        # 零头归并：小于最小下单量的笔挂不出自己的 STOP，会每轮刷「数量精度」错误，
+        # 并让这一小段仓位彻底裸奔。并入最大那笔，保护才落得下去。
+        merged = lots.coalesce_dust(state, _min_amount(exchange, symbol))
+        if merged:
+            changed = True
+            ledger.log_event(symbol, side, 'lot_merge',
+                             '零头并入主笔: ' + ', '.join(
+                                 f'{x["id"]} +{x["qty"]:.6g}' for x in merged), level='info')
+            await _cancel_dead_lot_stops(exchange, conf, symbol, side, pos, price,
+                                         [x['id'] for x in merged])
         # 没有干预但数量有精度漂移时，按当前比例校准到交易所真值
         lots.sync_total(state, contracts)
 
@@ -748,6 +847,25 @@ async def _apply_reduce(exchange, conf: Dict[str, Any], bundle: Dict[str, Any],
     if qty <= 0:
         return
 
+    # 交易所最小下单量：仓位小到无法再拆分时（BTC 0.001 / BNB 0.04 这类），
+    # 每轮都会算出同一个「卖 0.0002」的单，交易所必然拒单 —— 不拦住就会
+    # 每 3 秒报一次同样的错，档位永远不前进，日志也彻底被刷满。
+    min_qty = _min_amount(exchange, symbol)
+    stepped = _stepped_qty(exchange, symbol, qty)
+    if stepped <= 0:
+        return
+    # 整仓退出（ratio≈1）在上面已经走全平分支，走到这里的都是「部分减仓」：
+    # 拆不动就跳过并退避，而不是把必然被拒的单发出去。
+    if min_qty > 0 and stepped < min_qty:
+        note = (f"{act.get('reason') or tag}：本档需卖 {stepped:.8g}，低于交易所最小下单量 "
+                f"{min_qty:.8g}，已跳过（这一笔不足以再拆分）")
+        attempts[tag] = now - cooldown + max(
+            60.0, _f(conf.get('min_qty_retry_cooldown_sec'), 300.0))
+        ledger.log_event(symbol, side, 'skip', note, level='warning',
+                         trigger=tag, lot_id=act.get('lot_id'))
+        logger.warning(f'[{symbol}/{side}] ⏭️ {note}')
+        return
+
     maker_only = True
     if tiers:
         maker_only = (max(tiers) + 1) <= int(_f(conf.get('tier_maker_only_until'), 2))
@@ -787,6 +905,13 @@ async def _apply_reduce(exchange, conf: Dict[str, Any], bundle: Dict[str, Any],
     # 误判成「人工减仓」，白写一条事件、白发一条提示。
     state['q_seen'] = after
     state['contracts'] = after
+    # 成交时刻：下一轮若拿到比它更早的持仓快照，必须重新取真值再比对数量。
+    state['self_trade_ts'] = now
+    merged = lots.coalesce_dust(state, min_qty)
+    if merged:
+        ledger.log_event(symbol, side, 'lot_merge',
+                         f'减仓后零头并入主笔: ' + ', '.join(
+                             f'{x["id"]} +{x["qty"]:.6g}' for x in merged), level='info')
     if cleared:
         bundle['_cleared_lots'] = (bundle.get('_cleared_lots') or []) + [act.get('lot_id')]
     ledger.save(symbol, side, state)
@@ -795,11 +920,8 @@ async def _apply_reduce(exchange, conf: Dict[str, Any], bundle: Dict[str, Any],
     # 触发时可能把别的 lot 一起吃掉（或本笔卖完仍挂一张超额单）。
     try:
         if cleared:
-            all_stops = await engine._find_stop_orders(
-                exchange, symbol, side, pos, snap.price, conf, force=True)
-            own = lots.group_stops_by_lot(
-                all_stops or [], [{'id': act.get('lot_id')}]).get(act.get('lot_id'), [])
-            await engine._cancel_stop_orders(exchange, symbol, own, conf)
+            await _cancel_dead_lot_stops(exchange, conf, symbol, side, pos, snap.price,
+                                         [act.get('lot_id')])
         elif _f(lot.get('stop')) > 0:
             await _apply_stop(exchange, conf, bundle, {
                 'type': 'stop', 'price': _f(lot.get('stop')), 'tag': 'stop:resize',
@@ -862,6 +984,29 @@ async def _apply_stop(exchange, conf: Dict[str, Any], bundle: Dict[str, Any],
         await engine._cancel_stop_orders(exchange, symbol, own_stops, conf)
 
     previous = _f(lot.get('stop') if lot else state.get('stop'))
+    # 最小下单量：这一笔小到挂不出自己的 STOP 时，交易所会一直拒单。
+    # 还有别的笔 → 记一次并跳过（零头会在下一轮归并）；只剩这一笔 →
+    # 退回整仓 closePosition STOP，宁可覆盖整仓也不让仓位裸奔。
+    lot_qty = _f(lot.get('contracts')) if lot else 0.0
+    min_qty = _min_amount(exchange, symbol)
+    stepped = _stepped_qty(exchange, symbol, lot_qty) if lot_qty > 0 else 0.0
+    if lot and lot_qty > 0 and min_qty > 0 and stepped < min_qty:
+        siblings = [x for x in state.get('lots') or []
+                    if x is not lot and _f(x.get('contracts')) > 0]
+        if siblings:
+            note = (f'lot {lot_id} 剩余 {lot_qty:.8g}，低于交易所最小下单量 '
+                    f'{min_qty:.8g}，无法单独挂 STOP（等零头归并）')
+            attempts[tag] = now - cooldown + max(
+                60.0, _f(conf.get('min_qty_retry_cooldown_sec'), 300.0))
+            if not lot.get('stop_skip_logged'):
+                lot['stop_skip_logged'] = True
+                ledger.log_event(symbol, side, 'skip', note, level='warning',
+                                 trigger=tag, lot_id=lot_id)
+                logger.warning(f'[{symbol}/{side}] ⏭️ {note}')
+            return
+        lot = None      # 只剩这一笔：走整仓兜底
+        lot_id = None
+        attempts = state.setdefault('attempts', {})
     attempts[tag] = now
     if lot and _f(lot.get('contracts')) > 0:
         seq = int(_f(lot.get('stop_seq'))) + 1
@@ -969,6 +1114,8 @@ async def protect_positions_main_v2(exchange) -> None:
                 return
 
             positions = await engine._fetch_positions(exchange, conf, force=False)
+            # 快照时刻：_prepare 用它判断「这份持仓是不是早于我们自己上一次成交」。
+            pos_ts = time.time()
             await _refresh_tickers(exchange, conf)
 
             active: Dict[Key, Dict[str, Any]] = {}
@@ -991,7 +1138,7 @@ async def protect_positions_main_v2(exchange) -> None:
                     symbol, side = item
                     async with sem:
                         try:
-                            return await _prepare(exchange, conf, symbol, side, active[item])
+                            return await _prepare(exchange, conf, symbol, side, active[item], pos_ts)
                         except Exception as exc:  # noqa: BLE001
                             logger.error(f'[{symbol}/{side}] v2 巡检异常: {exc}')
                             return None
@@ -1002,6 +1149,10 @@ async def protect_positions_main_v2(exchange) -> None:
                 await asyncio.gather(*(_execute(exchange, conf, b) for b in bundles))
                 for b in bundles:
                     ledger.save(b['symbol'], b['side'], b['state'])
+                if any(b.get('actions') for b in bundles):
+                    # 自己下过单：下一轮必须重新拉持仓。缓存里还是成交前的数量，
+                    # 拿它对比已扣减的账本会凭空判出一次「加仓」。
+                    engine.RUNTIME.positions_cache = (0.0, None)
 
             V2.last_cycle_ts = time.time()
             V2.cycle_count += 1
@@ -1035,9 +1186,19 @@ def status() -> Dict[str, Any]:
         plan = state.get('plan') or {}
         levels = plan.get('levels') or []
         tps = plan.get('tp_prices') or [None, None, None]
-        done = set(risk_model._ints(state.get('tiers_done')))
-        tp_done = set(risk_model._ints(state.get('tp_done')))
-        armed = set(risk_model._ints(state.get('tp_armed')))
+        # 决策已按每笔 lot 独立，展示必须跟着聚合：不加这一层的话，
+        # 每笔的进度根本不上浮，页面会一直显示「TP1 未完成 / 无止损」。
+        # 完成标记取并集（至少一笔卖过），止损取最靠近现价的那条（最先触发）。
+        live_lots = [x for x in state.get('lots') or [] if _f(x.get('contracts')) > 0]
+        shown = live_lots or [state]
+        done = set().union(*(set(risk_model._ints(x.get('tiers_done'))) for x in shown))
+        tp_done = set().union(*(set(risk_model._ints(x.get('tp_done'))) for x in shown))
+        armed = set().union(*(set(risk_model._ints(x.get('tp_armed'))) for x in shown))
+        stops = [_f(x.get('stop')) for x in live_lots if _f(x.get('stop')) > 0]
+        stop_price = (max(stops) if side == 'long' else min(stops)) if stops else state.get('stop')
+        total_q = sum(_f(x.get('contracts')) for x in live_lots)
+        avg_entry = (sum(_f(x.get('entry')) * _f(x.get('contracts')) for x in live_lots) / total_q
+                     if total_q > 0 else plan.get('entry'))
         # 止盈不再挂到交易所，前端要区分三种状态：
         #   待突破（还没越过 TP）/ 待回落（已突破，等价格回到 TP）/ 已完成
         tp_wait_level = next((i + 1 for i in range(len(tps))
@@ -1048,12 +1209,20 @@ def status() -> Dict[str, Any]:
             'symbol': symbol,
             'side': side,
             'contracts': state.get('contracts'),
-            'entry_price': plan.get('entry'),
+            'entry_price': avg_entry,
             # 交易所真实均价（计划 entry 建周期时锁定；两者不等 = 加仓/重开未被识别）
             'exchange_entry': state.get('exchange_entry'),
             'mark_price': state.get('last_price'),
-            'stop_price': state.get('stop'),
+            'stop_price': stop_price,
             'protected_stop': None,
+            # 逐笔明细：每笔自己的开仓价、剩余量、止损与进度（前端可选择性展示）
+            'lots': [{
+                'id': x.get('id'), 'entry': x.get('entry'),
+                'contracts': x.get('contracts'), 'stop': x.get('stop'),
+                'tiers_done': risk_model._ints(x.get('tiers_done')),
+                'tp_done': risk_model._ints(x.get('tp_done')),
+                'tp_armed': risk_model._ints(x.get('tp_armed')),
+            } for x in live_lots],
             'tp1_price': tps[0] if len(tps) > 0 else None,
             'tp2_price': tps[1] if len(tps) > 1 else None,
             'tp3_price': tps[2] if len(tps) > 2 else None,

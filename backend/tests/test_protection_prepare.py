@@ -6,12 +6,13 @@
 from __future__ import annotations
 
 import asyncio
+import time
 
 import pandas as pd
 import pytest
 
 from app.core import database
-from app.protection import engine, ledger, risk_model, runner
+from app.protection import engine, ledger, lots, risk_model, runner
 
 SYMBOL = 'ETH/USDC:USDC'
 
@@ -64,8 +65,10 @@ def _pos(entry: float, contracts: float) -> dict:
             'info': {'positionSide': 'BOTH'}}
 
 
-def _run(conf, pos):
-    return asyncio.run(runner._prepare(object(), conf, SYMBOL, 'long', pos))
+def _run(conf, pos, pos_ts=None):
+    # pos_ts 默认「刚刚拉到的快照」；传旧时间戳可模拟缓存里的过期持仓
+    ts = time.time() if pos_ts is None else pos_ts
+    return asyncio.run(runner._prepare(object(), conf, SYMBOL, 'long', pos, ts))
 
 
 def _conf() -> dict:
@@ -149,3 +152,85 @@ def test_prepare_does_not_flag_our_own_reduce_as_manual(wired):
     _run(conf, _pos(100.0, 7.0))
     kinds = [e['kind'] for e in ledger.recent_events(20, symbol=SYMBOL)]
     assert 'intervention' not in kinds
+
+
+def test_prepare_ignores_quantity_drift_right_after_our_own_fill(wired, monkeypatch):
+    """自己刚成交完（静默窗口内）：数量差不能判成人工加仓。
+
+    现场：ETH 止盈卖掉 0.002，下一轮拿到成交前的旧快照 → 判成「加仓 +0.002」，
+    凭空建了一笔 lot 并推送，再下一轮又判成「外部减仓」，来回横跳。
+    """
+    conf = _conf()
+    _run(conf, _pos(100.0, 10.0))
+    state = ledger.load(SYMBOL, 'long')
+    state['q_seen'] = 8.0            # 模拟 _apply_reduce 成交后的同步
+    state['self_trade_ts'] = time.time()
+    ledger.save(SYMBOL, 'long', state)
+
+    async def fake_fresh(*_a, **_k):
+        return _pos(100.0, 10.0)
+
+    monkeypatch.setattr(engine, '_position_fresh', fake_fresh)
+    bundle = _run(conf, _pos(100.0, 10.0))
+    assert len(bundle['state']['lots']) == 1
+    assert bundle['state']['contracts'] == pytest.approx(10.0)
+    kinds = [e['kind'] for e in ledger.recent_events(20, symbol=SYMBOL)]
+    assert 'lot_add' not in kinds
+    assert 'intervention' not in kinds
+
+
+def test_prepare_refetches_position_older_than_our_own_fill(wired, monkeypatch):
+    """快照早于自己的成交时刻：必须先取交易所真值，再判断加/减仓。"""
+    conf = _conf()
+    _run(conf, _pos(100.0, 10.0))
+    state = ledger.load(SYMBOL, 'long')
+    state['q_seen'] = 6.0
+    state['self_trade_ts'] = 5000.0
+    ledger.save(SYMBOL, 'long', state)
+
+    async def fake_fresh(*_a, **_k):
+        return _pos(100.0, 6.0)
+
+    monkeypatch.setattr(engine, '_position_fresh', fake_fresh)
+    bundle = _run(conf, _pos(100.0, 10.0), pos_ts=4000.0)
+
+    assert bundle['state']['contracts'] == pytest.approx(6.0)
+    assert len(bundle['state']['lots']) == 1
+    kinds = [e['kind'] for e in ledger.recent_events(20, symbol=SYMBOL)]
+    assert 'lot_add' not in kinds
+
+
+def test_prepare_labels_own_stop_trigger_as_stop_fill(wired):
+    """兜底 STOP 触发导致的减仓，不能报成「人工/外部减仓」。"""
+    conf = _conf()
+    _run(conf, _pos(100.0, 10.0))
+    state = ledger.load(SYMBOL, 'long')
+    state['lots'][0]['stop'] = 101.0      # 已在现价（100）另一侧，具备触发条件
+    ledger.save(SYMBOL, 'long', state)
+
+    _run(conf, _pos(100.0, 4.0))
+    events = ledger.recent_events(20, symbol=SYMBOL)
+    kinds = [e['kind'] for e in events]
+    assert 'stop_fill' in kinds
+    assert 'intervention' not in kinds
+    assert any('兜底止损单已触发' in e['message'] for e in events)
+
+
+def test_status_reports_per_lot_stop_and_progress(wired):
+    """展示层要按 lot 聚合：每笔的止损与进度不上浮，页面就会永远显示「无止损」。"""
+    conf = _conf()
+    _run(conf, _pos(100.0, 10.0))
+    state = ledger.load(SYMBOL, 'long')
+    state['lots'][0]['stop'] = 96.5
+    state['lots'][0]['tp_done'] = [0]
+    second = lots.add_lot(state, 'long', 104.0, 4.0,
+                          risk_model.build_plan('long', 104.0, 2.0, (97.0, 95.0, 92.0), conf),
+                          2000.0)
+    ledger.save(SYMBOL, 'long', state)
+
+    row = next(r for r in runner.status()['positions'] if r['symbol'] == SYMBOL)
+    assert row['stop_price'] == pytest.approx(96.5)   # 多头取最靠近现价的那条
+    assert row['contracts'] == pytest.approx(14.0)
+    assert row['entry_price'] == pytest.approx((100.0 * 10.0 + 104.0 * 4.0) / 14.0)
+    assert row['tp1_done'] is True
+    assert {x['id'] for x in row['lots']} == {state['lots'][0]['id'], second['id']}

@@ -119,3 +119,55 @@ def test_sync_total_keeps_proportions_when_exchange_drifts():
     lots.add_lot(state, 'long', 110.0, 10.0, _plan(110.0), 2000.0)
     lots.sync_total(state, 18.0)
     assert [x['contracts'] for x in state['lots']] == pytest.approx([9.0, 9.0])
+
+
+def test_coalesce_dust_merges_unsplittable_remainder_into_biggest_lot():
+    """小于最小下单量的零头挂不出自己的 STOP：并入最大那笔，保护才落得下去。"""
+    state = lots.migrate(_legacy_state(entry=100.0, qty=10.0), 'long', 100.0, 10.0, 1000.0)
+    big = state['lots'][0]
+    big['stop'] = 94.0
+    dust = lots.add_lot(state, 'long', 110.0, 0.004, _plan(110.0), 2000.0)
+
+    merged = lots.coalesce_dust(state, 0.01)
+
+    assert merged == [{'id': dust['id'], 'qty': pytest.approx(0.004)}]
+    assert len(state['lots']) == 1
+    assert state['lots'][0]['id'] == big['id']
+    assert state['contracts'] == pytest.approx(10.004)
+    # 合并不动主笔的计划与止损：只是把零头挂到它名下
+    assert state['lots'][0]['plan']['entry'] == pytest.approx(100.0)
+    assert state['lots'][0]['stop'] == pytest.approx(94.0)
+
+
+def test_coalesce_dust_leaves_everything_alone_when_no_minimum():
+    state = lots.migrate(_legacy_state(entry=100.0, qty=10.0), 'long', 100.0, 10.0, 1000.0)
+    lots.add_lot(state, 'long', 110.0, 0.004, _plan(110.0), 2000.0)
+    assert lots.coalesce_dust(state, 0.0) == []
+    assert len(state['lots']) == 2
+
+
+def test_reduce_is_attributed_to_the_lot_whose_stop_triggered():
+    """兜底 STOP 触发：减仓扣在那一笔上，别的笔数量一点不动。"""
+    state = lots.migrate(_legacy_state(entry=100.0, qty=10.0), 'long', 100.0, 10.0, 1000.0)
+    big = state['lots'][0]
+    small = lots.add_lot(state, 'long', 110.0, 4.0, _plan(110.0), 2000.0)
+
+    removed = lots.allocate_to_lot(state, small['id'], 4.0, 3000.0)
+
+    assert removed == [small]
+    assert state['lots'] == [big]
+    assert big['contracts'] == pytest.approx(10.0)
+    assert state['contracts'] == pytest.approx(10.0)
+
+
+def test_reduce_beyond_one_lot_spills_over_proportionally():
+    """这一笔不够扣：先扣完它，剩下的再按比例分摊。"""
+    state = lots.migrate(_legacy_state(entry=100.0, qty=10.0), 'long', 100.0, 10.0, 1000.0)
+    big = state['lots'][0]
+    small = lots.add_lot(state, 'long', 110.0, 4.0, _plan(110.0), 2000.0)
+
+    removed = lots.allocate_to_lot(state, small['id'], 6.0, 3000.0)
+
+    assert removed == [small]
+    assert big['contracts'] == pytest.approx(8.0)
+    assert state['contracts'] == pytest.approx(8.0)

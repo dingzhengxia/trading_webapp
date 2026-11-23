@@ -191,6 +191,55 @@ def apply_owned_reduce(state: Dict[str, Any], lot_id: Optional[str], sold_qty: f
     return cleared
 
 
+def allocate_to_lot(state: Dict[str, Any], lot_id: Optional[str], qty: float,
+                    now: float) -> List[Dict[str, Any]]:
+    """把一笔减少优先扣在指定 lot 上，超出部分再按比例分摊。
+
+    用于「兜底 STOP 触发」：交易所成交回单带不了 lot 归属，但我们知道是哪一张
+    单没的（clientAlgoId / 触发价），减仓就该记在那一笔上，而不是摊平所有笔。
+    """
+    lot = find_lot(state, lot_id)
+    if lot is None or qty <= 0:
+        return allocate_reduce(state, qty)
+    own = min(float(qty), _f(lot.get('contracts')))
+    removed = [lot] if apply_owned_reduce(state, lot_id, own, [], [], now) else []
+    rest = float(qty) - own
+    if rest > 1e-12:
+        removed += allocate_reduce(state, rest)
+    return removed
+
+
+def coalesce_dust(state: Dict[str, Any], min_qty: float) -> List[Dict[str, Any]]:
+    """把小于交易所最小下单量的零头并入剩余量最大的那笔，返回并入明细。
+
+    交易所按最小步长下单：小于 min_qty 的笔既挂不出自己的兜底 STOP，
+    也无法再分批减仓，只会每轮刷「数量精度」错误、并让这一小段仓位裸奔。
+    留一笔能下单的，比留一堆挂不出单的碎笔安全。
+    """
+    if min_qty <= 0:
+        return []
+    items = [x for x in state.get('lots') or [] if _f(x.get('contracts')) > 0]
+    if len(items) < 2:
+        return []
+    total = sum(_f(x.get('contracts')) for x in items)
+    if total < min_qty:
+        return []          # 整仓都不够一手：归并也挂不出单，保持原样
+    keep = max(items, key=lambda x: _f(x.get('contracts')))
+    dust = [x for x in items if x is not keep and _f(x.get('contracts')) < min_qty]
+    if not dust:
+        return []
+    merged: List[Dict[str, Any]] = []
+    for lot in dust:
+        qty = _f(lot.get('contracts'))
+        keep['contracts'] = _f(keep.get('contracts')) + qty
+        keep['size_anchor'] = _f(keep.get('size_anchor')) + (_f(lot.get('size_anchor')) or qty)
+        merged.append({'id': lot.get('id'), 'qty': qty})
+    dust_ids = {id(x) for x in dust}
+    state['lots'] = [x for x in state['lots'] if id(x) not in dust_ids]
+    resync(state)
+    return merged
+
+
 def sync_total(state: Dict[str, Any], total: float) -> None:
     """把各 lot 的数量校准到交易所真值（比例不变），消除精度漂移。"""
     items = [x for x in state.get('lots', []) if _f(x.get('contracts')) > 0]

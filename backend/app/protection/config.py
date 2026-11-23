@@ -88,6 +88,13 @@ DEFAULT_CONFIG = {
  # 交易所保护 STOP 的「事实核对」间隔（秒）：以交易所实际挂单为准，
  # 用户手动撤销后能自动补挂，手动改价后账本跟着纠正。0 = 不核对（退回纯账本口径）。
  'stop_verify_interval_sec': 15.0,
+ # 自己成交后的静默窗口（秒）：这段时间里的数量差按「成交回报延迟」处理，
+ # 不判成人工加仓/减仓（否则自己的止盈会被误报成「有人动了仓位」）。
+ 'intervention_grace_sec': 10.0,
+ # 兜底 STOP 挂单失败后的退避（秒）：失败重试没有冷却就会每 3 秒刷同一条错。
+ 'stop_retry_cooldown_sec': 20.0,
+ # 数量低于交易所最小下单量时的退避（秒）：这一笔本来就拆不动，不必每分钟重试。
+ 'min_qty_retry_cooldown_sec': 300.0,
  'stop_min_update_pct': 0.0005,
  'stop_min_update_atr_ratio': 0.05,
  'price_source_tolerance_pct': 0.01,
