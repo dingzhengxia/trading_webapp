@@ -54,23 +54,17 @@
       </div>
       <v-divider />
       <v-list nav density="compact">
-        <v-list-item
-          v-for="item in primaryNav"
-          :key="item.path"
-          :prepend-icon="item.icon"
-          :title="item.title"
-          :to="item.path"
-          exact
-        ></v-list-item>
-        <v-divider class="my-2"></v-divider>
-        <v-list-item
-          v-for="item in secondaryNav"
-          :key="item.path"
-          :prepend-icon="item.icon"
-          :title="item.title"
-          :to="item.path"
-          exact
-        ></v-list-item>
+        <template v-for="(group, gi) in navGroups" :key="gi">
+          <v-divider v-if="gi > 0" class="my-2"></v-divider>
+          <v-list-item
+            v-for="item in group"
+            :key="item.path"
+            :prepend-icon="item.icon"
+            :title="item.title"
+            :to="item.path"
+            exact
+          ></v-list-item>
+        </template>
       </v-list>
     </v-navigation-drawer>
 
@@ -126,6 +120,7 @@ import { useSettingsStore } from '@/stores/settingsStore'
 import { useAuthStore } from '@/stores/authStore'
 import websocketService from '@/services/websocket'
 import { primaryNav, secondaryNav } from '@/config/nav'
+import type { NavItem } from '@/config/nav'
 import BottomTabBar from '@/components/BottomTabBar.vue'
 
 // 导入所有全局组件
@@ -153,6 +148,9 @@ const themeIcon = computed(() =>
 
 // 手机抽屉默认关闭；桌面用独立的常驻实例（见模板），两者不共用状态。
 const drawer = ref(false)
+
+// 桌面侧栏按组渲染：primary 与 secondary 之间隔一条分隔线
+const navGroups: NavItem[][] = [primaryNav, secondaryNav]
 
 // 从桌面切回手机时，抽屉必须回到关闭态（否则一进小屏就盖住页面）
 watch(mdAndUp, (up) => {
