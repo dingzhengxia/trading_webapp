@@ -61,24 +61,9 @@
             <span>保护止损 <span class="num">{{ stopText(row) }}</span></span>
           </div>
           <div class="d-flex flex-wrap align-center ga-1 mt-1" @click.stop="toggleGuardRow(row)">
-            <v-chip size="x-small" :variant="row.tp1_done ? 'tonal' : 'outlined'" color="info">TP1</v-chip>
-            <v-chip size="x-small" :variant="row.tp2_done ? 'tonal' : 'outlined'" color="info">TP2</v-chip>
-            <v-chip size="x-small" :variant="row.tp3_done ? 'tonal' : 'outlined'" color="info">躺平</v-chip>
-            <v-chip v-if="row.t1_done" size="x-small" variant="tonal" color="warning">T1</v-chip>
-            <v-chip v-if="row.t2_done" size="x-small" variant="tonal" color="warning">T2</v-chip>
-            <v-chip v-if="row.t3_done" size="x-small" variant="tonal" color="warning">T3</v-chip>
-            <v-chip v-if="row.t4_done" size="x-small" variant="tonal" color="error">T4</v-chip>
+            <GuardProgressChips :row="row" />
             <v-chip
-              v-if="row.tp_armed_level"
-              size="x-small"
-              variant="tonal"
-              color="success"
-              title="已突破止盈价，等价格回到该档就分批止盈（引擎每 3 秒判断）"
-            >
-              TP{{ row.tp_armed_level }} 待回落
-            </v-chip>
-            <v-chip
-              v-else-if="row.tp_wait_level"
+              v-if="!row.tp_armed_level && row.tp_wait_level"
               size="x-small"
               variant="outlined"
               color="info"
@@ -176,22 +161,7 @@
               </td>
               <td>
                 <div class="d-flex flex-wrap ga-1">
-                  <v-chip v-if="row.tp1_done" size="x-small" variant="tonal" color="info">TP1</v-chip>
-                  <v-chip v-if="row.tp2_done" size="x-small" variant="tonal" color="info">TP2</v-chip>
-                  <v-chip v-if="row.tp3_done" size="x-small" variant="tonal" color="info">躺平</v-chip>
-                  <v-chip v-if="row.t1_done" size="x-small" variant="tonal" color="warning">T1</v-chip>
-                  <v-chip v-if="row.t2_done" size="x-small" variant="tonal" color="warning">T2</v-chip>
-                  <v-chip v-if="row.t3_done" size="x-small" variant="tonal" color="warning">T3</v-chip>
-                  <v-chip v-if="row.t4_done" size="x-small" variant="tonal" color="error">T4</v-chip>
-                  <v-chip
-                    v-if="row.tp_armed_level"
-                    size="x-small"
-                    variant="tonal"
-                    color="success"
-                    title="已突破止盈价，等价格回到该档就分批止盈（引擎每 3 秒判断）"
-                  >
-                    TP{{ row.tp_armed_level }} 待回落
-                  </v-chip>
+                  <GuardProgressChips :row="row" />
                   <span
                     v-if="!hasTriggered(row)"
                     class="text-caption text-medium-emphasis"
@@ -254,6 +224,7 @@ import { formatEventTime, formatNumberOrDash as formatNumber, formatAutoPrecisio
 import { directionTone } from '@/utils/tone'
 import PageCard from '@/components/PageCard.vue'
 import EmptyState from '@/components/EmptyState.vue'
+import GuardProgressChips from '@/components/protection/GuardProgressChips.vue'
 import HelpTip from '@/components/HelpTip.vue'
 import { HELP } from '@/config/help'
 import type { ProtectionEventRow, ProtectionPositionRow } from '@/models/types'
