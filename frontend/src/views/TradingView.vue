@@ -127,20 +127,6 @@
 
         <div class="open-actions d-flex ga-2">
           <v-btn
-            variant="tonal"
-            color="info"
-            prepend-icon="mdi-check-circle-outline"
-            height="44"
-            min-width="112"
-            :disabled="calibrateDisabled"
-            :aria-label="calibrateAriaLabel"
-            aria-describedby="open-action-hint"
-            @click="syncSlTp"
-          >
-            校准 SL/TP
-          </v-btn>
-          <HelpTip :text="HELP.trading.btnCalibrate" />
-          <v-btn
             class="open-pos-btn"
             variant="flat"
             color="success"
@@ -167,7 +153,6 @@ import type { VBtn } from 'vuetify/components'
 import { useUiStore } from '@/stores/uiStore'
 import { usePositionStore } from '@/stores/positionStore'
 import { useSettingsStore } from '@/stores/settingsStore'
-import { useSnackbarStore } from '@/stores/snackbar'
 import { useDraftSettings } from '@/composables/useDraftSettings'
 import ControlPanel from '@/components/ControlPanel.vue'
 import PositionsTable from '@/components/PositionsTable.vue'
@@ -179,7 +164,7 @@ import HelpTip from '@/components/HelpTip.vue'
 import { HELP } from '@/config/help'
 import apiClient from '@/services/api'
 import { ENDPOINTS } from '@/services/endpoints'
-import type { RebalanceCriteria, UserSettings } from '@/models/types'
+import type { RebalanceCriteria } from '@/models/types'
 import { getErrorMessage } from '@/utils/errors'
 import { formatClockTime, formatUsdCompact } from '@/utils/format'
 
@@ -191,7 +176,6 @@ const configTabs = [
 const uiStore = useUiStore()
 const positionStore = usePositionStore()
 const settingsStore = useSettingsStore()
-const snackbarStore = useSnackbarStore()
 // 动作区摘要读草稿：刚改的币种/金额立刻反映在摘要里，不用等防抖保存回写 store。
 // 注意 commitDraft 与 ControlPanel 是同一份模块级单例，动作与表单不会互相打架。
 const { draft, hydrated, isDirty, lastSavedAt, commitDraft } = useDraftSettings()
@@ -254,33 +238,24 @@ const sideSummary = (side: 'long' | 'short'): string => {
 }
 
 /**
- * 动作不可用的原因，按「用户能不能自己解决」排序：
- * 运行中 > 保存中 > 加载中 > 没选币 > 没持仓（后者只影响校准）。
- * 两个按钮都 aria-describedby 到这里，禁用原因不只有视觉这一条通道。
+ * 开仓按钮不可用的原因，按「用户能不能自己解决」排序。
+ * 按钮 aria-describedby 到这里，禁用原因不只有视觉这一条通道。
  */
 const actionHint = computed(() => {
   if (uiStore.isRunning) return '有任务正在运行，完成后可再开仓'
   if (submitting.value) return '正在保存配置…'
   if (!hydrated.value) return '正在加载配置…'
   if (coinCount.value === 0) return '未选择币种：先开启多头/空头并选币'
-  if (positionStore.positions.length === 0) return '暂无持仓，校准只作用于已有仓位'
   return ''
 })
 
 const busy = computed(() => uiStore.isRunning || submitting.value)
 const openDisabled = computed(() => busy.value || !hydrated.value || coinCount.value === 0)
-const calibrateDisabled = computed(
-  () => busy.value || !hydrated.value || positionStore.positions.length === 0,
-)
 
 const openAriaLabel = computed(() => {
   const total = totalValue.value === null ? '未知' : `${formatUsdCompact(totalValue.value)} 美元`
   return `开始开仓，多头 ${longCount.value} 个币、空头 ${shortCount.value} 个币、总价值 ${total}`
 })
-const calibrateAriaLabel = computed(
-  () => `校准 SL/TP，作用于 ${positionStore.positions.length} 个持仓`,
-)
-
 // ---- 动作 ----
 /**
  * 提交草稿。刻意**不**先 flushDraftSave()：debounce.flush() 会同步触发内部的
@@ -319,39 +294,6 @@ const runAction = async (options: { canRun: () => boolean; run: () => void }): P
   submitting.value = false
 }
 
-/** 校准 payload：只取止损/止盈/移动止盈/杠杆相关键（与 /trading/sync-sltp 契约一致） */
-const buildSltpPayload = (plan: UserSettings) => {
-  const {
-    enable_long_sl_tp,
-    long_stop_loss_percentage,
-    long_take_profit_percentage,
-    enable_short_sl_tp,
-    short_stop_loss_percentage,
-    short_take_profit_percentage,
-    // --- 移动止盈参数 ---
-    enable_long_trailing_stop,
-    long_trailing_stop_callback_rate,
-    enable_short_trailing_stop,
-    short_trailing_stop_callback_rate,
-    // -------------------
-    leverage,
-  } = plan
-
-  return {
-    enable_long_sl_tp,
-    long_stop_loss_percentage,
-    long_take_profit_percentage,
-    enable_short_sl_tp,
-    short_stop_loss_percentage,
-    short_take_profit_percentage,
-    enable_long_trailing_stop,
-    long_trailing_stop_callback_rate,
-    enable_short_trailing_stop,
-    short_trailing_stop_callback_rate,
-    leverage,
-  }
-}
-
 const startTrading = () => {
   void runAction({
     canRun: () => coinCount.value > 0,
@@ -364,24 +306,6 @@ const startTrading = () => {
       // launchTask 是 fire-and-forget（不能 await）：立刻收起抽屉，把视线还给持仓表
       configOpen.value = false
       void nextTick(() => openConfigBtn.value?.$el?.focus())
-    },
-  })
-}
-
-const syncSlTp = () => {
-  void runAction({
-    canRun: () => positionStore.positions.length > 0,
-    run: () => {
-      const plan = settingsStore.settings
-      if (!plan) return
-      uiStore.launchTask(
-        ENDPOINTS.tradingSyncSltp,
-        buildSltpPayload(plan),
-        '同步SL/TP/移动止盈',
-        positionStore.positions.length,
-      )
-      // 校准只把参数推给已有仓位，抽屉保持打开让用户继续核对配置
-      snackbarStore.show({ message: '已提交校准，结果见进度条', color: 'info', timeout: 3000 })
     },
   })
 }

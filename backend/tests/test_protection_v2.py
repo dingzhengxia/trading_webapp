@@ -367,17 +367,14 @@ def test_restore_keeps_price_below_market():
 
 
 # ---------------------------------------------------------------------------
-# 加仓：唯一允许止损下移的场景
+# 加仓：每笔独立，老笔止损不再因均价变化而下移
 # ---------------------------------------------------------------------------
-def test_rebase_allows_stop_move_down_once():
-    """加仓把均价抬到 102 后，旧止损（103）落在均价之上；本轮必须按新基准重算。"""
+def test_add_does_not_allow_stop_move_down():
     state = _state()
     state["stop"] = 103.0
     actions = _apply(state, risk_model.decide(
         state, _snap_with_exchange(price=104.0, exchange_stop=103.0, rebased=True), CONF))
-    stops = [a for a in actions if a["type"] == "stop"]
-    assert stops and stops[0]["tag"] == "stop:rebase"
-    assert stops[0]["price"] < 103.0
+    assert [a for a in actions if a["type"] == "stop"] == []
 
 
 def test_non_rebase_never_moves_stop_down():

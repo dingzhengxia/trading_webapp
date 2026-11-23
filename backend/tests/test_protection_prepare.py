@@ -86,29 +86,38 @@ def test_prepare_creates_plan_on_first_sight(wired):
     assert state['q_seen'] == pytest.approx(10.0)
 
 
-def test_prepare_treats_entry_drift_as_add_not_new_cycle(wired):
+def test_prepare_add_creates_independent_lot_and_leaves_old_one_alone(wired):
     conf = _conf()
     _run(conf, _pos(100.0, 10.0))
     stored = ledger.load(SYMBOL, 'long')
-    stored['tiers_done'] = [0]
-    stored['stop'] = 94.0
+    old_lot = stored['lots'][0]
+    old_lot['tiers_done'] = [0]
+    old_lot['stop'] = 94.0
     ledger.save(SYMBOL, 'long', stored)
 
-    # 人工加仓：均价 100 → 104，仓位 10 → 14
+    # 人工加仓：均价 100 → 104，仓位 10 → 14（反解本笔成交价 114）
     bundle = _run(conf, _pos(104.0, 14.0))
     state = bundle['state']
-    assert state['plan']['entry'] == pytest.approx(104.0)
-    assert state['plan']['rebase_count'] == 1
-    # 进度保留：卖过的档不会被重置成「没卖过」
-    assert state['tiers_done'] == [0]
-    # 规模锚跟着加仓抬升，后续档位按新规模分批
-    assert state['size_anchor'] == pytest.approx(14.0)
-    # 灾难线跟着新均价走，永远在均价下方
-    assert state['plan']['disaster_stop'] < 104.0
-    assert bundle['snap'].rebased is True
+    assert len(state['lots']) == 2
+    old = next(x for x in state['lots'] if x['id'] == old_lot['id'])
+    new = next(x for x in state['lots'] if x['id'] != old_lot['id'])
+
+    # 老笔：计划 / 进度 / 止损 / 规模全部原封不动
+    assert old['plan']['entry'] == pytest.approx(100.0)
+    assert old['tiers_done'] == [0]
+    assert old['stop'] == pytest.approx(94.0)
+    assert old['contracts'] == pytest.approx(10.0)
+    # 新笔：按自己的成交价单独建计划
+    assert new['entry'] == pytest.approx(114.0)
+    assert new['plan']['entry'] == pytest.approx(114.0)
+    assert new['plan']['disaster_stop'] < 114.0
+    assert new['tiers_done'] == []
+    assert new['contracts'] == pytest.approx(4.0)
+    assert state['contracts'] == pytest.approx(14.0)
 
     kinds = [e['kind'] for e in ledger.recent_events(20, symbol=SYMBOL)]
-    assert 'rebase' in kinds
+    assert 'lot_add' in kinds
+    assert 'rebase' not in kinds
 
 
 def test_prepare_keeps_plan_on_manual_reduce(wired):
@@ -121,6 +130,7 @@ def test_prepare_keeps_plan_on_manual_reduce(wired):
     state = bundle['state']
     assert state['plan']['entry'] == pytest.approx(plan_entry)  # 均价没变，计划不动
     assert state['contracts'] == pytest.approx(6.0)
+    assert state['lots'][0]['contracts'] == pytest.approx(6.0)
     assert state['size_anchor'] == pytest.approx(10.0)          # 规模锚不缩
     assert bundle['snap'].rebased is False
 

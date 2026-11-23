@@ -107,48 +107,17 @@ def test_resolve_atr_follows_signal_timeframe(monkeypatch, async_logger):
     assert used == ['1h', '4h', '4h']
 
 
-def test_live_stop_uses_atr_when_mode_atr(
-    fake_exchange, async_logger, stop_event, position_factory, fast_sleep, monkeypatch,
-):
-    async def fake_atr(full_symbol, config, logger):
-        return 2.0
-
-    monkeypatch.setattr(sl_tp_logic_async, '_resolve_atr', fake_atr)
-    position = position_factory('BTC', 'BTC/USDC:USDC', 'long', contracts=1.0, entry_price=100.0)
-    config = dict(BASE, signal_exit_mode='atr')
-
-    _run(sl_tp_logic_async.set_tp_sl_for_position_async(
-        fake_exchange, position, config, async_logger, stop_event))
-
-    # 止损 = entry - 2.0(ATR) * 2.0(sl_atr) = 96；止盈 = entry + 2R = 108
-    assert _stops(fake_exchange.create_order_calls) == [pytest.approx(96.0)]
-
-
-def test_live_stop_falls_back_to_percent_without_atr(
-    fake_exchange, async_logger, stop_event, position_factory, fast_sleep, monkeypatch,
-):
-    async def no_atr(full_symbol, config, logger):
-        return None
-
-    monkeypatch.setattr(sl_tp_logic_async, '_resolve_atr', no_atr)
-    position = position_factory('BTC', 'BTC/USDC:USDC', 'long', contracts=1.0, entry_price=100.0)
-    config = dict(BASE, signal_exit_mode='atr')
-
-    _run(sl_tp_logic_async.set_tp_sl_for_position_async(
-        fake_exchange, position, config, async_logger, stop_event))
-
-    # 回退 percent：50%/20 倍杠杆 = 2.5% -> 97.5
-    assert _stops(fake_exchange.create_order_calls) == [pytest.approx(97.5)]
-    assert any('回退百分比' in msg for _, msg in async_logger.calls)
-
-
-def test_live_stop_percent_mode_unchanged(
+def test_legacy_live_stop_path_is_disabled(
     fake_exchange, async_logger, stop_event, position_factory, fast_sleep,
 ):
+    """系统只保留 v2：实盘固定条件单入口不再按均价挂单。"""
     position = position_factory('BTC', 'BTC/USDC:USDC', 'long', contracts=1.0, entry_price=100.0)
-    _run(sl_tp_logic_async.set_tp_sl_for_position_async(
-        fake_exchange, position, dict(BASE), async_logger, stop_event))
-    assert _stops(fake_exchange.create_order_calls) == [pytest.approx(97.5)]
+
+    for config in (dict(BASE), dict(BASE, signal_exit_mode='atr')):
+        assert _run(sl_tp_logic_async.set_tp_sl_for_position_async(
+            fake_exchange, position, config, async_logger, stop_event)) is True
+
+    assert fake_exchange.create_order_calls == []
 
 
 # ---------------------------------------------------------------- 超时平仓执行器
@@ -251,7 +220,7 @@ def test_has_protective_order_ignores_take_profit():
     assert sl_tp_logic_async.has_protective_order(stop, 'ETH/USDC:USDC', True) is False
 
 
-def test_guard_places_missing_stop(
+def test_legacy_guard_is_disabled(
     fake_exchange, async_logger, stop_event, position_factory, fast_sleep,
 ):
     position = position_factory('BTC', 'BTC/USDC:USDC', 'long', contracts=1.0, entry_price=100.0)
@@ -260,8 +229,8 @@ def test_guard_places_missing_stop(
     stats = _run(sl_tp_logic_async.ensure_positions_sltp_async(
         fake_exchange, [position], dict(BASE), async_logger, stop_event))
 
-    assert stats == {'checked': 1, 'guarded': 1, 'skipped': 0, 'failed': 0}
-    assert _stops(fake_exchange.create_order_calls) == [pytest.approx(97.5)]
+    assert stats == {'checked': 1, 'guarded': 0, 'skipped': 1, 'failed': 0}
+    assert fake_exchange.create_order_calls == []
 
 
 def test_guard_skips_position_with_stop(

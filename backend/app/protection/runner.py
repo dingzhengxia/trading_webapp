@@ -21,7 +21,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 from loguru import logger
 
-from . import cooldown, engine, ledger, risk_model, tp_orders
+from . import cooldown, engine, ledger, lots, risk_model, tp_orders
 from .config import load_protection_config
 from .notifier import send_alert
 
@@ -299,17 +299,14 @@ def _log_rebase(symbol: str, side: str, plan: Dict[str, Any], entry: float,
     logger.warning(f'[{symbol}/{side}] ♻️ {label}')
 
 
-async def _exchange_stop_price(exchange, conf: Dict[str, Any], symbol: str, side: str,
+async def _fetch_program_stops(exchange, conf: Dict[str, Any], symbol: str, side: str,
                                pos: Dict[str, Any], price: float,
-                               now: float) -> Optional[float]:
-    """交易所上真实存在的保护 STOP 触发价：0 = 查过了、没有；None = 本轮没查。
+                               now: float) -> Optional[List[Dict[str, Any]]]:
+    """按节流取本仓的保护 STOP 原始列表；None = 本轮没查，[] = 查过且没有。
 
-    为什么必须查交易所而不是只信账本 state['stop']：账本记的是「我们上次挂了什么」，
-    用户可以在币安 App 里把那张单撤掉或改价。只看账本会出两种错：
-    · 手动撤单后永远不补挂 —— 决策算出的 desired 和账本里的旧价差不多，判定「无需推进」；
-    · 止损上移永远和旧价比，交易所那边其实早就没有兜底单了。
-    节流到 stop_verify_interval_sec（默认 15s），并复用 _find_stop_orders 的
-    orders_cache（TTL 10s），所以每个 symbol 最多 15s 一次 openOrders。
+    账本里的 state['stop'] 只是「我们上次挂了什么」，用户可以在 App 里撤单或改价，
+    因此必须以交易所为准。节流到 stop_verify_interval_sec（默认 15s），并复用
+    _find_stop_orders 的 orders_cache（TTL 10s）。
     """
     if not bool(conf.get('exchange_hard_stop_enabled', True)):
         return None
@@ -320,18 +317,28 @@ async def _exchange_stop_price(exchange, conf: Dict[str, Any], symbol: str, side
         return None
     LAST_STOP_VERIFY[key] = now
     try:
-        stops = await engine._find_stop_orders(
+        return await engine._find_stop_orders(
             exchange, symbol, side, pos, price, conf, force=False)
     except Exception as exc:  # noqa: BLE001 - 查询失败退回账本口径，不影响本轮守护
         logger.warning(f'[{symbol}/{side}] 核对交易所保护STOP失败: {exc}')
         return None
-    if not stops:
-        return 0.0
-    # 一仓多张 STOP 时取「最靠盈利方向」的那张作为真相，与 _apply_stop 的口径一致
-    triggers = [float(t) for t in (engine._algo_trigger(o) for o in stops) if t]
+
+
+def _best_stop_price(stops: List[Dict[str, Any]], side: str) -> float:
+    triggers = [float(t) for t in (engine._algo_trigger(o) for o in stops or []) if t]
     if not triggers:
         return 0.0
     return max(triggers) if side == 'long' else min(triggers)
+
+
+async def _exchange_stop_price(exchange, conf: Dict[str, Any], symbol: str, side: str,
+                               pos: Dict[str, Any], price: float,
+                               now: float) -> Optional[float]:
+    """交易所上真实存在的保护 STOP 触发价（兼容入口，0 = 查过但没有）。"""
+    stops = await _fetch_program_stops(exchange, conf, symbol, side, pos, price, now)
+    if stops is None:
+        return None
+    return _best_stop_price(stops, side)
 
 
 async def _prepare(exchange, conf: Dict[str, Any], symbol: str, side: str,
@@ -369,21 +376,25 @@ async def _prepare(exchange, conf: Dict[str, Any], symbol: str, side: str,
 
     price = await _price(exchange, symbol, conf) or last_close
 
-    state = ledger.load(symbol, side)
+    state_raw = ledger.load(symbol, side)
     opened_ms = engine._position_open_time_ms(pos)
-    new_position = _is_new_position(state, opened_ms)
-    rebased = False
+    new_position = _is_new_position(state_raw, opened_ms)
+    changed = False
 
     if new_position:
         plan = _build_plan_safe(side, entry, atr, structure, conf, now, symbol)
-        prev = state or {}
+        prev = state_raw or {}
         state = risk_model.new_state(uuid.uuid4().hex, side, entry, contracts, plan, now)
         state['opened_at_ms'] = int(opened_ms)
         state['position_version'] = 1
         # 新仓位第一轮先把交易所上残留的旧止盈单扫一遍（引擎重启/换周期都可能留下）
         state['tp_sweep_pending'] = True
+        lots.migrate(state, side, entry, contracts, now)
+        state['e_seen'] = entry
+        state['q_seen'] = contracts
+        changed = True
         logger.info(
-            f'[{symbol}/{side}] 🆕 建立风险计划 | 开仓:{entry:.6f} 持仓:{contracts:.6g} '
+            f'[{symbol}/{side}] 🆕 建立独立风险计划 | 开仓:{entry:.6f} 持仓:{contracts:.6g} '
             f'ATR:{atr:.6f} R:{plan["risk"]:.6f}({plan["risk"] / entry:.2%}) | '
             f'四档:{"/".join(f"{x:.6f}" for x in plan["levels"])} | '
             f'灾难线:{plan["disaster_stop"]:.6f}({plan["disaster_pct"]:.2%})')
@@ -396,79 +407,57 @@ async def _prepare(exchange, conf: Dict[str, Any], symbol: str, side: str,
                              f'按新仓位 {contracts:.6g} @ {entry:.6g} 重建',
                              level='warning', entry=entry)
     else:
-        plan = state['plan']
+        state = lots.migrate(state_raw, side, entry, contracts, now)
+        plan = (state.get('lots') or [{}])[0].get('plan') or {}
         atr = atr or _f(plan.get('atr_at_plan'))
 
-        # ---- 人工干预：加仓 / 减仓 / 旧版计划迁移 ----
-        if int(_f(plan.get('version'))) < risk_model.PLAN_VERSION:
-            rebased = True
-            _log_rebase(symbol, side, plan, entry, contracts,
-                        reason='plan_migrate', label='计划升级（旧版坐标系）')
-        else:
-            hit = risk_model.detect_intervention(state, side, contracts, entry, conf)
-            if hit and hit['kind'] == 'add':
-                rebased = True
-                label = (f'人工/外部加仓 +{hit["delta_qty"]:.6g}（约 @{hit["implied_price"]:.6g}），'
-                         f'均价 {hit["prev_entry"]:.6g} → {entry:.6g}')
-                _log_rebase(symbol, side, plan, entry, contracts, reason='add', label=label)
-                send_alert(conf, '仓位变动: 检测到加仓，已按新均价重算止损/止盈',
-                           f'[{symbol}] {side} {label}；持仓 {contracts:.6g}，'
-                           f'规模锚 {max(_f(state.get("size_anchor")), contracts):.6g}',
-                           symbol=symbol)
-            elif hit and hit['kind'] == 'reduce':
-                note = (f'人工/外部减仓 {hit["delta_qty"]:.6g}'
-                        f'（{hit["qty_pct"]:+.1%}），剩余 {contracts:.6g}')
-                state.setdefault('interventions', []).append(
-                    {'ts': now, 'kind': 'reduce', **{k: hit[k] for k in
-                     ('delta_qty', 'qty_pct', 'prev_qty', 'prev_entry')}})
-                state['interventions'] = state['interventions'][-20:]
-                ledger.log_event(symbol, side, 'intervention', note, level='info',
-                                 delta_qty=hit['delta_qty'], contracts=contracts)
-                logger.info(f'[{symbol}/{side}] 👤 {note}')
-                if abs(hit['qty_pct']) >= _f(conf.get('intervention_alert_pct'), 0.10):
-                    send_alert(conf, '仓位变动: 检测到减仓',
-                               f'[{symbol}] {side} {note}', symbol=symbol)
+        # ---- 人工干预：加仓单独建笔、减仓按比例分摊；老笔计划与进度一律不重算 ----
+        hit = risk_model.detect_intervention(state, side, contracts, entry, conf)
+        if hit and hit['kind'] == 'add':
+            price_new = _f(hit.get('implied_price')) or entry
+            qty_new = _f(hit.get('delta_qty'))
+            new_plan = _build_plan_safe(side, price_new, atr, structure, conf, now, symbol)
+            lot_new = lots.add_lot(state, side, price_new, qty_new, new_plan, now,
+                                   opened_ms=int(opened_ms))
+            changed = True
+            label = (f'新增独立仓位 +{qty_new:.6g} @{price_new:.6g}（新均价 {entry:.6g}），'
+                     f'lot {lot_new["id"]}')
+            logger.info(f'[{symbol}/{side}] 🆕 {label}，原各笔计划/进度/止损保持不变')
+            ledger.log_event(symbol, side, 'lot_add', label, level='warning',
+                             entry=price_new, contracts=qty_new, lot_id=lot_new['id'])
+            send_alert(conf, '仓位变动: 加仓已按本笔成交价单独建计划',
+                       f'[{symbol}] {side} {label}', symbol=symbol)
+        elif hit and hit['kind'] == 'reduce':
+            removed = lots.allocate_reduce(state, abs(_f(hit.get('delta_qty'))))
+            changed = True
+            note = (f'人工/外部减仓 {hit["delta_qty"]:.6g}'
+                    f'（{hit["qty_pct"]:+.1%}），按比例分摊到各笔，剩余 {contracts:.6g}')
+            state.setdefault('interventions', []).append(
+                {'ts': now, 'kind': 'reduce', **{k: hit[k] for k in
+                 ('delta_qty', 'qty_pct', 'prev_qty', 'prev_entry')}})
+            state['interventions'] = state['interventions'][-20:]
+            ledger.log_event(symbol, side, 'intervention', note, level='info',
+                             delta_qty=hit['delta_qty'], contracts=contracts,
+                             cleared_lots=[x.get('id') for x in removed])
+            logger.info(f'[{symbol}/{side}] 👤 {note}')
+            if abs(hit['qty_pct']) >= _f(conf.get('intervention_alert_pct'), 0.10):
+                send_alert(conf, '仓位变动: 检测到减仓（已按比例分摊）',
+                           f'[{symbol}] {side} {note}', symbol=symbol)
+            if removed:
+                # 已减光的 lot 不能再留着超额 STOP，否则会误伤其它笔
+                try:
+                    all_stops = await engine._find_stop_orders(
+                        exchange, symbol, side, pos, price, conf, force=True)
+                    stale = []
+                    for gone in removed:
+                        stale += lots.group_stops_by_lot(
+                            all_stops or [], [gone]).get(str(gone.get('id')), [])
+                    await engine._cancel_stop_orders(exchange, symbol, stale, conf)
+                except Exception as exc:  # noqa: BLE001 - 清理失败下轮继续尝试
+                    logger.warning(f'[{symbol}/{side}] 清理已平 lot 的STOP失败: {exc}')
 
-        if rebased:
-            plan = risk_model.rebase_plan(plan, side, entry, atr, structure, conf, now) \
-                or _build_plan_safe(side, entry, atr, structure, conf, now, symbol)
-            state['plan'] = plan
-            # 新阶梯要重新确认突破；已完成的档（tiers_done/tp_done）一律保留，不重复卖
-            state['tp_armed'] = []
-            state['pending'] = {}
-            logger.info(
-                f'[{symbol}/{side}] ♻️ 风险基准重建#{plan.get("rebase_count")} | '
-                f'均价:{entry:.6f} R:{plan["risk"]:.6f} | '
-                f'四档:{"/".join(f"{x:.6f}" for x in plan["levels"])} | '
-                f'灾难线:{plan["disaster_stop"]:.6f} | 已完成 T'
-                f'{"/".join(str(i + 1) for i in risk_model._ints(state.get("tiers_done"))) or "无"}'
-                f' TP{"/".join(str(i + 1) for i in risk_model._ints(state.get("tp_done"))) or "无"}')
-        else:
-            # E 结构重估：定时 / ATR 剧变触发（先到先触发），重算未触发档位线与灾难线。
-            # 约束（冻结/只外移/最小间距/R 锁定）全部在 risk_model.replan_plan 内实现；
-            # dry_run 时只记事件不落盘，便于先观察重算结果是否合理。
-            replan = _maybe_replan(state, plan, structure, atr, price, conf, now)
-            if replan is not None:
-                new_plan, reason = replan
-                old_levels = [_f(x) for x in (plan.get('levels') or [])]
-                old_disaster = _f(plan.get('disaster_stop'))
-                moved = ' '.join(
-                    f'T{i + 1} {o:.6g}->{n:.6g}'
-                    for i, (o, n) in enumerate(zip(old_levels, new_plan['levels'])) if o != n)
-                summary = f'重估#{new_plan["replan_count"]}({reason}): {moved or "档位未变"} ' \
-                          f'灾难 {old_disaster:.6g}->{new_plan["disaster_stop"]:.6g} ATR {plan.get("atr_at_plan"):.6g}->{atr:.6g}'
-                if bool(conf.get('dry_run', False)):
-                    ledger.log_event(symbol, side, 'replan_dry', f'{summary}（dry_run，未落盘）',
-                                     level='info', old_levels=old_levels,
-                                     new_levels=new_plan['levels'])
-                else:
-                    state['plan'] = new_plan
-                    plan = new_plan
-                    logger.info(f'[{symbol}/{side}] 🔁 {summary}')
-                    ledger.log_event(symbol, side, 'replan', summary, level='info',
-                                     old_levels=old_levels, new_levels=new_plan['levels'],
-                                     old_disaster=old_disaster,
-                                     new_disaster=new_plan['disaster_stop'])
+        # 没有干预但数量有精度漂移时，按当前比例校准到交易所真值
+        lots.sync_total(state, contracts)
 
     # 止盈口径迁移：旧版本把 reduceOnly 限价单预挂在交易所，价格一碰 TP 就被撮合，
     # 「先突破、再回落」根本来不及判断。现在全部交给引擎（3s 一轮），旧单必须撤掉。
@@ -478,8 +467,8 @@ async def _prepare(exchange, conf: Dict[str, Any], symbol: str, side: str,
 
     # 双轨治理（每轮检查，幂等 + 60s 节流）：接管开仓端遗留 SL/TP/TS 条件单。
     # -1 = 守护端 STOP 未就位（标志不置，节流后下轮重试）；>=0 = 接管流程完成。
-    if bool(conf.get('take_over_external_stops', False)) \
-            and not state.get('external_stops_taken_over') \
+    # 系统已只保留 v2：遗留的固定 SL/TP/TS 条件单必须一律接管，不再看旧开关。
+    if not state.get('external_stops_taken_over') \
             and now - _f(state.get('external_stops_check_ts')) > 60:
         state['external_stops_check_ts'] = now
         try:
@@ -489,27 +478,76 @@ async def _prepare(exchange, conf: Dict[str, Any], symbol: str, side: str,
         except Exception as exc:  # noqa: BLE001 - 接管失败不影响守护
             logger.warning(f'[{symbol}/{side}] 接管外部SL/TP/TS失败，下轮重试: {exc}')
 
-    # 交易所 STOP 事实核对（节流）：以交易所为准，才能发现「用户手动撤了/改了」
-    exchange_stop = await _exchange_stop_price(exchange, conf, symbol, side, pos, price, now)
+    # 交易所 STOP 事实核对（节流）：按 clientAlgoId 尾部的 lot id 归属到每一笔
+    stops = await _fetch_program_stops(exchange, conf, symbol, side, pos, price, now)
+    checked = stops is not None
+    grouped = lots.group_stops_by_lot(stops or [], state.get('lots') or []) if checked else {}
 
-    snap = risk_model.Snapshot(
-        symbol=symbol, side=side, entry=_f(plan.get('entry'), entry),
-        price=price, last_close=last_close, contracts=contracts,
-        atr=atr, structure=structure, closed_ts=closed_ts, now=now,
-        exchange_stop=float(exchange_stop or 0.0),
-        exchange_checked=exchange_stop is not None,
-        rebased=rebased,
-        base_contracts=_f(state.get('size_anchor'), contracts),
-    )
+    # 每一笔独立决策：plan / 四档进度 / TP 阶梯 / 峰值 / 止损全部只读写自己的 lot
+    decisions: List[Dict[str, Any]] = []
+    for lot in list(state.get('lots') or []):
+        lot_contracts = _f(lot.get('contracts'))
+        if lot_contracts <= 0:
+            continue
+        view = lots.lot_view(state, lot)
+        lot_plan = view.get('plan') or {}
 
-    decision = risk_model.decide(state, snap, conf)
+        # 结构重估也是每笔独立：只动这一笔未触发的档位线
+        replan = _maybe_replan(view, lot_plan, structure, atr, price, conf, now)
+        if replan is not None:
+            new_plan, reason = replan
+            old_levels = [_f(x) for x in (lot_plan.get('levels') or [])]
+            old_disaster = _f(lot_plan.get('disaster_stop'))
+            moved = ' '.join(
+                f'T{i + 1} {o:.6g}->{n:.6g}'
+                for i, (o, n) in enumerate(zip(old_levels, new_plan['levels'])) if o != n)
+            summary = (f'lot {lot.get("id")} 重估#{new_plan["replan_count"]}({reason}): '
+                       f'{moved or "档位未变"} 灾难 {old_disaster:.6g}->{new_plan["disaster_stop"]:.6g}')
+            if bool(conf.get('dry_run', False)):
+                ledger.log_event(symbol, side, 'replan_dry', f'{summary}（dry_run，未落盘）',
+                                 level='info', old_levels=old_levels,
+                                 new_levels=new_plan['levels'], lot_id=lot.get('id'))
+            else:
+                view['plan'] = new_plan
+                lot['plan'] = new_plan
+                changed = True
+                ledger.log_event(symbol, side, 'replan', summary, level='info',
+                                 old_levels=old_levels, new_levels=new_plan['levels'],
+                                 old_disaster=old_disaster,
+                                 new_disaster=new_plan['disaster_stop'], lot_id=lot.get('id'))
 
-    # 黑天鹅：独立一支，命中直接压过所有结构/止盈动作
-    emergency = await _check_emergency(exchange, conf, symbol, side, state, snap)
-    if emergency:
-        decision['actions'] = [emergency]
+        lot_stops = grouped.get(str(lot.get('id')), [])
+        snap = risk_model.Snapshot(
+            symbol=symbol, side=side, entry=_f(lot.get('entry'), entry),
+            price=price, last_close=last_close, contracts=lot_contracts,
+            atr=atr, structure=structure, closed_ts=closed_ts, now=now,
+            exchange_stop=_best_stop_price(lot_stops, side),
+            exchange_checked=checked, rebased=False,
+            base_contracts=_f(lot.get('size_anchor'), lot_contracts),
+        )
+        decision = risk_model.decide(view, snap, conf)
+        acts = []
+        for act in decision.get('actions') or []:
+            act['lot_id'] = lot.get('id')
+            act['_lot'] = lot
+            act['_view'] = view
+            acts.append(act)
+        changed |= lots.writeback(lot, decision.get('patch') or {})
+        decisions.append({'lot': lot, 'view': view, 'snap': snap, 'actions': acts})
 
-    state.update(decision.get('patch') or {})
+    actions: List[Dict[str, Any]] = [act for item in decisions for act in item['actions']]
+
+    # 黑天鹅：独立一支，命中直接压过所有结构/止盈动作（整仓一次性退出）
+    if decisions:
+        total_snap = decisions[0]['snap']
+        emergency = await _check_emergency(
+            exchange, conf, symbol, side, state,
+            total_snap.__class__(**{**total_snap.__dict__, 'contracts': contracts, 'entry': entry}))
+        if emergency:
+            emergency['lot_id'] = None
+            actions = [emergency]
+
+    lots.resync(state)
     # 仓位以交易所为唯一真值：手动平一部分不会经过 _apply_reduce，
     # 账本里的 contracts 不跟着同步，前端和日志就会一直显示旧仓位。
     state['contracts'] = contracts
@@ -521,12 +559,14 @@ async def _prepare(exchange, conf: Dict[str, Any], symbol: str, side: str,
     state['exchange_entry'] = entry
     state['last_price'] = price
     state['last_atr'] = atr
-    if new_position or rebased:
+    if changed or actions:
         ledger.save(symbol, side, state)
 
     return {
         'symbol': symbol, 'side': side, 'pos': pos, 'state': state,
-        'snap': snap, 'actions': decision.get('actions') or [],
+        'snap': decisions[0]['snap'] if decisions else None,
+        'lots': [item['snap'] for item in decisions],
+        'actions': actions,
     }
 
 
@@ -582,14 +622,16 @@ async def _apply_reduce(exchange, conf: Dict[str, Any], bundle: Dict[str, Any],
                         act: Dict[str, Any]) -> None:
     symbol, side = bundle['symbol'], bundle['side']
     state, snap, pos = bundle['state'], bundle['snap'], bundle['pos']
+    lot = act.get('_lot') or lots.find_lot(state, act.get('lot_id')) or {}
+    view = act.get('_view') or lots.lot_view(state, lot)
     tag = str(act.get('tag') or 'reduce')
     now = time.time()
 
     if _dry_run(conf, state, tag):
         return
 
-    # 失败重试冷却：下单异常后不要每轮重试，避免刷单
-    attempts = state.setdefault('attempts', {})
+    # 失败重试冷却按 lot 独立：同一标签在不同笔上互不阻塞
+    attempts = lot.setdefault('attempts', {})
     last = _f(attempts.get(tag))
     cooldown = max(0.0, _f(conf.get('action_retry_cooldown_sec'), 90.0))
     if last and now - last < cooldown:
@@ -615,10 +657,11 @@ async def _apply_reduce(exchange, conf: Dict[str, Any], bundle: Dict[str, Any],
     if act['type'] == 'exit' or _f(act.get('ratio')) >= 0.999:
         reason = str(act.get('reason') or '保护性全平')
         success, _ = await engine._full_exit_with_revalidation(
-            exchange, symbol, side, fresh, reason, conf, state)
+            exchange, symbol, side, fresh, reason, conf, view)
         if success:
             ledger.log_event(symbol, side, 'exit', reason, level='error',
-                             before=current, after=0.0, tag=tag)
+                             before=current, after=0.0, tag=tag, lot_id=act.get('lot_id'))
+            state['lots'] = []
             ledger.delete(symbol, side)
             bundle['_exited'] = True
             # 仓位没了，交易所上残留的止盈挂单必须一起撤：reduceOnly 单在无仓位时
@@ -660,7 +703,7 @@ async def _apply_reduce(exchange, conf: Dict[str, Any], bundle: Dict[str, Any],
     await engine._cancel_bot_reduce_orders(exchange, symbol, side, conf, reason=f'{tag}前')
     _, after = await engine._limit_reduce_with_maker_retry(
         exchange, symbol, side, fresh, qty, act.get('reason', '保护性减仓'), conf,
-        int(_f(state.get('position_version'), 1)), state,
+        int(_f(view.get('position_version'), 1)), view,
         max_retries=int(_f(conf.get('tier_maker_retries'), 3)),
         check_interval_sec=1.0, timeout_sec=10.0,
         marketable_retries=int(_f(conf.get('tier_marketable_retries'), 3)),
@@ -685,22 +728,40 @@ async def _apply_reduce(exchange, conf: Dict[str, Any], bundle: Dict[str, Any],
         ledger.save(symbol, side, state)
         return
 
-    state['contracts'] = after
+    # 只扣这一笔：其它 lot 的数量、计划、进度、止损一律不动
+    cleared = lots.apply_owned_reduce(
+        state, act.get('lot_id'), current - after, tiers, tps, now)
     # 我们自己的成交也要同步基线：否则下一轮的干预检测会把这次减仓
     # 误判成「人工减仓」，白写一条事件、白发一条提示。
     state['q_seen'] = after
-    state['size_anchor'] = risk_model.size_anchor(state, after)
-    state['position_version'] = int(_f(state.get('position_version'), 1)) + 1
-    if tiers:
-        state['tiers_done'] = sorted(set(risk_model._ints(state.get('tiers_done'))) | set(tiers))
-    if tps:
-        state['tp_done'] = sorted(set(risk_model._ints(state.get('tp_done'))) | set(tps))
-    state['last_action_ts'] = now
+    state['contracts'] = after
+    if cleared:
+        bundle['_cleared_lots'] = (bundle.get('_cleared_lots') or []) + [act.get('lot_id')]
     ledger.save(symbol, side, state)
 
-    text = f"{act.get('reason')}：{current:.6g} → {after:.6g}（实减 {current - after:.6g}）"
+    # 这一笔的兜底 STOP 数量必须跟着剩余仓位走：旧单按原数量 reduceOnly，
+    # 触发时可能把别的 lot 一起吃掉（或本笔卖完仍挂一张超额单）。
+    try:
+        if cleared:
+            all_stops = await engine._find_stop_orders(
+                exchange, symbol, side, pos, snap.price, conf, force=True)
+            own = lots.group_stops_by_lot(
+                all_stops or [], [{'id': act.get('lot_id')}]).get(act.get('lot_id'), [])
+            await engine._cancel_stop_orders(exchange, symbol, own, conf)
+        elif _f(lot.get('stop')) > 0:
+            await _apply_stop(exchange, conf, bundle, {
+                'type': 'stop', 'price': _f(lot.get('stop')), 'tag': 'stop:resize',
+                'reason': f'lot {act.get("lot_id")} 减仓后同步兜底STOP数量',
+                'force': True, 'lot_id': act.get('lot_id'), '_lot': lot, '_view': view,
+            })
+    except Exception as exc:  # noqa: BLE001 - 同步失败下轮自检会重试，不影响本轮减仓结果
+        logger.warning(f'[{symbol}/{side}] lot {act.get("lot_id")} 减仓后同步STOP失败: {exc}')
+
+    text = (f"[lot {act.get('lot_id')}] {act.get('reason')}："
+            f"{current:.6g} → {after:.6g}（实减 {current - after:.6g}）")
     ledger.log_event(symbol, side, 'reduce', text, level=str(act.get('level') or 'warning'),
-                     ratio=act.get('ratio'), after=after, tiers=tiers, tps=tps)
+                     ratio=act.get('ratio'), after=after, tiers=tiers, tps=tps,
+                     lot_id=act.get('lot_id'))
     V2.note_action(symbol, side, text, str(act.get('level') or 'warning'))
     send_alert(conf, f"风控提示: {act.get('reason', '减仓')}", f'[{symbol}] {text}', symbol=symbol)
 
@@ -715,40 +776,49 @@ async def _apply_stop(exchange, conf: Dict[str, Any], bundle: Dict[str, Any],
     if _dry_run(conf, state, str(act.get('tag') or 'stop')):
         return
 
+    lot = act.get('_lot') or lots.find_lot(state, act.get('lot_id'))
+    lot_id = str(lot.get('id')) if lot else None
+
     # 补挂前强制刷新一次：条件单列表可能有秒级延迟，若刚补上的那张还没出现在缓存里，
     # 直接用缓存会重复创建，很快变成「一仓多张 STOP」。
     tag = str(act.get('tag') or '')
     force = bool(act.get('force'))
     stops = await engine._find_stop_orders(
         exchange, symbol, side, pos, snap.price, conf, force=force or tag == 'stop:restore')
-    if stops:
-        # 一仓多张 STOP 时以「最靠盈利方向」的那张为准，其余全部撤掉
-        triggers = [float(t) for t in (engine._algo_trigger(o) for o in stops) if t]
-        current = (max(triggers) if side == 'long' else min(triggers)) if triggers else None
-        if current is not None and not force:
+    # 只认这一笔的 STOP：其它笔的止损单不能因为本笔推进而被撤掉
+    grouped = lots.group_stops_by_lot(stops or [], state.get('lots') or [])
+    own_stops = grouped.get(lot_id, []) if lot_id else stops
+    if own_stops:
+        current = _best_stop_price(own_stops, side)
+        if current > 0 and not force:
             better = desired > current if side == 'long' else desired < current
             if not better:
-                # 交易所已有更优的兜底单：以它为准，账本同步
-                if abs(_f(state.get('stop')) - current) > 1e-9:
-                    state['stop'] = current
+                if lot and abs(_f(lot.get('stop')) - current) > 1e-9:
+                    lot['stop'] = current
                     ledger.save(symbol, side, state)
                 return
-        await engine._cancel_stop_orders(exchange, symbol, stops, conf)
+        await engine._cancel_stop_orders(exchange, symbol, own_stops, conf)
 
-    await engine._create_full_close_stop(exchange, symbol, pos, side, desired, conf)
-    state['stop'] = desired
+    previous = _f(lot.get('stop') if lot else state.get('stop'))
+    if lot and _f(lot.get('contracts')) > 0:
+        await engine._create_lot_stop(
+            exchange, symbol, pos, side, desired, _f(lot.get('contracts')), lot_id, conf)
+        lot['stop'] = desired
+    else:
+        await engine._create_full_close_stop(exchange, symbol, pos, side, desired, conf)
+        state['stop'] = desired
     ledger.save(symbol, side, state)
     # 记「建立」还是「上移」，并带上上一档：这条事件就是日后复盘
     # 「止损怎么被推到保本、然后被扫掉」的唯一凭据
-    previous = _f(act.get('previous_stop'))
     label = str(act.get('reason') or '兜底STOP')
     ledger.log_event(symbol, side, 'stop',
                      f'{label} {desired:.8g}' + (f'（原 {previous:.8g}）' if previous > 0 else ''),
-                     level='info', price=desired, trigger=str(act.get('tag') or ''))
+                     level='info', price=desired, trigger=str(act.get('tag') or ''),
+                     lot_id=lot_id, previous_stop=previous)
     # 补挂是「仓位曾经裸奔过」的信号，必须推送：用户手动撤单后通常不会再回来看页面
     if str(act.get('tag') or '') == 'stop:restore':
         send_alert(conf, '⚠️ 交易所止损单已不在，已重新挂出',
-                   f'[{symbol}] 兜底 STOP {desired:.8g}'
+                   f'[{symbol}] lot {lot_id} 兜底 STOP {desired:.8g}'
                    + (f'（账本原记 {previous:.8g}）' if previous > 0 else ''),
                    symbol=symbol)
 

@@ -227,107 +227,17 @@ def _hedge_position_side(exchange, is_long: bool):
 
 async def set_tp_sl_for_position_async(exchange: ccxt.binanceusdm, position: Position, config: dict, async_logger,
                                        stop_event: asyncio.Event) -> bool:
-    """为一个仓位设置止盈止损（统一走 `core.exit_rules`，与纸面跟踪同一份实现）。
+    """兼容占位：系统已收敛为只使用仓位保护 v2。
 
-    口径由 `signal_exit_mode` 决定：
-    - `percent`：long 止损 entry*(1-sl%/100/lev)，止盈 entry*(1+tp%/100/lev)；short 反向；
-    - `atr`：止损 = N×ATR，止盈 = R×止损距离（ATR 取 `signal_live_exit_timeframe` 周期）。
-      **ATR 拿不到时自动回退 percent**——绝不因为行情缺失而裸奔不挂止损。
-    移动止盈模式：只挂 TRAILING_STOP_MARKET（保持原行为）。
+    旧链路会按交易所均价撤旧单、重挂按均价计算的 SL/TP，与「每笔开仓独立止盈止损」
+    冲突，因此这里不再下任何固定条件单。真正的止盈止损由 protection/runner.py
+    按 lot 独立计算并挂 reduceOnly STOP；返回 True 仅表示「无需本链路处理」，
+    避免开仓流程误判为裸仓而触发自动平仓。
     """
-    full_symbol = position.full_symbol
-
-    is_long = str(position.side).lower() == constants.SIDE_LONG
-    side_key = constants.SIDE_LONG if is_long else constants.SIDE_SHORT
-    exit_side = constants.ORDER_SIDE_SELL if is_long else constants.ORDER_SIDE_BUY
-
-    trailing_enabled = bool(config.get(f'enable_{side_key}_trailing_stop', False))
-    fixed_enabled = bool(config.get(f'enable_{side_key}_sl_tp', False))
-
-    # 1. 未启用任何保护：保持现状，不撤销已有挂单（P0：曾因先撤单后判断开关而清空保护）
-    if not trailing_enabled and not fixed_enabled:
-        await async_logger(
-            f"ℹ️ {position.symbol} 未启用止盈止损，保持现有挂单不变。", "info")
-        return True
-
-    contracts = float(position.contracts or 0)
-    if contracts <= 0:
-        await async_logger(f"⚠️ {position.symbol} 仓位数量无效，跳过止盈止损。", "warning")
-        return False
-
-    entry_price = float(position.entry_price or 0)
-    if not trailing_enabled and entry_price <= 0:
-        await async_logger(f"⚠️ {position.symbol} 入场价无效，跳过止盈止损。", "warning")
-        return False
-
-    # 2. 确认要重挂后才清理历史挂单；撤单失败则中止，避免新旧条件单叠加
-    if not await cancel_all_orders_async(exchange, full_symbol, async_logger):
-        await async_logger(
-            f"❌ {position.symbol} 撤销历史挂单失败，已中止本次止盈止损设置（避免条件单叠加）。", "error")
-        return False
-
-    if stop_event.is_set():
-        return False
-
-    # 3. 移动止盈分支保持原行为：优先且仅挂 TRAILING_STOP_MARKET
-    if trailing_enabled:
-        callback_rate = config.get(f'{side_key}_trailing_stop_callback_rate', 1.0)
-        res = await _place_trailing_stop_order(
-            exchange, full_symbol, exit_side, contracts, callback_rate, async_logger,
-            position_side=_hedge_position_side(exchange, is_long)
-        )
-        if isinstance(res, dict) and res.get('id'):
-            info = res.get('info') or {}
-            final_rate = info.get('priceRate') or callback_rate
-            await async_logger(f"✅ {position.symbol} 移动止盈成功 (Rate:{final_rate}%)", "success")
-            return True
-        return False
-
-    # 4. 固定止盈止损：价格计算统一走 core.exit_rules（与纸面跟踪共用同一份实现）
-    mode = exit_rules.exit_mode(config)
-    atr = await _resolve_atr(full_symbol, config, async_logger) if mode == exit_rules.ATR_MODE else None
-    prices = exit_rules.exit_prices(
-        entry_price, constants.SIDE_LONG if is_long else constants.SIDE_SHORT, config, atr=atr)
-    if prices is None and mode == exit_rules.ATR_MODE and atr is None:
-        # ATR 口径但行情不可用：回退百分比，宁可按老设置挂上，也不裸奔
-        await async_logger(
-            f"⚠️ {position.symbol} ATR 不可用，已回退百分比口径挂止损（避免无保护）。", "warning")
-        prices = exit_rules.exit_prices(
-            entry_price, constants.SIDE_LONG if is_long else constants.SIDE_SHORT, config,
-            mode=exit_rules.PERCENT_MODE)
-    if prices is None:
-        await async_logger(f"ℹ️ {position.symbol} 止盈止损参数无效或未启用，跳过固定挂单。", "info")
-        return True
-
-    success = True
-
-    sl_trigger = prices.get('stop_loss')
-    if sl_trigger is not None:
-        res = await _place_conditional_order_async(
-            exchange, full_symbol, exit_side, contracts, sl_trigger,
-            constants.ORDER_TYPE_STOP_MARKET, async_logger,
-            position_side=_hedge_position_side(exchange, is_long)
-        )
-        if isinstance(res, dict) and res.get('id'):
-            await async_logger(f"✅ {position.symbol} 固定止损成功 (触发价: {sl_trigger:.8g})", "success")
-        else:
-            await async_logger(f"❌ {position.symbol} 固定止损下单失败", "error")
-            success = False
-
-    tp_trigger = prices.get('take_profit')
-    if tp_trigger is not None:
-        res = await _place_conditional_order_async(
-            exchange, full_symbol, exit_side, contracts, tp_trigger,
-            constants.ORDER_TYPE_TAKE_PROFIT_MARKET, async_logger,
-            position_side=_hedge_position_side(exchange, is_long)
-        )
-        if isinstance(res, dict) and res.get('id'):
-            await async_logger(f"✅ {position.symbol} 固定止盈成功 (触发价: {tp_trigger:.8g})", "success")
-        else:
-            await async_logger(f"❌ {position.symbol} 固定止盈下单失败", "error")
-            success = False
-
-    return success
+    await async_logger(
+        f"ℹ️ {getattr(position, 'symbol', '')} 固定止盈止损条件单已停用，"
+        f"止盈止损由仓位保护 v2 按每笔开仓独立管理。", "info")
+    return True
 
 
 # 能兜住反向风险的条件单类型（止盈单不算保护，不能替代止损）
@@ -375,32 +285,9 @@ async def ensure_positions_sltp_async(exchange: ccxt.binanceusdm, positions: lis
 
     返回 {'checked': n, 'guarded': n, 'skipped': n, 'failed': n}。
     """
-    stats = {'checked': 0, 'guarded': 0, 'skipped': 0, 'failed': 0}
+    # 固定条件单链路已停用：巡检不再消耗 REST 配额，止损补挂由 v2 每 3 秒自检完成。
     live = [p for p in (positions or []) if float(getattr(p, 'contracts', 0) or 0) > 0]
-    if not live:
-        return stats
-    try:
-        orders = await exchange.fetch_open_orders()
-    except Exception as e:  # noqa: BLE001 - 查询失败不能影响主流程
-        await async_logger(f"⚠️ 止盈止损巡检获取挂单失败，本轮跳过: {e}", "warning")
-        return stats
-
-    for pos in live:
-        stats['checked'] += 1
-        is_long = str(getattr(pos, 'side', '')).lower() == constants.SIDE_LONG
-        side_key = constants.SIDE_LONG if is_long else constants.SIDE_SHORT
-        if not bool(config.get(f'enable_{side_key}_sl_tp', False)) and \
-                not bool(config.get(f'enable_{side_key}_trailing_stop', False)):
-            stats['skipped'] += 1
-            continue
-        if has_protective_order(orders, getattr(pos, 'full_symbol', ''), is_long):
-            stats['skipped'] += 1
-            continue
-        await async_logger(
-            f"🛡️ {getattr(pos, 'symbol', '')} 未检测到止损单，自动补挂止盈止损。", "warning")
-        ok = await set_tp_sl_for_position_async(exchange, pos, config, async_logger, stop_event)
-        stats['guarded' if ok else 'failed'] += 1
-    return stats
+    return {'checked': len(live), 'guarded': 0, 'skipped': len(live), 'failed': 0}
 
 
 async def cleanup_orphan_sltp_orders_async(exchange: ccxt.binanceusdm, active_symbols: Set[str], async_logger) -> int:

@@ -101,11 +101,8 @@ def test_hedge_mode_all_orders_carry_position_side(
     open_calls = [call for call in fake_exchange.create_order_calls if call["type"] == "limit"]
     assert open_calls and all(
         (call["params"] or {}).get("positionSide") == "LONG" for call in open_calls)
-    conditional = _conditional_calls(fake_exchange)
-    assert conditional and all(
-        (call["params"] or {}).get("positionSide") == "LONG" for call in conditional), (
-        "SL/TP 单的 positionSide 必须跟随持仓方向（LONG 仓=LONG）"
-    )
+    # v2-only：开仓链路不再下固定条件单；每笔 lot 的止损由保护引擎按持仓方向挂出
+    assert _conditional_calls(fake_exchange) == []
 
 
 def test_one_way_mode_omits_position_side(

@@ -13,6 +13,7 @@ from loguru import logger
 from .algo_compat import (
     cancel_algo_order,
     create_close_position_stop,
+    create_quantity_stop,
     fetch_open_algo_orders,
     supports_algo,
 )
@@ -48,10 +49,21 @@ CLIENT_ALGO_PREFIX = "PM_WS_SL_"
 # Exchange algo orders & Market Functions
 # ---------------------------------------------------------------------------
 
-def _make_client_algo_id(symbol, side):
+def _make_client_algo_id(symbol, side, lot_id=None):
     compact = symbol.replace("/", "").replace(":", "")
     suffix = "L" if side == "long" else "S"
-    return f"{CLIENT_ALGO_PREFIX}{compact}_{suffix}_{uuid.uuid4().hex[:8]}"[:36]
+    tag = str(lot_id)[:8] if lot_id else uuid.uuid4().hex[:8]
+    return f"{CLIENT_ALGO_PREFIX}{compact}_{suffix}_{tag}"[:36]
+
+
+async def _create_lot_stop(exchange, symbol, position, side, stop_price, quantity, lot_id, conf):
+    """按 lot 自己的剩余数量挂 reduceOnly STOP；tag 写进 clientAlgoId 便于反查。"""
+    result = await create_quantity_stop(
+        exchange, symbol, side, _raw_position_side(position), stop_price, quantity,
+        _make_client_algo_id(symbol, side, lot_id), conf, RUNTIME.rest)
+    RUNTIME.orders_cache.pop(symbol, None)
+    logger.success(f"[{symbol}] 🎯 lot {lot_id} 兜底STOP {stop_price:.8g} × {quantity:.6g}")
+    return result
 
 
 def _algo_status(order):

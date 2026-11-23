@@ -112,6 +112,42 @@ async def create_close_position_stop(exchange: Any, symbol: str, side: str,
         priority="HIGH", conf=conf)
 
 
+async def create_quantity_stop(exchange: Any, symbol: str, side: str,
+                               position_side: str, stop_price: float, quantity: float,
+                               client_id: str, conf: Dict[str, Any],
+                               rest: Any) -> Dict[str, Any]:
+    """下达「指定数量」STOP_MARKET（reduceOnly），用于每一笔开仓独立兜底。
+
+    与 `create_close_position_stop`（closePosition=True，随总仓位浮动）不同：
+    每笔 lot 的数量固定为自己的剩余仓位，避免一笔的止损把其它笔一起平掉。
+    """
+    trigger_str = exchange.price_to_precision(symbol, stop_price)
+    qty_str = exchange.amount_to_precision(symbol, quantity)
+    order_side = "SELL" if side == "long" else "BUY"
+
+    if supports_algo(exchange):
+        params = {
+            "algoType": "CONDITIONAL", "symbol": exchange.market(symbol)["id"],
+            "side": order_side, "type": "STOP_MARKET", "positionSide": position_side,
+            "triggerPrice": trigger_str, "workingType": "MARK_PRICE",
+            "quantity": qty_str, "reduceOnly": "true", "clientAlgoId": client_id,
+        }
+        return await rest.call(raw_rest_method(exchange, 'fapiPrivatePostAlgoOrder'), params,
+                               priority="HIGH", conf=conf)
+
+    _warn_once()
+    params = {
+        "stopPrice": trigger_str, "reduceOnly": True, "workingType": "MARK_PRICE",
+        "newClientOrderId": client_id,
+    }
+    if position_side and position_side != "BOTH":
+        params["positionSide"] = position_side
+    return await rest.call(
+        raw_rest_method(exchange, 'create_order'), symbol, "STOP_MARKET",
+        "sell" if side == "long" else "buy", qty_str, None, params,
+        priority="HIGH", conf=conf)
+
+
 async def cancel_algo_order(exchange: Any, symbol: str, algo_id: Any,
                             conf: Dict[str, Any], rest: Any) -> Any:
     """撤销条件单（Algo 或旧版标准条件单均可）。"""

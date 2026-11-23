@@ -63,14 +63,13 @@ def _setup_open_success(fake_exchange):
     fake_exchange._positions = _positions
 
 
-def _make_sltp_fail(fake_exchange):
-    """让 SL/TP 注入失败：撤历史挂单失败 → set_tp_sl 先决条件不成立直接返回 False。"""
+def _make_sltp_fail(monkeypatch):
+    """模拟保护注入失败：直接让兼容入口返回 False（v2-only 下不再撤历史单）。"""
 
-    async def _fail_cancel_all(symbol=None, params=None):
-        fake_exchange.cancel_all_orders_calls.append((symbol, params))
-        raise RuntimeError("simulated cancel failure")
+    async def _fail(*_args, **_kwargs):
+        return False
 
-    fake_exchange.cancel_all_orders = _fail_cancel_all
+    monkeypatch.setattr("app.logic.exchange_logic_async.set_tp_sl_for_position_async", _fail)
 
 
 def _reduce_only_calls(fake_exchange):
@@ -78,9 +77,9 @@ def _reduce_only_calls(fake_exchange):
             if (call["params"] or {}).get("reduceOnly") is True]
 
 
-def test_sltp_failure_triggers_auto_close(fake_exchange, async_logger, stop_event, fast_sleep):
+def test_sltp_failure_triggers_auto_close(fake_exchange, async_logger, stop_event, fast_sleep, monkeypatch):
     _setup_open_success(fake_exchange)
-    _make_sltp_fail(fake_exchange)
+    _make_sltp_fail(monkeypatch)
 
     plan = {"coin": "BTC", "value": 100.0, "side": "buy"}
     ok = asyncio.run(process_order_with_sl_tp_async(
@@ -98,9 +97,9 @@ def test_sltp_failure_triggers_auto_close(fake_exchange, async_logger, stop_even
     assert "warning" in levels, "回收成功应有 warning 级提示"
 
 
-def test_keep_alert_does_not_touch_position(fake_exchange, async_logger, stop_event, fast_sleep):
+def test_keep_alert_does_not_touch_position(fake_exchange, async_logger, stop_event, fast_sleep, monkeypatch):
     _setup_open_success(fake_exchange)
-    _make_sltp_fail(fake_exchange)
+    _make_sltp_fail(monkeypatch)
 
     plan = {"coin": "BTC", "value": 100.0, "side": "buy"}
     ok = asyncio.run(process_order_with_sl_tp_async(
@@ -118,7 +117,7 @@ def test_protection_managed_position_is_not_double_closed(
     fake_exchange, async_logger, stop_event, fast_sleep, monkeypatch,
 ):
     _setup_open_success(fake_exchange)
-    _make_sltp_fail(fake_exchange)
+    _make_sltp_fail(monkeypatch)
     monkeypatch.setattr("app.protection.service.protection_active_for",
                         lambda full_symbol, side: True)
 

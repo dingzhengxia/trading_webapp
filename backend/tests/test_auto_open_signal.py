@@ -95,11 +95,10 @@ def test_auto_open_uses_limit_postonly_usdc_first(patched_exchange, fast_sleep):
                     if c["type"] == "market"]
     assert market_opens == []
 
-    # SL/TP 条件单挂在新开的 USDC 仓位上
+    # v2-only：开仓链路不再下固定 SL/TP 条件单，止损止盈由保护引擎按每笔开仓独立管理
     conditional = [c for c in patched_exchange.create_order_calls
                    if str(c["type"]).upper() in {"STOP_MARKET", "TAKE_PROFIT_MARKET"}]
-    assert conditional
-    assert {c["symbol"] for c in conditional} == {USDC_SYMBOL}
+    assert conditional == []
 
 
 def test_auto_open_skips_when_task_running(patched_exchange):

@@ -94,25 +94,22 @@ def test_rebase_keeps_progress_and_moves_anchor():
     assert state['tiers_done'] == [0] and state['tp_done'] == [0]
 
 
-def test_after_add_stop_is_rebuilt_from_new_basis():
-    """加仓后均价 104，旧止损 103 贴在均价上：本轮必须重算，允许下移。"""
+def test_add_never_rebuilds_stop_from_new_average():
+    """加仓后均价 104、旧止损 103：止损仍只许上移，不再有 rebase 下移例外。
+
+    新开的一笔是独立 lot，用自己的成交价建自己的止损；老笔的止损不能被均价推动。
+    """
     state = _state(entry=100.0, qty=10.0)
-    plan = risk_model.rebase_plan(state['plan'], 'long', 104.0, 2.0, (97.0, 95.0, 92.0), CONF, 2000.0)
-    state['plan'] = plan
     state['stop'] = 103.0
 
     snap = risk_model.Snapshot(
-        symbol='ETH/USDC:USDC', side='long', entry=104.0, price=105.0,
-        last_close=105.0, contracts=14.0, atr=2.0,
+        symbol='ETH/USDC:USDC', side='long', entry=100.0, price=105.0,
+        last_close=105.0, contracts=10.0, atr=2.0,
         structure=(97.0, 95.0, 92.0), closed_ts=0, now=2000.0,
         exchange_stop=103.0, exchange_checked=True, rebased=True)
 
     result = risk_model.decide(state, snap, CONF)
-    stops = [a for a in result['actions'] if a['type'] == 'stop']
-    assert stops and stops[0]['tag'] == 'stop:rebase'
-    assert stops[0]['price'] < 103.0
-    # 下移后的止损仍必须比灾难线更靠内（不能比预算线还远）
-    assert stops[0]['price'] >= plan['disaster_stop'] - 1e-9
+    assert [a for a in result['actions'] if a['type'] == 'stop'] == []
 
 
 def test_size_anchor_grows_with_add_so_later_tiers_sell_more():

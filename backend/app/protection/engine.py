@@ -18,7 +18,7 @@ from .exits import (  # noqa: F401  facade re-export
     CLIENT_ALGO_PREFIX, LAST_STOP_MAINTAIN_TIME, LAST_STOP_ORDER_TIME,
     _algo_methods, _algo_status, _algo_trigger, _cancel_algo,
     _cancel_bot_reduce_orders, _cancel_program_stops_for_flat, _cancel_stop_orders,
-    _create_full_close_stop, _ensure_disaster_stop, _find_stop_orders,
+    _create_full_close_stop, _create_lot_stop, _ensure_disaster_stop, _find_stop_orders,
     _full_exit_with_revalidation, _get_open_algo_orders, _is_program_stop,
     _limit_reduce_with_maker_retry, _make_client_algo_id, _market_reduce_and_confirm,
     _take_over_external_stops,

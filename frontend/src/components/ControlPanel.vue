@@ -78,74 +78,9 @@
               </div>
 
               <v-divider class="my-4"></v-divider>
-              <v-switch
-                v-model="draft.enable_long_sl_tp"
-                color="info"
-                inset
-                :disabled="!draft.enable_long_trades"
-              >
-                <template #label>
-                  开启多头固定 SL/TP<HelpTip :text="HELP.trading.enableLongSltp" />
-                </template>
-              </v-switch>
-              <v-row dense>
-                <v-col cols="6"
-                  ><v-text-field
-                    v-model.number="draft.long_stop_loss_percentage"
-                    label="止损 (%)"
-                    type="number"
-                    :disabled="!draft.enable_long_sl_tp"
-                     hint="设为0则不设置止损"
-                    persistent-hint
-                  >
-                    <template #append-inner>
-                      <HelpTip :text="HELP.trading.longSlPct" />
-                    </template>
-                  </v-text-field
-                ></v-col>
-                <v-col cols="6"
-                  ><v-text-field
-                    v-model.number="draft.long_take_profit_percentage"
-                    label="止盈 (%)"
-                    type="number"
-                    :disabled="!draft.enable_long_sl_tp"
-                    hint="设为0则不设置止盈"
-                    persistent-hint
-                  >
-                    <template #append-inner>
-                      <HelpTip :text="HELP.trading.longTpPct" />
-                    </template>
-                  </v-text-field
-                ></v-col>
-              </v-row>
-
-              <!-- 新增: 多头移动止盈 -->
-              <v-divider class="my-4"></v-divider>
-              <v-switch
-                v-model="draft.enable_long_trailing_stop"
-                color="purple-accent-2"
-                inset
-                :disabled="!draft.enable_long_trades"
-              >
-                <template #label>
-                  开启多头移动止盈 (Trailing)<HelpTip :text="HELP.trading.enableLongTrailing" />
-                </template>
-              </v-switch>
-              <v-text-field
-                v-model.number="draft.long_trailing_stop_callback_rate"
-                label="回调率 (%)"
-                type="number"
-                step="0.1"
-                min="0.1"
-                max="5.0"
-                :disabled="!draft.enable_long_trailing_stop"
-                hint="价格回撤多少百分比时平仓 (建议 0.5% - 5.0%)"
-                persistent-hint
-              >
-                <template #append-inner>
-                  <HelpTip :text="HELP.trading.longTrailingRate" />
-                </template>
-              </v-text-field>
+              <v-alert type="info" variant="tonal" density="compact">
+                多头止盈止损由「仓位保护 v2」按每笔开仓独立计算，请在仓位保护页配置。
+              </v-alert>
 
             </v-card-text>
           </v-card>
@@ -191,74 +126,9 @@
               </div>
 
               <v-divider class="my-4"></v-divider>
-              <v-switch
-                v-model="draft.enable_short_sl_tp"
-                color="info"
-                inset
-                :disabled="!draft.enable_short_trades"
-              >
-                <template #label>
-                  开启空头固定 SL/TP<HelpTip :text="HELP.trading.enableShortSltp" />
-                </template>
-              </v-switch>
-              <v-row dense>
-                <v-col cols="6"
-                  ><v-text-field
-                    v-model.number="draft.short_stop_loss_percentage"
-                    label="止损 (%)"
-                    type="number"
-                    :disabled="!draft.enable_short_sl_tp"
-                    hint="设为0则不设置止损"
-                    persistent-hint
-                  >
-                    <template #append-inner>
-                      <HelpTip :text="HELP.trading.shortSlPct" />
-                    </template>
-                  </v-text-field
-                ></v-col>
-                <v-col cols="6"
-                  ><v-text-field
-                    v-model.number="draft.short_take_profit_percentage"
-                    label="止盈 (%)"
-                    type="number"
-                    :disabled="!draft.enable_short_sl_tp"
-                    hint="设为0则不设置止盈"
-                    persistent-hint
-                  >
-                    <template #append-inner>
-                      <HelpTip :text="HELP.trading.shortTpPct" />
-                    </template>
-                  </v-text-field
-                ></v-col>
-              </v-row>
-
-              <!-- 新增: 空头移动止盈 -->
-              <v-divider class="my-4"></v-divider>
-              <v-switch
-                v-model="draft.enable_short_trailing_stop"
-                color="purple-accent-2"
-                inset
-                :disabled="!draft.enable_short_trades"
-              >
-                <template #label>
-                  开启空头移动止盈 (Trailing)<HelpTip :text="HELP.trading.enableShortTrailing" />
-                </template>
-              </v-switch>
-              <v-text-field
-                v-model.number="draft.short_trailing_stop_callback_rate"
-                label="反弹率 (%)"
-                type="number"
-                step="0.1"
-                min="0.1"
-                max="5.0"
-                :disabled="!draft.enable_short_trailing_stop"
-                hint="价格反弹多少百分比时平仓 (建议 0.5% - 5.0%)"
-                persistent-hint
-              >
-                <template #append-inner>
-                  <HelpTip :text="HELP.trading.shortTrailingRate" />
-                </template>
-              </v-text-field>
+              <v-alert type="info" variant="tonal" density="compact">
+                空头止盈止损由「仓位保护 v2」按每笔开仓独立计算，请在仓位保护页配置。
+              </v-alert>
 
             </v-card-text>
           </v-card>

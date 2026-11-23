@@ -16,8 +16,8 @@
    → 人工加仓后 S 抬到新 q，新仓位自动纳入后续批次。
 3. 止损阶梯按 ATR 计（ATR 是「正常波动尺度」，跨币可比）；
    止盈阶梯按 R 计，R 与 TP 价在建计划时冻结——不冻结就永远到不了。
-4. 止损只允许朝盈利方向移动，唯一例外是「加仓」：持仓均价被抬高后，
-   旧止损可能贴到新均价上，必须按新基准重算（含下移），并强制留痕。
+4. 止损只允许朝盈利方向移动。每笔开仓是独立 lot：加仓只新建另一笔计划，
+   老笔的 entry / R / TP / 止损 / 档位进度一律不动，不存在「按新均价 rebase」。
 
 执行优先级（同一轮只出一个减仓动作，止损动作与之独立）
 1. 击穿灾难线   → 全平（不确认、不等收盘）
@@ -787,13 +787,9 @@ def _stop_action(state: Dict[str, Any], snap: Snapshot, plan: Dict[str, Any],
 
     improvement = (desired - current) if side == 'long' else (current - desired)
     if improvement <= 0:
-        # 加仓后持仓均价被抬高，旧止损可能贴到新均价上：这一轮必须按新基准重算，
-        # 允许一次下移（其余任何场景都不许放宽）。
-        if not snap.rebased:
-            return None
-        return {'type': 'stop', 'price': desired, 'tag': 'stop:rebase',
-                'reason': '加仓后按新持仓均价重算止损',
-                'level': 'warning', 'previous_stop': current, 'force': True}
+        # 止损永远只朝盈利方向走。每笔开仓都是独立 lot，加仓不会改变老笔的基准，
+        # 因此不再有「按新均价重算、允许下移一次」的例外。
+        return None
 
     threshold = max(price * _f(conf.get('stop_min_update_pct'), 0.0015),
                     atr * _f(conf.get('stop_min_update_atr_ratio'), 0.15))

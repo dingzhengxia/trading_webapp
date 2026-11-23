@@ -53,13 +53,10 @@ def test_sl_tp_attached_to_newly_opened_full_symbol(
     assert len(open_calls) == 1
     assert open_calls[0]["symbol"] == USDC_SYMBOL, "USDC market must be preferred"
 
+    # v2-only：开仓链路不再下固定 SL/TP 条件单，止盈止损由保护引擎按 lot 独立管理
     conditional_calls = [
         call for call in fake_exchange.create_order_calls
-        if str(call["type"]).upper() in {"STOP_MARKET", "TAKE_PROFIT_MARKET"}
+        if str(call["type"]).upper() in {"STOP_MARKET", "TAKE_PROFIT_MARKET",
+                                          "TRAILING_STOP_MARKET"}
     ]
-    assert conditional_calls, "expected SL/TP orders"
-    assert {call["symbol"] for call in conditional_calls} == {USDC_SYMBOL}, (
-        "SL/TP attached to the wrong contract (P0-2): %r" % conditional_calls
-    )
-    for call in conditional_calls:
-        assert float(call["amount"]) == pytest.approx(1.0)
+    assert conditional_calls == []
