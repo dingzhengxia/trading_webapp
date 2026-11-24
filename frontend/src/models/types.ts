@@ -113,6 +113,12 @@ export interface UserSettings {
   api_418_cooldown_sec: number
   api_429_base_backoff_sec: number
   api_429_max_backoff_sec: number
+  // 全局开仓冷静期（连亏自动触发；until/triggered_by 由服务端维护）
+  trade_cooldown_enabled: boolean
+  trade_cooldown_minutes: number
+  trade_cooldown_loss_streak: number
+  trade_cooldown_until: string | null
+  trade_cooldown_triggered_by: 'manual' | 'auto' | null
   // 后端仅实现了 multi_factor_weakest 策略，前端不再暴露未实现的策略
   rebalance_method: 'multi_factor_weakest'
   rebalance_top_n: number

@@ -1,4 +1,5 @@
 # backend/app/api/settings.py
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List
 
 import ccxt.async_support as ccxt
@@ -41,6 +42,9 @@ NUMERIC_RANGES: Dict[str, tuple] = {
     'signal_auto_trade_confirmations': (1, 10, True),
     'signal_auto_trade_max_positions': (1, 100, True),
     'signal_auto_trade_cooldown_seconds': (0, 86400, True),
+    # --- 全局开仓冷静期（连亏自动触发；trade_cooldown.py）---
+    'trade_cooldown_minutes': (1, 1440, True),
+    'trade_cooldown_loss_streak': (1, 10, True),
     'signal_scan_interval_seconds': (30, 86400, True),
     # R-P0-2 / R-P1-5 / R-P1-2 新配置范围（越界 400）
     'close_price_chase_ticks': (0, 10, True),
@@ -101,6 +105,31 @@ def get_settings(settings: Dict[str, Any] = Depends(get_settings_dependency)):
     }
 
 
+def _apply_cooldown_specials(updated: Dict[str, Any], current_settings: Dict[str, Any]) -> None:
+    """冷静开关的打开/关闭不是纯布尔落库：
+
+    - 打开（false→true）：由服务端按 trade_cooldown_minutes 算出结束时间并标记触发来源，
+      前端只切开关、不传时间，避免浏览器时钟/时区算出错误倒计时；
+    - 关闭：清掉结束时间与触发来源，立即恢复开仓（不排队、无残留状态）。
+    """
+    if 'trade_cooldown_enabled' not in updated:
+        return
+    if bool(updated.get('trade_cooldown_enabled')):
+        was_on = bool(current_settings.get('trade_cooldown_enabled'))
+        if not was_on:
+            minutes = updated.get('trade_cooldown_minutes')
+            if minutes is None:
+                minutes = current_settings.get('trade_cooldown_minutes') or 60
+            minutes = max(1, int(minutes))
+            updated['trade_cooldown_minutes'] = minutes
+            updated['trade_cooldown_until'] = (
+                datetime.now(timezone.utc) + timedelta(minutes=minutes)).isoformat()
+            updated['trade_cooldown_triggered_by'] = 'manual'
+    else:
+        updated['trade_cooldown_until'] = None
+        updated['trade_cooldown_triggered_by'] = None
+
+
 @router.post("")
 def update_settings(
         updated_settings: Dict[str, Any] = Body(...),
@@ -117,6 +146,8 @@ def update_settings(
 
     # 非法值直接 400：避免 "" / 0 杠杆等直接进入下单与风控计算
     _validate_numeric_settings(updated_settings)
+    # 冷静开关：打开时服务端落结束时间，关闭时清状态（见函数注释）
+    _apply_cooldown_specials(updated_settings, current_settings)
 
     # 权重与币种清单在同一个接口内一起落定（2026-11-15 用户要求）：
     # 权重按币名单独存，换清单时不会自动变，旧行为会把上一套清单的权重带到新清单上，

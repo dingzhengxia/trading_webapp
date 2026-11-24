@@ -62,6 +62,12 @@ const defaultSettings: UserSettings = {
   api_418_cooldown_sec: 60,
   api_429_base_backoff_sec: 2,
   api_429_max_backoff_sec: 30,
+  // 全局开仓冷静期（连亏自动触发）
+  trade_cooldown_enabled: false,
+  trade_cooldown_minutes: 60,
+  trade_cooldown_loss_streak: 2,
+  trade_cooldown_until: null,
+  trade_cooldown_triggered_by: null,
   rebalance_method: 'multi_factor_weakest',
   rebalance_top_n: 50,
   rebalance_min_volume_usd: 20000000,

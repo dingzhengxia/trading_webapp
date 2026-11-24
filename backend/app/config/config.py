@@ -86,6 +86,16 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     'rebalance_volume_spike_ratio': 3.0,
     'rebalance_benchmark_coin': ['BTC'],
 
+    # --- 全局开仓冷静期（protection/trade_cooldown.py）---
+    # 开关打开 = 冷静中，期间所有开仓请求直接拒绝（不排队等到期）；
+    # 当日连续 N 次「操作」（批量开/平仓算一次，系统止损算一次，止盈不算）亏损
+    # 会自动打开开关。until/triggered_by 由服务端写入，前端不回填。
+    'trade_cooldown_enabled': False,
+    'trade_cooldown_minutes': 60,
+    'trade_cooldown_loss_streak': 2,
+    'trade_cooldown_until': None,
+    'trade_cooldown_triggered_by': None,
+
     'enable_rebalance_filters': True,
     'rebalance_rsi_period': 14,
     'rebalance_rsi_threshold': 25.0,

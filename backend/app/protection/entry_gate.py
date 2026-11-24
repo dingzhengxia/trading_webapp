@@ -51,6 +51,17 @@ async def check_entry_allowed(exchange, full_symbol: str, side: str,
     """
     if conf is None:
         conf = load_gate_config()
+
+    # 全局开仓冷静期（连亏自动触发 / 用户手动打开）：优先级最高。
+    # 冷静期内直接拒绝开单（不排队等到期），异常放行不卡交易。
+    try:
+        from .trade_cooldown import blocking_reason as _cooldown_block
+        cooldown_reason = await _cooldown_block(exchange)
+        if cooldown_reason:
+            return False, cooldown_reason
+    except Exception as exc:  # noqa: BLE001 - 闸门故障不能阻断交易
+        logger.warning(f'[{full_symbol}] 冷静期闸门异常（放行）: {exc}')
+
     # 保护未接管时没有黑天鹅动作，冷却也就没有意义：直接放行（少一次 REST）
     if not bool(conf.get('enabled', False)) or not bool(conf.get('emergency_enabled', True)):
         return True, ''

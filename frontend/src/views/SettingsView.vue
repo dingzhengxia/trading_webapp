@@ -106,6 +106,58 @@
                   />
                 </v-row>
 
+                <!-- 开仓冷静期：打开即拒绝所有开仓，连亏自动触发（trade_cooldown.py） -->
+                <SectionHeader icon="mdi-timer-pause" title="开仓冷静期" spaced />
+                <v-row dense>
+                  <v-col cols="12"
+                    ><v-switch
+                      v-model="settingsStore.settings.trade_cooldown_enabled"
+                      color="warning"
+                      hide-details
+                    >
+                      <template #label>
+                        冷静期内拒绝开仓
+                        <HelpTip :text="HELP.settings.tradeCooldown" />
+                      </template>
+                    </v-switch></v-col
+                  >
+                  <v-col v-if="cooldownRemaining" cols="12">
+                    <v-alert
+                      type="warning"
+                      variant="tonal"
+                      density="compact"
+                      class="text-caption"
+                    >
+                      🧊 冷静中，剩余约 {{ cooldownRemaining }} 分钟（{{
+                        settingsStore.settings.trade_cooldown_triggered_by === 'auto'
+                          ? '连亏自动触发'
+                          : '手动打开'
+                      }}）
+                      <HelpTip :text="HELP.settings.cooldownState" />
+                    </v-alert>
+                  </v-col>
+                  <NumberField
+                    v-model="settingsStore.settings.trade_cooldown_minutes"
+                    label="冷静时长（分钟）"
+                    min="1"
+                    max="1440"
+                    :help="HELP.settings.tradeCooldownMinutes"
+                    cols="6"
+                    sm="6"
+                  />
+                  <NumberField
+                    v-model="settingsStore.settings.trade_cooldown_loss_streak"
+                    label="连亏次数阈值"
+                    min="1"
+                    max="10"
+                    hint="当日连续 N 次操作亏损自动进入冷静期"
+                    persistent-hint
+                    :help="HELP.settings.tradeCooldownStreak"
+                    cols="6"
+                    sm="6"
+                  />
+                </v-row>
+
                 <SectionHeader icon="mdi-speedometer" title="API 限流（热更新）" spaced />
                 <v-row dense>
                   <NumberField
@@ -209,7 +261,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { useSnackbarStore } from '@/stores/snackbar'
 import CoinPoolsManager from '@/components/CoinPoolsManager.vue'
@@ -223,6 +275,17 @@ import { HELP } from '@/config/help'
 const settingsStore = useSettingsStore()
 const activeTab = ref('general')
 const coinPoolsManagerRef = ref<InstanceType<typeof CoinPoolsManager> | null>(null)
+
+// 冷静期剩余分钟：本地 30s 刷新一次（服务端 until 为准，前端只做展示）
+const nowTick = ref(Date.now())
+let cooldownTimer: number | undefined
+const cooldownRemaining = computed<string | null>(() => {
+  const s = settingsStore.settings
+  const tick = nowTick.value // 显式引用，保证随定时器重算
+  if (!s?.trade_cooldown_enabled || !s.trade_cooldown_until) return null
+  const leftMin = Math.ceil((new Date(s.trade_cooldown_until).getTime() - tick) / 60000)
+  return leftMin > 0 ? String(leftMin) : null
+})
 
 // handleSave 函数本身是正确的，无需修改
 const handleSave = async () => {
@@ -247,6 +310,13 @@ onMounted(() => {
   if (!settingsStore.settings) {
     settingsStore.fetchSettings()
   }
+  cooldownTimer = window.setInterval(() => {
+    nowTick.value = Date.now()
+  }, 30000)
+})
+
+onUnmounted(() => {
+  if (cooldownTimer !== undefined) window.clearInterval(cooldownTimer)
 })
 </script>
 
