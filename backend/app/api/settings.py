@@ -170,7 +170,11 @@ def update_settings(
             shared_guardian().configure(api_conf)
         except Exception:  # noqa: BLE001 - 热更新失败不影响保存结果（下次重启生效）
             pass
-        return {"message": "Settings saved successfully"}
+        # 回传落库后的完整配置：服务端会改写个别字段（冷静开关打开时按服务端时钟
+        # 算 trade_cooldown_until、密钥掩码），前端必须拿这份校正后的值，
+        # 否则本地草稿仍显示旧的 until —— 明明进了冷静期却不显示倒计时。
+        return {"message": "Settings saved successfully",
+                "user_settings": _masked_settings(current_settings)}
     raise HTTPException(status_code=500, detail="保存配置失败，请查看服务器日志。")
 
 

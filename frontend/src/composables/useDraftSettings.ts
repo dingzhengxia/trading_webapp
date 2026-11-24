@@ -65,7 +65,7 @@ function diffKeys(): Record<string, unknown> {
       changed[key] = current[key]
     }
   }
-  // 空字符串/空值/NaN 不提交：与原 saveGeneralSettings 的过滤行为一致，
+  // 空字符串/空值/NaN 不提交：，
   // 这些键保持服务端旧值（例如清空输入框不应把非法值写进配置）
   const payload: Record<string, unknown> = {}
   for (const [key, value] of Object.entries(changed)) {

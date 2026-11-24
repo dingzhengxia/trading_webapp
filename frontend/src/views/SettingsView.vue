@@ -3,9 +3,9 @@
   <div>
     <v-row justify="center">
       <v-col cols="12" md="10" lg="8" xl="7">
-        <PageSkeleton v-if="settingsStore.loading" />
+        <PageSkeleton v-if="settingsStore.loading || !draft" />
 
-        <v-card v-else-if="settingsStore.settings" variant="flat" class="settings-card">
+        <v-card v-else variant="flat" class="settings-card">
           <v-tabs v-model="activeTab" class="tabs-quiet" grow>
             <v-tab value="general">通用配置</v-tab>
             <v-tab value="coin_pools">币种列表管理</v-tab>
@@ -19,7 +19,7 @@
                   <v-col cols="12"
                     ><v-text-field
                       label="API Key"
-                      v-model="settingsStore.settings.api_key"
+                      v-model="draft.api_key"
                       hide-details
                     >
                       <template #append-inner>
@@ -30,7 +30,7 @@
                   <v-col cols="12"
                     ><v-text-field
                       label="API Secret"
-                      v-model="settingsStore.settings.api_secret"
+                      v-model="draft.api_secret"
                       type="password"
                       hide-details
                     >
@@ -41,7 +41,7 @@
                   >
                   <v-col cols="12"
                     ><v-switch
-                      v-model="settingsStore.settings.use_testnet"
+                      v-model="draft.use_testnet"
                       color="primary"
                       hide-details
                     >
@@ -52,7 +52,7 @@
                   >
                   <v-col cols="12"
                     ><v-switch
-                      v-model="settingsStore.settings.enable_proxy"
+                      v-model="draft.enable_proxy"
                       color="primary"
                       hide-details
                     >
@@ -64,8 +64,8 @@
                   <v-col cols="12"
                     ><v-text-field
                       label="代理地址"
-                      v-model="settingsStore.settings.proxy_url"
-                      :disabled="!settingsStore.settings.enable_proxy"
+                      v-model="draft.proxy_url"
+                      :disabled="!draft.enable_proxy"
                       hide-details
                     >
                       <template #append-inner>
@@ -80,7 +80,7 @@
                   <v-col cols="12" sm="6">
                     <v-select
                       label="裸仓处置（SL/TP 失败时）"
-                      v-model="settingsStore.settings.unprotected_position_action"
+                      v-model="draft.unprotected_position_action"
                       :items="[
                         { title: '自动回收仓位（推荐）', value: 'auto_close' },
                         { title: '仅告警不触碰仓位', value: 'keep_alert' },
@@ -95,7 +95,7 @@
                     </v-select>
                   </v-col>
                   <NumberField
-                    v-model="settingsStore.settings.close_price_chase_ticks"
+                    v-model="draft.close_price_chase_ticks"
                     label="平仓让价 tick 数（0=关闭）"
                     min="0"
                     max="10"
@@ -111,9 +111,10 @@
                 <v-row dense>
                   <v-col cols="12"
                     ><v-switch
-                      v-model="settingsStore.settings.trade_cooldown_enabled"
+                      v-model="draft.trade_cooldown_enabled"
                       color="warning"
                       hide-details
+                      @update:modelValue="persistQuietly"
                     >
                       <template #label>
                         冷静期内拒绝开仓
@@ -129,7 +130,7 @@
                       class="text-caption"
                     >
                       🧊 冷静中，剩余约 {{ cooldownRemaining }} 分钟（{{
-                        settingsStore.settings.trade_cooldown_triggered_by === 'auto'
+                        draft.trade_cooldown_triggered_by === 'auto'
                           ? '连亏自动触发'
                           : '手动打开'
                       }}）
@@ -137,7 +138,7 @@
                     </v-alert>
                   </v-col>
                   <NumberField
-                    v-model="settingsStore.settings.trade_cooldown_minutes"
+                    v-model="draft.trade_cooldown_minutes"
                     label="冷静时长（分钟）"
                     min="1"
                     max="1440"
@@ -146,7 +147,7 @@
                     sm="6"
                   />
                   <NumberField
-                    v-model="settingsStore.settings.trade_cooldown_loss_streak"
+                    v-model="draft.trade_cooldown_loss_streak"
                     label="连亏次数阈值"
                     min="1"
                     max="10"
@@ -161,7 +162,7 @@
                 <SectionHeader icon="mdi-speedometer" title="API 限流（热更新）" spaced />
                 <v-row dense>
                   <NumberField
-                    v-model="settingsStore.settings.api_max_concurrency"
+                    v-model="draft.api_max_concurrency"
                     label="最大并发"
                     min="1"
                     max="20"
@@ -170,7 +171,7 @@
                     sm="3"
                   />
                   <NumberField
-                    v-model="settingsStore.settings.api_min_interval_sec"
+                    v-model="draft.api_min_interval_sec"
                     label="最小间隔(秒)"
                     min="0"
                     max="5"
@@ -180,7 +181,7 @@
                     sm="3"
                   />
                   <NumberField
-                    v-model="settingsStore.settings.api_max_retries"
+                    v-model="draft.api_max_retries"
                     label="最大重试"
                     min="1"
                     max="10"
@@ -189,7 +190,7 @@
                     sm="3"
                   />
                   <NumberField
-                    v-model="settingsStore.settings.api_failure_threshold"
+                    v-model="draft.api_failure_threshold"
                     label="熔断失败阈值"
                     min="1"
                     max="50"
@@ -198,7 +199,7 @@
                     sm="3"
                   />
                   <NumberField
-                    v-model="settingsStore.settings.api_circuit_breaker_cooldown_sec"
+                    v-model="draft.api_circuit_breaker_cooldown_sec"
                     label="熔断冷却(秒)"
                     min="1"
                     max="3600"
@@ -207,7 +208,7 @@
                     sm="3"
                   />
                   <NumberField
-                    v-model="settingsStore.settings.api_418_cooldown_sec"
+                    v-model="draft.api_418_cooldown_sec"
                     label="418 冷却(秒)"
                     min="1"
                     max="3600"
@@ -216,7 +217,7 @@
                     sm="3"
                   />
                   <NumberField
-                    v-model="settingsStore.settings.api_429_base_backoff_sec"
+                    v-model="draft.api_429_base_backoff_sec"
                     label="429 退避基数(秒)"
                     min="0.2"
                     max="60"
@@ -226,7 +227,7 @@
                     sm="3"
                   />
                   <NumberField
-                    v-model="settingsStore.settings.api_429_max_backoff_sec"
+                    v-model="draft.api_429_max_backoff_sec"
                     label="429 退避上限(秒)"
                     min="0.2"
                     max="600"
@@ -250,20 +251,25 @@
     </v-row>
   </div>
 
-  <!-- 固定悬浮底栏（共享组件）：保存按钮 -->
+  <!-- 固定悬浮底栏（共享组件）：改动自动保存，这里保留「立即保存」 -->
   <AppDockFooter>
-    <v-btn color="success" variant="tonal" @click="handleSave">
+    <span v-if="lastSavedAt" class="text-caption text-medium-emphasis mr-2">
+      已自动保存 {{ formatClockTime(lastSavedAt) }}
+    </span>
+    <v-btn color="success" variant="tonal" :loading="saving" @click="persistNow">
       <v-icon left>mdi-content-save</v-icon>
-      手动保存
+      立即保存
     </v-btn>
     <HelpTip :text="HELP.settings.saveBtn" />
   </AppDockFooter>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, onUnmounted } from 'vue'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { useSnackbarStore } from '@/stores/snackbar'
+import { useDraftSettings } from '@/composables/useDraftSettings'
+import { formatClockTime } from '@/utils/format'
 import CoinPoolsManager from '@/components/CoinPoolsManager.vue'
 import AppDockFooter from '@/components/AppDockFooter.vue'
 import PageSkeleton from '@/components/PageSkeleton.vue'
@@ -276,6 +282,34 @@ const settingsStore = useSettingsStore()
 const activeTab = ref('general')
 const coinPoolsManagerRef = ref<InstanceType<typeof CoinPoolsManager> | null>(null)
 
+// 草稿模式：表单只绑 draft，改动经 useDraftSettings 防抖 diff 自动落库，
+// 不再依赖用户手动点保存（历史问题：改完不点按钮 → 刷新全丢）。
+const { draft, commitDraft, flushDraftSave, lastSavedAt } = useDraftSettings()
+const saving = ref(false)
+
+/** 安全开关（冷静期）改动立即落库，不等 1.5s 防抖：开关必须即刻生效。 */
+const persistQuietly = async () => {
+  if (!draft.value) return
+  await commitDraft()
+}
+
+/** 通用配置立即保存；币种池 tab 交给自己的保存逻辑。 */
+const persistNow = async () => {
+  if (activeTab.value === 'coin_pools') {
+    coinPoolsManagerRef.value?.savePools()
+    return
+  }
+  if (!draft.value || saving.value) return
+  saving.value = true
+  const ok = await commitDraft(true)
+  saving.value = false
+  useSnackbarStore().show({
+    message: ok ? '配置已保存' : '保存失败，详见下方提示',
+    color: ok ? 'success' : 'error',
+    timeout: ok ? 2500 : 6000,
+  })
+}
+
 // 冷静期剩余分钟：本地 30s 刷新一次（服务端 until 为准，前端只做展示）
 const nowTick = ref(Date.now())
 let cooldownTimer: number | undefined
@@ -287,32 +321,18 @@ const cooldownRemaining = computed<string | null>(() => {
   return leftMin > 0 ? String(leftMin) : null
 })
 
-// handleSave 函数本身是正确的，无需修改
-const handleSave = async () => {
-  if (activeTab.value === 'general') {
-    if (settingsStore.settings) {
-      const result = await settingsStore.saveGeneralSettings(settingsStore.settings)
-      useSnackbarStore().show({
-        message: result.ok ? '配置已保存' : `保存失败：${result.detail}`,
-        color: result.ok ? 'success' : 'error',
-        timeout: result.ok ? 3000 : 8000,
-      })
-    }
-  } else if (activeTab.value === 'coin_pools') {
-    if (coinPoolsManagerRef.value) {
-      coinPoolsManagerRef.value.savePools()
-    }
-  }
-}
-
 onMounted(() => {
-  // 确保在进入页面时获取设置
-  if (!settingsStore.settings) {
-    settingsStore.fetchSettings()
-  }
+  // 每次进入都拉一次服务端最新值：冷静期可能已被“连亏自动触发”打开，
+  // 草稿没有未保存改动时 useDraftSettings 会自动重灌成最新值。
+  void settingsStore.fetchSettings()
   cooldownTimer = window.setInterval(() => {
     nowTick.value = Date.now()
   }, 30000)
+})
+
+onBeforeUnmount(() => {
+  // 防抖窗口内（1.5s）的修改立刻提交，避免“改完就切页/刷新”丢失
+  flushDraftSave()
 })
 
 onUnmounted(() => {

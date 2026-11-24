@@ -51,8 +51,6 @@ export const api = {
   /** 全量设置（带 cache-buster，绕过浏览器缓存） */
   getSettings: <T = unknown>() =>
     apiClient.get<T>(ENDPOINTS.settings, { params: { _t: Date.now() } }),
-  /** 整包保存设置 */
-  postSettings: (payload: unknown) => apiClient.post(ENDPOINTS.settings, payload),
   /** 局部 patch 设置（与整包保存同端点，语义由调用方保证） */
   patchSettings: (partial: Record<string, unknown>) =>
     apiClient.post(ENDPOINTS.settings, partial),

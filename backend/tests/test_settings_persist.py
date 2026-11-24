@@ -1,10 +1,12 @@
 """选币/设置持久化回归测试（离线）：POST /api/settings 后 GET 必须读回同一份值。
 
 背景：用户反馈「控制面板选完币种，刷新页面就没了」。这条链路是
-前端 SmartSelect -> settingsStore.saveGeneralSettings -> POST /api/settings
+前端 SmartSelect -> settingsStore.patchSettings -> POST /api/settings
 -> settings 表 -> GET /api/settings。本测试锁定后端这一段：任何一环丢键都会红。
 """
 from __future__ import annotations
+
+from datetime import datetime, timezone
 
 import pytest
 from fastapi.testclient import TestClient
@@ -202,3 +204,36 @@ def test_empty_coin_list_clears_weights(client):
                 headers={"X-API-KEY": TEST_KEY})
     client.post("/api/settings", json={"long_coin_list": []}, headers={"X-API-KEY": TEST_KEY})
     assert _get_settings(client)["long_custom_weights"] == {}
+
+
+def test_cooldown_toggle_persists_and_returns_server_until(client):
+    """用户反馈「改了拒绝开仓开关和冷静时长，刷新又变回去了」。
+
+    锁定两点：
+    1. POST 必须落库（GET 能读回同一份值）；
+    2. 响应要带回服务端算出的 trade_cooldown_until —— 前端算不出这个时间，
+       不回写就会出现「已进冷静期但页面没有倒计时」。
+    """
+    response = client.post(
+        "/api/settings",
+        json={"trade_cooldown_enabled": True, "trade_cooldown_minutes": 30},
+        headers={"X-API-KEY": TEST_KEY})
+    assert response.status_code == 200, response.text
+    saved = response.json()["user_settings"]
+    assert saved["trade_cooldown_enabled"] is True
+    assert saved["trade_cooldown_minutes"] == 30
+    assert saved["trade_cooldown_triggered_by"] == "manual"
+    until = saved["trade_cooldown_until"]
+    assert until and datetime.fromisoformat(until) > datetime.now(timezone.utc)
+
+    stored = _get_settings(client)
+    assert stored["trade_cooldown_enabled"] is True
+    assert stored["trade_cooldown_minutes"] == 30
+    assert stored["trade_cooldown_until"] == until
+
+    # 关闭：状态立即清空，开仓立刻恢复
+    response = client.post("/api/settings", json={"trade_cooldown_enabled": False},
+                           headers={"X-API-KEY": TEST_KEY})
+    assert response.status_code == 200, response.text
+    assert response.json()["user_settings"]["trade_cooldown_until"] is None
+    assert _get_settings(client)["trade_cooldown_enabled"] is False

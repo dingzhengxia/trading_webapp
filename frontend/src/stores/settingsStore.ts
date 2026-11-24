@@ -87,6 +87,16 @@ const defaultSettings: UserSettings = {
   rebalance_bollinger_width_spike_ratio: 2.0,
 };
 
+/** 保存后必须按服务端回传值校正的字段：前端无法自行算出正确值。 */
+const SERVER_AUTHORITATIVE_FIELDS = [
+  'trade_cooldown_enabled',
+  'trade_cooldown_minutes',
+  'trade_cooldown_until',
+  'trade_cooldown_triggered_by',
+  'api_key',
+  'api_secret',
+] as const
+
 export const useSettingsStore = defineStore('settings', () => {
   const settings = ref<UserSettings | null>(null)
   const availableCoins = ref<string[]>([])
@@ -136,35 +146,15 @@ export const useSettingsStore = defineStore('settings', () => {
     availableShortCoins.value = shortPool
   }
 
-  async function saveGeneralSettings(
-    newSettings: UserSettings | null,
-  ): Promise<{ ok: boolean; detail: string }> {
-    if (!newSettings) return { ok: false, detail: '配置尚未加载完成' }
-    // 过滤空字符串/NaN：输入框清空时 Vuetify 给出 ''，若原样落库会让杠杆、止损百分比变成非法值
-    const payload: Record<string, unknown> = {}
-    for (const [key, value] of Object.entries(newSettings)) {
-      if (value === '' || value === null || value === undefined) continue
-      if (typeof value === 'number' && !Number.isFinite(value)) continue
-      payload[key] = value
-    }
-    try {
-      await api.postSettings(payload)
-      uiStore.logStore.addLog({
-        message: '通用配置已自动保存。',
-        level: 'success',
-        timestamp: new Date().toLocaleTimeString(),
-      })
-      return { ok: true, detail: '' }
-    } catch (error) {
-      return { ok: false, detail: logSaveError('save', error) }
-    }
-  }
-
   /**
    * 增量更新若干设置项（后端按 key 合并），并同步内存副本。
    *
    * 直接 POST 而不更新 store 会导致“下次任意页面保存整包设置时把旧值写回”，
    * 因此所有局部设置写入都应走这里。
+   *
+   * 保存成功后用服务端回传值校正「服务端权威字段」：冷静开关打开时
+   * trade_cooldown_until 由服务端时钟计算、密钥回传的是掩码，这些值前端算不出来，
+   * 不回写就会出现“明明进了冷静期，页面却没有倒计时”。
    */
   async function patchSettings(
     partial: Partial<UserSettings>,
@@ -173,7 +163,16 @@ export const useSettingsStore = defineStore('settings', () => {
       Object.assign(settings.value, partial)
     }
     try {
-      await api.patchSettings(partial)
+      const response = await api.patchSettings(partial)
+      const returned = (
+        response.data as { user_settings?: Record<string, unknown> } | undefined
+      )?.user_settings
+      if (returned && settings.value) {
+        const local = settings.value as unknown as Record<string, unknown>
+        for (const key of SERVER_AUTHORITATIVE_FIELDS) {
+          if (key in returned) local[key] = returned[key]
+        }
+      }
       return { ok: true, detail: '' }
     } catch (error) {
       return { ok: false, detail: logSaveError('patch', error) }
@@ -187,7 +186,6 @@ export const useSettingsStore = defineStore('settings', () => {
     availableShortCoins,
     loading,
     fetchSettings,
-    saveGeneralSettings,
     patchSettings,
     updateAvailablePools,
   }
