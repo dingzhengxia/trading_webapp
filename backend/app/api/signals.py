@@ -109,7 +109,9 @@ async def get_signals() -> Dict[str, Any]:
         status = scanner.status()
     settings = load_settings()
     tracker = signal_service._get_tracker()
-    signals = tracker.decorate(signal_service.store.recent(200))
+    # 补日线趋势标签（展示用）：让列表能直接标出「逆势·开仓会被拦下」
+    signals = await signal_service.attach_daily_trend(
+        tracker.decorate(signal_service.store.recent(200)))
     return {
         "status": status,
         "signals": signals,

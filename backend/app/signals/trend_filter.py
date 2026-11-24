@@ -32,30 +32,37 @@ class TrendFilter:
     """基于日线三线 EMA（get_current_trend）的趋势判定 + TTL 缓存。"""
 
     def __init__(self, market_data: Any, strategy_config: Callable[[], Dict[str, Any]],
-                 timeframe: str = '1d', cache_seconds: float = 1800.0):
+                 timeframe: str = '1d', cache_seconds: float = 1800.0,
+                 neutral_cache_seconds: float = 0.0):
         """
         :param market_data: MarketDataService 单例（K 线缓存 + RestGuardian）
         :param strategy_config: 返回 signal_config（含 strategy_params.trend_ema_long），
                                 复用 build_scan_config 保证与信号生成同一份参数
         :param timeframe: 趋势判定周期，固定日线
         :param cache_seconds: 判定结果缓存时长；0 = 不缓存
+        :param neutral_cache_seconds: 震荡/无数据结果的缓存时长。
+            开仓链路保持 0（故障恢复后立刻重试，宁可多问一次）；
+            展示链路（信号列表 10s 轮询）必须大于 0，否则震荡币会被反复重拉日线。
         """
         self._market_data = market_data
         self._strategy_config = strategy_config
         self._timeframe = timeframe
         self._cache_seconds = max(0.0, float(cache_seconds))
+        self._neutral_cache_seconds = max(0.0, float(neutral_cache_seconds))
         # symbol → (cached_at_monotonic, trend)；缓存关闭时永远为空
         self._cache: Dict[str, Tuple[float, str]] = {}
 
     async def trend_of(self, symbol: str) -> str:
         """返回 'long' | 'short' | 'neutral'。任何异常降级为 neutral（放行）。"""
-        if self._cache_seconds > 0:
-            cached = self._cache.get(symbol)
-            if cached and time.monotonic() - cached[0] < self._cache_seconds:
+        cached = self._cache.get(symbol)
+        if cached:
+            ttl = self._cache_seconds if cached[1] != 'neutral' else self._neutral_cache_seconds
+            if ttl > 0 and time.monotonic() - cached[0] < ttl:
                 return cached[1]
         trend = await self._compute(symbol)
-        if self._cache_seconds > 0 and trend != 'neutral':
-            # neutral 不缓存：多半是行情暂时拿不到，下一轮再试
+        ttl = self._cache_seconds if trend != 'neutral' else self._neutral_cache_seconds
+        if ttl > 0:
+            # 默认 neutral 不缓存：多半是行情暂时拿不到，下一轮再试
             self._cache[symbol] = (time.monotonic(), trend)
         return trend
 

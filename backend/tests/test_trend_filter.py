@@ -120,6 +120,16 @@ def test_neutral_not_cached():
     assert md.calls == 2  # neutral 不缓存，故障恢复后下轮重试
 
 
+def test_neutral_cached_when_configured():
+    """展示链路（10s 轮询）给 neutral 配了短 TTL：震荡币不该每轮重拉日线。"""
+    md = _FakeMarketData(rows=_ohlcv(_closes(rising=True, n=30)))  # 数据不足 -> neutral
+    tf = TrendFilter(md, strategy_config=lambda: {'strategy_params': {'trend_ema_long': _TREND_PARAMS}},
+                     neutral_cache_seconds=60)
+    assert asyncio.run(tf.trend_of('BTC/USDC:USDC')) == 'neutral'
+    assert asyncio.run(tf.trend_of('BTC/USDC:USDC')) == 'neutral'
+    assert md.calls == 1
+
+
 # ------------------------------------------------------------ 过滤链 2.5
 def _make_trader(trend_value, settings_over=None):
     async def provider(signal):

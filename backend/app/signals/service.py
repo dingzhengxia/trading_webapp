@@ -45,11 +45,92 @@ def _get_trend_filter() -> TrendFilter:
     """日线趋势过滤器单例：参数与信号生成共用 build_scan_config（同一份 trend_ema）。"""
     global trend_filter
     if trend_filter is None:
+        settings = load_settings()
         trend_filter = TrendFilter(
             market_data=get_market_data(),
             strategy_config=lambda: build_scan_config(load_settings()),
+            cache_seconds=float(settings.get('signal_auto_trade_trend_cache_seconds', 1800) or 0),
         )
     return trend_filter
+
+
+_trend_display_filter: Optional[TrendFilter] = None
+
+
+def _get_trend_display_filter() -> TrendFilter:
+    """展示层专用的趋势过滤器：多加一条「震荡结果缓存 60s」。
+
+    与开仓链路的 filter 分开实例，是因为两者对 neutral 的策略相反：
+    开仓链路要尽快重试（行情恢复后立刻能判定），而信号列表 10s 轮询一次，
+    neutral 不缓存会让震荡币每 10 秒重拉一条日线，白烧限流额度。
+    """
+    global _trend_display_filter
+    if _trend_display_filter is None:
+        settings = load_settings()
+        _trend_display_filter = TrendFilter(
+            market_data=get_market_data(),
+            strategy_config=lambda: build_scan_config(load_settings()),
+            cache_seconds=float(settings.get('signal_auto_trade_trend_cache_seconds', 1800) or 0),
+            neutral_cache_seconds=60.0,
+        )
+    return _trend_display_filter
+
+
+# 展示层补趋势：并发上限与整体超时。信号列表是 10s 轮询的接口，
+# 宁可这一轮少几个标签，也不能把接口拖成秒级等待。
+_TREND_ATTACH_CONCURRENCY = 4
+_TREND_ATTACH_TIMEOUT = 8.0
+
+
+async def attach_daily_trend(signals: list) -> list:
+    """给信号列表就地补 `daily_trend` / `trend_ok`（纯展示用，不影响开仓决策）。
+
+    - `daily_trend`：'long' | 'short' | 'neutral'，与自动开仓第 2.5 道闸同一套日线判定；
+    - `trend_ok`：True=顺势（会开仓）、False=逆势（开仓闸会拦下）、None=不适用
+      （日线震荡/数据不足，或信号本身是 neutral）。
+    - 任何一个 symbol 查询失败只让该 symbol 缺字段，绝不让接口报错。
+    - 趋势是「展示的参考信息」，与 signal_auto_trade_enabled / trend_filter_enabled
+      无关：自动开仓关着也照算，否则用户看不出哪些信号本来就开不了仓。
+    """
+    if not signals:
+        return signals
+
+    by_symbol: Dict[str, list] = {}
+    for s in signals:
+        sym = str(s.get('full_symbol') or s.get('symbol') or '')
+        if sym:
+            by_symbol.setdefault(sym, []).append(s)
+
+    trend_filter = _get_trend_display_filter()
+    semaphore = asyncio.Semaphore(_TREND_ATTACH_CONCURRENCY)
+
+    async def one(symbol: str) -> tuple:
+        async with semaphore:
+            return symbol, await trend_filter.trend_of(symbol)
+
+    try:
+        pairs = await asyncio.wait_for(
+            asyncio.gather(*(one(sym) for sym in by_symbol), return_exceptions=True),
+            timeout=_TREND_ATTACH_TIMEOUT)
+    except asyncio.TimeoutError:
+        logger.debug("信号列表补日线趋势超时，本轮跳过（不影响信号本身）")
+        return signals
+
+    trends: Dict[str, str] = {}
+    for pair in pairs:
+        if isinstance(pair, tuple) and len(pair) == 2:
+            trends[pair[0]] = pair[1]
+
+    for symbol, group in by_symbol.items():
+        trend = trends.get(symbol)
+        if not trend:
+            continue
+        for s in group:
+            direction = str(s.get('direction') or 'neutral').lower()
+            s['daily_trend'] = trend
+            s['trend_ok'] = (None if trend == 'neutral' or direction == 'neutral'
+                             else direction == trend)
+    return signals
 
 
 def _signal_trend_provider():
